@@ -7,6 +7,7 @@ import { getAIAgentTool, type AIAgentTool } from '../lib/agents/index.js';
 import { TaskDescriptionManager, TaskNotFoundError } from 'rover-schemas';
 import { UserSettingsManager, ProjectConfigManager } from 'rover-schemas';
 import { AI_AGENT } from 'rover-core';
+import { executeHooks } from '../lib/hooks.js';
 import { getTelemetry } from '../lib/telemetry.js';
 import { Git } from 'rover-core';
 import { showRoverChat, showTips } from '../utils/display.js';
@@ -372,9 +373,6 @@ export const mergeCommand = async (
       console.log('');
       console.log(colors.cyan('The merge process will'));
       if (hasWorktreeChanges) {
-        true;
-        4;
-        false;
         console.log(colors.cyan('├── Commit changes in the task worktree'));
       }
       console.log(
@@ -587,9 +585,7 @@ export const mergeCommand = async (
           } else {
             jsonOutput.error = 'AI failed to resolve merge conflicts';
             if (!isJsonMode()) {
-              console.log(
-                colors.yellow('\n⚠ Merge aborted due to conflicts.')
-              );
+              console.log(colors.yellow('\n⚠ Merge aborted due to conflicts.'));
               console.log(colors.gray('To resolve manually:'));
               console.log(
                 colors.gray('├──'),
@@ -617,6 +613,19 @@ export const mergeCommand = async (
       }
 
       if (mergeSuccessful) {
+        // Execute onMerge hooks if configured
+        if (projectConfig?.hooks?.onMerge?.length) {
+          executeHooks(
+            projectConfig.hooks.onMerge,
+            {
+              taskId: numericTaskId,
+              taskBranch: taskBranch,
+              taskTitle: task.title,
+            },
+            'onMerge'
+          );
+        }
+
         jsonOutput.success = true;
         await exitWithSuccess(
           'Task has been successfully merged into your current branch',

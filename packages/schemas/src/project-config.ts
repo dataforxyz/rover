@@ -22,6 +22,7 @@ import type {
   MCP,
   PackageManager,
   TaskManager,
+  HooksConfig,
 } from './project-config/types.js';
 
 /**
@@ -143,6 +144,7 @@ export class ProjectConfigManager {
       ...(data.envs !== undefined ? { envs: data.envs } : {}),
       ...(data.envsFile !== undefined ? { envsFile: data.envsFile } : {}),
       ...(sandbox !== undefined ? { sandbox } : {}),
+      ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
     };
 
     return migrated;
@@ -202,6 +204,9 @@ export class ProjectConfigManager {
   }
   get initScript(): string | undefined {
     return this.data.sandbox?.initScript;
+  }
+  get hooks(): HooksConfig | undefined {
+    return this.data.hooks;
   }
 
   // Data Modification (Setters)
