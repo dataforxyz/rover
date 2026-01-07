@@ -11,6 +11,7 @@ import { showRoverChat, TIP_TITLES } from '../utils/display.js';
 import { statusColor } from '../utils/task-status.js';
 import { Git } from 'rover-core';
 import { ProjectConfigManager } from 'rover-schemas';
+import { executeHooks } from '../lib/hooks.js';
 
 const { prompt } = enquirer;
 
@@ -336,6 +337,19 @@ export const pushCommand = async (taskId: string, options: PushOptions) => {
       repoInfo = getGitHubRepoInfo(remoteUrl);
     } catch (_err) {
       // Ignore the error
+    }
+
+    // Execute onPush hooks if configured
+    if (projectConfig?.hooks?.onPush?.length) {
+      executeHooks(
+        projectConfig.hooks.onPush,
+        {
+          taskId: numericTaskId,
+          taskBranch: task.branchName,
+          taskTitle: task.title,
+        },
+        'onPush'
+      );
     }
 
     result.success = true;
