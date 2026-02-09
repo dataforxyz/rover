@@ -277,6 +277,8 @@ export class TaskDescriptionManager {
         return 'MERGED';
       case 'pushed':
         return 'PUSHED';
+      case 'paused':
+        return 'PAUSED';
       default:
         return 'NEW';
     }
@@ -350,6 +352,11 @@ export class TaskDescriptionManager {
           this.data.error = metadata.error;
         }
         break;
+      case 'PAUSED':
+        if (metadata?.error) {
+          this.data.error = metadata.error;
+        }
+        break;
       case 'MERGED':
       case 'PUSHED':
         // Mark as completed when merged or pushed
@@ -403,6 +410,13 @@ export class TaskDescriptionManager {
    */
   markPushed(timestamp?: string): void {
     this.setStatus('PUSHED', { timestamp });
+  }
+
+  /**
+   * Mark task as paused (e.g., due to credit limit exhaustion)
+   */
+  markPaused(error?: string): void {
+    this.setStatus('PAUSED', { error });
   }
 
   /**
@@ -587,6 +601,11 @@ export class TaskDescriptionManager {
         case 'failed':
           statusName = 'FAILED';
           timestamp = status.completedAt;
+          error = status.error;
+          break;
+        case 'paused':
+          statusName = 'PAUSED';
+          timestamp = status.updatedAt;
           error = status.error;
           break;
         case 'running':
@@ -928,7 +947,15 @@ export class TaskDescriptionManager {
   }
 
   /**
+   * Check if task is paused
+   */
+  isPaused(): boolean {
+    return this.data.status === 'PAUSED';
+  }
+
+  /**
    * Check if task is in an active state (NEW, IN_PROGRESS, or ITERATING)
+   * PAUSED is NOT active - it's idle, waiting for external resume.
    */
   isActive(): boolean {
     return this.isNew() || this.isInProgress() || this.isIterating();

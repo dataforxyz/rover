@@ -15,6 +15,7 @@ export const IterationStatusNameSchema = z.enum([
   'running',
   'completed',
   'failed',
+  'paused',
 ]);
 
 /**
