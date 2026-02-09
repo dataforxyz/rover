@@ -297,6 +297,79 @@ describe('IterationStatusManager', () => {
     });
   });
 
+  describe('pause', () => {
+    it('should mark status as paused with error message', () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause',
+        'Start'
+      );
+
+      status.pause('Running step 2', 'Credit limit reached');
+
+      expect(status.status).toBe('paused');
+      expect(status.currentStep).toBe('Running step 2');
+      expect(status.error).toBe('Credit limit reached');
+    });
+
+    it('should NOT set completedAt (paused is not terminal)', () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause-not-terminal',
+        'Start'
+      );
+
+      status.pause('Step 3', 'Usage limit');
+
+      expect(status.completedAt).toBeUndefined();
+    });
+
+    it('should NOT set progress to 100', () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause-progress',
+        'Start'
+      );
+      status.update('running', 'Step 2', 50);
+      status.pause('Step 2', 'Rate limit');
+
+      // Progress should NOT be changed to 100
+      expect(status.progress).toBe(50);
+    });
+
+    it('should update the timestamp', async () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause-time',
+        'Start'
+      );
+      const initialUpdatedAt = status.updatedAt;
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      status.pause('Step 1', 'Limit reached');
+
+      expect(new Date(status.updatedAt).getTime()).toBeGreaterThan(
+        new Date(initialUpdatedAt).getTime()
+      );
+    });
+
+    it('should persist paused state to disk', () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause-persist',
+        'Start'
+      );
+
+      status.pause('Running agent', 'Hit your limit');
+
+      const loaded = IterationStatusManager.load(statusFilePath);
+      expect(loaded.status).toBe('paused');
+      expect(loaded.error).toBe('Hit your limit');
+      expect(loaded.currentStep).toBe('Running agent');
+      expect(loaded.completedAt).toBeUndefined();
+    });
+  });
+
   describe('getter methods', () => {
     it('should provide access to all status fields', () => {
       const status = IterationStatusManager.createInitial(
