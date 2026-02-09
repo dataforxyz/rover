@@ -68,6 +68,8 @@ const formatProgress = (step?: string, progress?: number): string => {
     return colors.red(bar);
   } else if (['COMPLETED', 'MERGED', 'PUSHED'].includes(step)) {
     return colors.green(bar);
+  } else if (step === 'PAUSED') {
+    return colors.yellow(bar);
   } else {
     return colors.cyan(bar);
   }
@@ -257,7 +259,9 @@ const listCommand = async (
 
         // Check if this is a terminal status that should trigger onComplete hooks
         const isTerminalStatus =
-          currentStatus === 'COMPLETED' || currentStatus === 'FAILED';
+          currentStatus === 'COMPLETED' ||
+          currentStatus === 'FAILED' ||
+          currentStatus === 'PAUSED';
 
         // Check if hook has already been fired for this status transition
         const hookAlreadyFired =

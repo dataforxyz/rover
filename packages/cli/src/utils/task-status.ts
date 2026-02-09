@@ -21,6 +21,8 @@ export const formatTaskStatus = (status: string): string => {
       return 'Merged';
     case 'PUSHED':
       return 'Pushed';
+    case 'PAUSED':
+      return 'Paused';
     default:
       return status;
   }
@@ -44,6 +46,8 @@ export const statusColor = (status: string): StyleFunction => {
       return colors.green;
     case 'PUSHED':
       return colors.green;
+    case 'PAUSED':
+      return colors.yellow;
     default:
       return colors.gray;
   }

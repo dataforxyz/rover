@@ -19,6 +19,8 @@ export interface SandboxOptions {
   sandboxMetadata?: Record<string, unknown>;
   /** Path to mount as /logs inside the container for this iteration */
   iterationLogsPath?: string;
+  /** Path to checkpoint.json for resuming a paused workflow */
+  checkpointPath?: string;
 }
 
 export abstract class SandboxPackage {

@@ -198,6 +198,17 @@ export class DockerSandbox extends Sandbox {
       `${iteration.fileDescriptionPath}:/task/description.json:Z,ro`
     );
 
+    // Mount checkpoint file if resuming from a paused workflow (read-only)
+    if (
+      this.options?.checkpointPath &&
+      existsSync(this.options.checkpointPath)
+    ) {
+      dockerArgs.push(
+        '-v',
+        `${this.options.checkpointPath}:/checkpoint.json:Z,ro`
+      );
+    }
+
     // Mount context directory if available (read-only)
     const contextDir = join(iteration.iterationPath, 'context');
     const hasContext = existsSync(contextDir);
@@ -260,6 +271,14 @@ export class DockerSandbox extends Sandbox {
       // Pass context directory argument if context was mounted
       if (hasContext) {
         dockerArgs.push('--context-dir', '/context');
+      }
+
+      // Pass checkpoint path if resuming from a paused workflow
+      if (
+        this.options?.checkpointPath &&
+        existsSync(this.options.checkpointPath)
+      ) {
+        dockerArgs.push('--checkpoint', '/checkpoint.json');
       }
 
       // Pass model if specified
