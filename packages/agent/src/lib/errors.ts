@@ -152,6 +152,16 @@ interface ErrorPattern {
  * Common error patterns across different AI tools
  */
 const ERROR_PATTERNS: ErrorPattern[] = [
+  // Credit/usage limit errors (CLI-level messages)
+  {
+    pattern: /hit your limit|usage limit|plan limit/i,
+    errorClass: RateLimitError,
+    extractMessage: (match, fullText) => {
+      const lineMatch = fullText.match(/.*hit your limit.*/i);
+      return lineMatch ? lineMatch[0].trim() : 'Usage limit reached';
+    },
+  },
+
   // Authentication errors
   {
     pattern:
@@ -324,6 +334,17 @@ function classifyJsonError(jsonError: any, tool?: string): AgentError {
     errorCode.includes('auth') ||
     message.toLowerCase().includes('invalid api key')
   ) {
+    // Check if this is actually a credit/billing error misclassified as auth
+    const lowerMessage = message.toLowerCase();
+    if (
+      lowerMessage.includes('credit') ||
+      lowerMessage.includes('billing') ||
+      lowerMessage.includes('balance') ||
+      lowerMessage.includes('limit') ||
+      lowerMessage.includes('quota')
+    ) {
+      return new RateLimitError(message, undefined, tool);
+    }
     return new AuthenticationError(message, tool);
   }
 
