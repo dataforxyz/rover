@@ -217,6 +217,9 @@ export class ProjectConfigManager {
   get network(): NetworkConfig | undefined {
     return this.data.sandbox?.network;
   }
+  get cacheFiles(): string[] | undefined {
+    return this.data.sandbox?.cacheFiles;
+  }
   get excludePatterns(): string[] | undefined {
     return this.data.excludePatterns;
   }

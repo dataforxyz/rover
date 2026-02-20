@@ -128,6 +128,8 @@ export const SandboxConfigSchema = z.object({
   skipPackageInstall: z.boolean().optional(),
   /** List of agent CLIs pre-installed in the custom image */
   preinstalledAgents: z.array(z.string()).optional(),
+  /** Files whose contents are included in the cache hash for invalidation */
+  cacheFiles: z.array(z.string()).optional(),
 });
 
 /**
