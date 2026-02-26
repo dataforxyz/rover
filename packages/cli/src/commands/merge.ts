@@ -137,7 +137,6 @@ const resolveMergeConflicts = async (
   git: Git,
   conflictedFiles: string[],
   aiAgent: AIAgentTool,
-  json: boolean,
   concurrency: number = 4,
   contextLines: number = 50,
   sendFullFile: boolean = false
@@ -668,7 +667,6 @@ const mergeCommand = async (taskId: string, options: MergeOptions = {}) => {
             git,
             mergeConflicts,
             aiAgent,
-            options.json === true,
             concurrency,
             contextLinesNum,
             options.sendFullFile === true
