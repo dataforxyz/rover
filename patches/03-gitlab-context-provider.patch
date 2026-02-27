@@ -1,7 +1,7 @@
-From 205a79f70c160415bd65c6529d44b8b125462648 Mon Sep 17 00:00:00 2001
+From 9980d301110bd6cdac40c81d2f6016750a6ecfec Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Wed, 25 Feb 2026 21:14:14 -0600
-Subject: [PATCH] feat: add GitLab support as context provider
+Subject: [PATCH 3/8] feat: add GitLab support as context provider
 
 Add GitLab as a context provider alongside GitHub:
 - GitLab MR context with comments, diffs, and reviewer approval state
@@ -9,25 +9,6 @@ Add GitLab as a context provider alongside GitHub:
 - CLI commands extended: inspect, mcp, push, task accept gitlab: URIs
 - includeComments MCP tool updated for fromGitlab parameter
 - Fix indentation in setup.ts, remove misplaced variable declarations
----
- packages/cli/src/commands/inspect.ts          |    8 +-
- packages/cli/src/commands/mcp.ts              |   21 +-
- packages/cli/src/commands/push.ts             |   84 +-
- packages/cli/src/commands/task.ts             |    4 +-
- .../src/lib/__tests__/push-repo-info.test.ts  |  118 ++
- packages/cli/src/lib/setup.ts                 |    1 -
- packages/cli/src/output-types.ts              |    2 +-
- .../core/src/context/__tests__/gitlab.test.ts | 1414 +++++++++++++++++
- packages/core/src/context/index.ts            |    1 +
- packages/core/src/context/providers/gitlab.ts |  675 ++++++++
- packages/core/src/context/providers/index.ts  |    3 +
- packages/core/src/index.ts                    |    1 +
- .../schemas/src/task-description/schema.ts    |    2 +-
- .../schemas/src/task-description/types.ts     |    2 +-
- 14 files changed, 2301 insertions(+), 35 deletions(-)
- create mode 100644 packages/cli/src/lib/__tests__/push-repo-info.test.ts
- create mode 100644 packages/core/src/context/__tests__/gitlab.test.ts
- create mode 100644 packages/core/src/context/providers/gitlab.ts
 
 diff --git a/packages/cli/src/commands/inspect.ts b/packages/cli/src/commands/inspect.ts
 index 6f3a18b..e351306 100644

@@ -1,16 +1,12 @@
-From 035c984a82100dd14f8ea9bd47a6760d04bde112 Mon Sep 17 00:00:00 2001
+From 536f2f50ea149efff6c366bca1472ce58b610816 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Wed, 25 Feb 2026 21:13:02 -0600
-Subject: [PATCH] fix: isInstalled robustness and composer checksum
+Subject: [PATCH 2/8] fix: isInstalled robustness and composer checksum
  verification
 
 Wrap isInstalled() in try-catch so missing binaries return false
 instead of throwing. Fix composer installer checksum to use the
 correct installer.sig endpoint with SHA-384 instead of phar SHA-256.
----
- packages/agent/src/lib/agents/base.ts                    | 9 ++++++---
- .../cli/src/lib/sandbox/package-managers/composer.ts     | 5 +++--
- 2 files changed, 9 insertions(+), 5 deletions(-)
 
 diff --git a/packages/agent/src/lib/agents/base.ts b/packages/agent/src/lib/agents/base.ts
 index 6877a4b..bb4dcc7 100644

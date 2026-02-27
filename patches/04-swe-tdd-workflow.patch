@@ -1,49 +1,15 @@
-From a013c50ca9b0ce3cdc5a0766a1dbcdcf0a51a775 Mon Sep 17 00:00:00 2001
+From fcab973a0ecb80dbe29c380045a722d243c37a86 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
-Date: Wed, 25 Feb 2026 22:19:28 -0600
-Subject: [PATCH] feat: add command step, loop step, and swe-tdd workflow
+Date: Fri, 27 Feb 2026 14:18:39 -0600
+Subject: [PATCH 4/8] feat: add command step, loop step, and swe-tdd workflow
 
-Add command step type for running shell commands directly in workflows,
-loop step type for iterating agent steps with conditions, and the
-swe-tdd workflow that uses these to implement test-driven development.
-
-Includes placeholder resolution, condition evaluation, step executor
-refactoring, and comprehensive test coverage.
----
- packages/agent/src/commands/run.ts            |  53 +-
- .../src/lib/__tests__/command-runner.test.ts  | 286 +++++++
- .../agent/src/lib/__tests__/condition.test.ts | 171 +++++
- .../src/lib/__tests__/step-executor.test.ts   | 705 ++++++++++++++++++
- packages/agent/src/lib/acp-runner.ts          | 139 ++--
- packages/agent/src/lib/agents/base.ts         |   1 +
- packages/agent/src/lib/command-runner.ts      | 143 ++++
- packages/agent/src/lib/condition.ts           |  70 ++
- packages/agent/src/lib/placeholders.ts        | 109 +++
- packages/agent/src/lib/runner.ts              | 113 +--
- packages/agent/src/lib/step-executor.ts       | 210 ++++++
- packages/cli/E2E_TESTS.md                     |  54 +-
- .../src/commands/__tests__/init.e2e.test.ts   |  76 --
- .../commands/__tests__/workflows.e2e.test.ts  | 326 --------
- .../cli/src/lib/__tests__/workflow.test.ts    |  59 +-
- packages/cli/src/lib/entrypoint.sh            |   2 -
- packages/cli/src/lib/setup.ts                 |   2 +-
- packages/cli/src/lib/workflow.ts              |   4 +
- packages/cli/src/lib/workflows/swe-tdd.yml    | 617 +++++++++++++++
- .../core/src/files/__tests__/workflow.test.ts | 132 ++++
- packages/core/src/files/workflow.ts           | 162 +++-
- packages/core/src/git.ts                      |   1 +
- packages/schemas/src/index.ts                 |   6 +-
- packages/schemas/src/workflow/schema.ts       |  93 ++-
- packages/schemas/src/workflow/types.ts        |  16 +-
- 25 files changed, 2852 insertions(+), 698 deletions(-)
- create mode 100644 packages/agent/src/lib/__tests__/command-runner.test.ts
- create mode 100644 packages/agent/src/lib/__tests__/condition.test.ts
- create mode 100644 packages/agent/src/lib/__tests__/step-executor.test.ts
- create mode 100644 packages/agent/src/lib/command-runner.ts
- create mode 100644 packages/agent/src/lib/condition.ts
- create mode 100644 packages/agent/src/lib/placeholders.ts
- create mode 100644 packages/agent/src/lib/step-executor.ts
- create mode 100644 packages/cli/src/lib/workflows/swe-tdd.yml
+- Add command step type execution and loop steps to workflows
+- Fix swe-tdd workflow non-interactive mode and input handling
+- Add review & fix loop to prevent post-review regressions
+- Add checkpoint commits and circle detection to workflow loops
+- Add build step and scope review to changed code in swe-tdd
+- Refactor: rename squashCheckpointCommits to collapseTaskCommits
+- Fix: check loop until condition after full iteration, not each sub-step
 
 diff --git a/packages/agent/src/commands/run.ts b/packages/agent/src/commands/run.ts
 index ae6b46d..d6a2322 100644
@@ -437,10 +403,10 @@ index 0000000..3985c63
 +});
 diff --git a/packages/agent/src/lib/__tests__/condition.test.ts b/packages/agent/src/lib/__tests__/condition.test.ts
 new file mode 100644
-index 0000000..9cc89f3
+index 0000000..e8c515c
 --- /dev/null
 +++ b/packages/agent/src/lib/__tests__/condition.test.ts
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,247 @@
 +import { describe, it, expect, vi } from 'vitest';
 +import { evaluateCondition } from '../condition.js';
 +
@@ -611,13 +577,89 @@ index 0000000..9cc89f3
 +      evaluateCondition('steps.check.outputs.status == passed', stepsOutput)
 +    ).toBe(false);
 +  });
++
++  describe('OR (||) conditions', () => {
++    it('returns true when first clause is true', () => {
++      const stepsOutput = new Map<string, Map<string, string>>();
++      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
++      stepsOutput.set('checkpoint', new Map([['exit_code', '0']]));
++
++      expect(
++        evaluateCondition(
++          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
++          stepsOutput
++        )
++      ).toBe(true);
++    });
++
++    it('returns true when second clause is true', () => {
++      const stepsOutput = new Map<string, Map<string, string>>();
++      stepsOutput.set('run_tests', new Map([['exit_code', '1']]));
++      stepsOutput.set('checkpoint', new Map([['exit_code', '1']]));
++
++      expect(
++        evaluateCondition(
++          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
++          stepsOutput
++        )
++      ).toBe(true);
++    });
++
++    it('returns false when neither clause is true', () => {
++      const stepsOutput = new Map<string, Map<string, string>>();
++      stepsOutput.set('run_tests', new Map([['exit_code', '1']]));
++      stepsOutput.set('checkpoint', new Map([['exit_code', '0']]));
++
++      expect(
++        evaluateCondition(
++          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
++          stepsOutput
++        )
++      ).toBe(false);
++    });
++
++    it('returns true when both clauses are true', () => {
++      const stepsOutput = new Map<string, Map<string, string>>();
++      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
++      stepsOutput.set('checkpoint', new Map([['exit_code', '1']]));
++
++      expect(
++        evaluateCondition(
++          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
++          stepsOutput
++        )
++      ).toBe(true);
++    });
++
++    it('handles whitespace around ||', () => {
++      const stepsOutput = new Map<string, Map<string, string>>();
++      stepsOutput.set('a', new Map([['x', '1']]));
++      stepsOutput.set('b', new Map([['y', '2']]));
++
++      expect(
++        evaluateCondition(
++          'steps.a.outputs.x == 1  ||  steps.b.outputs.y == 2',
++          stepsOutput
++        )
++      ).toBe(true);
++    });
++
++    it('works with a single clause (no ||)', () => {
++      const stepsOutput = new Map<string, Map<string, string>>();
++      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
++
++      expect(
++        evaluateCondition('steps.run_tests.outputs.exit_code == 0', stepsOutput)
++      ).toBe(true);
++    });
++  });
 +});
 diff --git a/packages/agent/src/lib/__tests__/step-executor.test.ts b/packages/agent/src/lib/__tests__/step-executor.test.ts
 new file mode 100644
-index 0000000..940212e
+index 0000000..5a48ece
 --- /dev/null
 +++ b/packages/agent/src/lib/__tests__/step-executor.test.ts
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,709 @@
 +import { describe, it, expect, vi, beforeEach } from 'vitest';
 +
 +// Mock rover-core before importing anything that uses it
@@ -855,8 +897,9 @@ index 0000000..940212e
 +    expect(result.id).toBe('test_loop');
 +    expect(result.success).toBe(true);
 +    expect(result.outputs.get('condition_met')).toBe('true');
-+    // Condition is checked after each sub-step; when run_tests passes (call 2),
-+    // the loop exits immediately — fix_agent should NOT run a second time.
++    // Condition is checked at the end of each iteration (after all sub-steps).
++    // Iteration 1: run_tests fails → fix_agent runs → condition not met.
++    // Iteration 2: run_tests passes → fix_agent runs → condition met.
 +    const iterations = Number.parseInt(result.outputs.get('iterations') || '0');
 +    expect(iterations).toBe(2);
 +  });
@@ -991,7 +1034,7 @@ index 0000000..940212e
 +    expect(stepsOutput.get('fix_agent')).toEqual(new Map());
 +  });
 +
-+  it('exits loop immediately when first sub-step satisfies condition', async () => {
++  it('skips fix_agent via if-guard when tests pass on first iteration', async () => {
 +    const { launch } = await import('rover-core');
 +    const { Runner } = await import('../runner.js');
 +
@@ -1019,6 +1062,9 @@ index 0000000..940212e
 +          id: 'fix_agent',
 +          name: 'Fix',
 +          type: 'agent',
++          // Sub-steps use `if` guards to skip work when not needed.
++          // The loop condition is checked at the end of each iteration.
++          if: 'steps.run_tests.outputs.exit_code != 0',
 +          prompt: 'Fix it',
 +          outputs: [],
 +        } as WorkflowAgentStep,
@@ -1035,7 +1081,7 @@ index 0000000..940212e
 +
 +    expect(result.success).toBe(true);
 +    expect(result.outputs.get('iterations')).toBe('1');
-+    // fix_agent should never have been invoked
++    // fix_agent should have been skipped via its `if` guard
 +    expect(Runner).not.toHaveBeenCalled();
 +  });
 +
@@ -1677,10 +1723,10 @@ index 0000000..9cf156b
 +}
 diff --git a/packages/agent/src/lib/condition.ts b/packages/agent/src/lib/condition.ts
 new file mode 100644
-index 0000000..7d6d944
+index 0000000..fca57f7
 --- /dev/null
 +++ b/packages/agent/src/lib/condition.ts
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,82 @@
 +/**
 + * Evaluate "until" conditions for loop steps.
 + * Supports format: steps.<id>.outputs.<name> == <value>
@@ -1700,12 +1746,24 @@ index 0000000..7d6d944
 +
 +/**
 + * Evaluate a condition string against the current step outputs.
++ * Supports OR (`||`) to join multiple clauses — returns true if any clause is true.
 + *
-+ * @param condition - e.g. "steps.run_tests.outputs.exit_code == 0"
++ * @param condition - e.g. "steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0"
 + * @param stepsOutput - Map of step ID → output Map
 + * @returns true if condition is met
 + */
 +export function evaluateCondition(
++  condition: string,
++  stepsOutput: Map<string, Map<string, string>>
++): boolean {
++  const parts = condition.split(/\s*\|\|\s*/);
++  return parts.some(part => evaluateSingleCondition(part.trim(), stepsOutput));
++}
++
++/**
++ * Evaluate a single condition clause (no OR).
++ */
++function evaluateSingleCondition(
 +  condition: string,
 +  stepsOutput: Map<string, Map<string, string>>
 +): boolean {
@@ -1720,7 +1778,7 @@ index 0000000..7d6d944
 +  );
 +  if (!match) {
 +    console.warn(
-+      `Warning: condition "${condition}" does not match expected format "steps.<id>.outputs.<name> == <value>"`
++      `Warning: clause "${condition}" does not match expected format "steps.<id>.outputs.<name> == <value>"`
 +    );
 +    return false;
 +  }
@@ -2022,10 +2080,10 @@ index 59f2d61..6ce6621 100644
      }
 diff --git a/packages/agent/src/lib/step-executor.ts b/packages/agent/src/lib/step-executor.ts
 new file mode 100644
-index 0000000..bf5336a
+index 0000000..235cabc
 --- /dev/null
 +++ b/packages/agent/src/lib/step-executor.ts
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,214 @@
 +/**
 + * Unified step dispatcher for workflow execution.
 + * Routes steps to the appropriate executor based on step type:
@@ -2196,18 +2254,22 @@ index 0000000..bf5336a
 +          )
 +        );
 +        // NOTE: Loop sub-steps intentionally continue past failures.
-+        // The `until` condition (checked below) determines when the loop
-+        // exits.  This differs from top-level `continueOnError` handling
-+        // because loops are designed for retry patterns (e.g. TDD: tests
-+        // fail → fix agent runs → tests re-run).
++        // The `until` condition (checked at the end of each iteration)
++        // determines when the loop exits.  This differs from top-level
++        // `continueOnError` handling because loops are designed for retry
++        // patterns (e.g. TDD: tests fail → fix agent runs → tests re-run).
 +      }
++    }
 +
-+      // Check condition after each sub-step so we exit as soon as it's met
-+      if (evaluateCondition(loopStep.until, config.stepsOutput)) {
-+        conditionMet = true;
-+        console.log(colors.green(`  ✓ Loop condition met, exiting loop`));
-+        break;
-+      }
++    // Check the `until` condition after all sub-steps in this iteration
++    // have completed.  We intentionally do NOT check after each sub-step
++    // because the condition may reference steps that haven't run yet in
++    // the current iteration (e.g. `steps.checkpoint.outputs.exit_code != 0`
++    // would be true for an undefined step, causing premature exit).
++    // Individual sub-steps already have `if` guards to skip unnecessary work.
++    if (evaluateCondition(loopStep.until, config.stepsOutput)) {
++      conditionMet = true;
++      console.log(colors.green(`  ✓ Loop condition met, exiting loop`));
 +    }
 +
 +    if (conditionMet) break;
@@ -2768,6 +2830,128 @@ index 21be8ae..2918e5f 100644
  });
  
  /**
+diff --git a/packages/cli/src/commands/merge.ts b/packages/cli/src/commands/merge.ts
+index f53be99..806370e 100644
+--- a/packages/cli/src/commands/merge.ts
++++ b/packages/cli/src/commands/merge.ts
+@@ -38,6 +38,7 @@ import {
+   requireProjectContext,
+ } from '../lib/context.js';
+ import type { CommandDefinition } from '../types.js';
++import { collapseTaskCommits } from '../lib/squash.js';
+ 
+ const { prompt } = enquirer;
+ 
+@@ -487,10 +488,19 @@ const mergeCommand = async (taskId: string, options: MergeOptions = {}) => {
+       return;
+     }
+ 
++    // Collapse all task commits into staged changes before evaluating state
++    const squashed = collapseTaskCommits(
++      git,
++      task.baseCommit,
++      task.worktreePath
++    );
++
+     // Check if worktree has changes to commit or if there are unmerged commits
+-    const hasWorktreeChanges = git.hasUncommittedChanges({
+-      worktreePath: task.worktreePath,
+-    });
++    const hasWorktreeChanges =
++      squashed ||
++      git.hasUncommittedChanges({
++        worktreePath: task.worktreePath,
++      });
+     const taskBranch = task.branchName;
+     const hasUnmerged = git.hasUnmergedCommits(taskBranch);
+ 
+diff --git a/packages/cli/src/commands/push.ts b/packages/cli/src/commands/push.ts
+index 5abfa55..816dc73 100644
+--- a/packages/cli/src/commands/push.ts
++++ b/packages/cli/src/commands/push.ts
+@@ -21,6 +21,7 @@ import { showRoverChat, TIP_TITLES } from '../utils/display.js';
+ import { statusColor } from '../utils/task-status.js';
+ import { executeHooks } from '../lib/hooks.js';
+ import type { CommandDefinition } from '../types.js';
++import { collapseTaskCommits } from '../lib/squash.js';
+ 
+ const { prompt } = enquirer;
+ 
+@@ -170,11 +171,18 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
+       });
+     }
+ 
++    // Collapse all task commits into staged changes before evaluating state
++    const squashed = collapseTaskCommits(
++      git,
++      task.baseCommit,
++      task.worktreePath
++    );
++
+     // Check for changes
+     const fileChanges = git.uncommittedChanges({
+       worktreePath: task.worktreePath,
+     });
+-    const hasChanges = fileChanges.length > 0;
++    const hasChanges = squashed || fileChanges.length > 0;
+     result.hasChanges = hasChanges;
+ 
+     if (!hasChanges) {
+diff --git a/packages/cli/src/commands/rebase.ts b/packages/cli/src/commands/rebase.ts
+index dee827e..7e60a3d 100644
+--- a/packages/cli/src/commands/rebase.ts
++++ b/packages/cli/src/commands/rebase.ts
+@@ -26,6 +26,7 @@ import {
+ } from '../lib/context.js';
+ import type { CommandDefinition } from '../types.js';
+ import { parseAgentString } from '../utils/agent-parser.js';
++import { collapseTaskCommits } from '../lib/squash.js';
+ import {
+   truncateConflictContext,
+   getBlameContext,
+@@ -461,10 +462,19 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
+     const currentBranch = git.getCurrentBranch();
+     jsonOutput.currentBranch = currentBranch;
+ 
++    // Collapse all task commits into staged changes before evaluating state
++    const squashed = collapseTaskCommits(
++      git,
++      task.baseCommit,
++      task.worktreePath
++    );
++
+     // Check if worktree has changes to commit
+-    const hasWorktreeChanges = git.hasUncommittedChanges({
+-      worktreePath: task.worktreePath,
+-    });
++    const hasWorktreeChanges =
++      squashed ||
++      git.hasUncommittedChanges({
++        worktreePath: task.worktreePath,
++      });
+ 
+     jsonOutput.hasWorktreeChanges = hasWorktreeChanges;
+ 
+diff --git a/packages/cli/src/commands/task.ts b/packages/cli/src/commands/task.ts
+index 793bf98..a3f4aab 100644
+--- a/packages/cli/src/commands/task.ts
++++ b/packages/cli/src/commands/task.ts
+@@ -1018,6 +1018,15 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
+           continue;
+         }
+ 
++        // When running non-interactively (-y), skip optional inputs.
++        // They will use their default value or be auto-detected by the workflow.
++        if (yes && !input.required) {
++          if (input.default !== undefined) {
++            inputsData.set(input.name, String(input.default));
++          }
++          continue;
++        }
++
+         let enquirerType;
+         switch (input.type) {
+           case 'string':
 diff --git a/packages/cli/src/lib/__tests__/workflow.test.ts b/packages/cli/src/lib/__tests__/workflow.test.ts
 index 1b2bf1a..acaf6c8 100644
 --- a/packages/cli/src/lib/__tests__/workflow.test.ts
@@ -2882,7 +3066,7 @@ index 2992342..3649740 100644
  # Some tools might be installed under /root/local/.bin conditionally
  # depending on the chosen agent and requirements, make this directory
 diff --git a/packages/cli/src/lib/setup.ts b/packages/cli/src/lib/setup.ts
-index c1dfac1..7918fde 100644
+index c1dfac1..dc28579 100644
 --- a/packages/cli/src/lib/setup.ts
 +++ b/packages/cli/src/lib/setup.ts
 @@ -306,7 +306,7 @@ ${installScripts.join('\n')}
@@ -2894,6 +3078,54 @@ index c1dfac1..7918fde 100644
  # Set the right permissions after installing and moving credentials
  sudo chown -R $(id -u):$(id -g) $HOME
  
+@@ -520,7 +520,10 @@ echo "======================================="
+     // Use the current iteration's expanded title/description when available,
+     // falling back to the original task-level values for the first iteration.
+     const currentIteration = this.task.getLastIteration();
+-    const inputs = {
++    const inputs: Record<string, string> = {
++      // Start with all user-provided workflow inputs stored in the task
++      ...this.task.inputs,
++      // Always override title/description with the expanded versions
+       title: currentIteration?.title ?? this.task.title,
+       description: currentIteration?.description ?? this.task.description,
+     };
+diff --git a/packages/cli/src/lib/squash.ts b/packages/cli/src/lib/squash.ts
+new file mode 100644
+index 0000000..e887a1c
+--- /dev/null
++++ b/packages/cli/src/lib/squash.ts
+@@ -0,0 +1,30 @@
++import type { Git } from 'rover-core';
++
++/**
++ * Collapse **all** commits made since `baseCommit` into a single set of staged
++ * changes via `git reset --soft`. This includes both checkpoint commits and any
++ * regular commits in the range — rover task worktrees are isolated so every
++ * commit since the base belongs to the current task.
++ *
++ * After this call the working tree is unchanged, HEAD points to `baseCommit`,
++ * and the cumulative diff is staged. The next `git commit` produces one clean
++ * commit.
++ *
++ * Idempotent: if HEAD already equals `baseCommit` (e.g. after a prior squash)
++ * this is a no-op and returns false.
++ *
++ * @returns true if commits were collapsed, false if it was a no-op.
++ */
++export function collapseTaskCommits(
++  git: Git,
++  baseCommit: string | undefined,
++  worktreePath: string
++): boolean {
++  if (!baseCommit) return false;
++
++  const head = git.getCommitHash('HEAD', { worktreePath });
++  if (!head || head === baseCommit) return false;
++
++  git.resetSoft(baseCommit, { worktreePath });
++  return true;
++}
 diff --git a/packages/cli/src/lib/workflow.ts b/packages/cli/src/lib/workflow.ts
 index dd6ce12..266300a 100644
 --- a/packages/cli/src/lib/workflow.ts
@@ -2918,10 +3150,10 @@ index dd6ce12..266300a 100644
  
 diff --git a/packages/cli/src/lib/workflows/swe-tdd.yml b/packages/cli/src/lib/workflows/swe-tdd.yml
 new file mode 100644
-index 0000000..ea1a54c
+index 0000000..4508128
 --- /dev/null
 +++ b/packages/cli/src/lib/workflows/swe-tdd.yml
-@@ -0,0 +1,617 @@
+@@ -0,0 +1,755 @@
 +# Software Engineering TDD Workflow
 +# This workflow implements a test-driven development lifecycle:
 +# context analysis, planning, test writing, implementation,
@@ -2931,19 +3163,14 @@ index 0000000..ea1a54c
 +description: 'Test-driven development workflow that writes tests first, then implements and iterates until tests pass'
 +
 +inputs:
-+  - name: title
-+    description: 'Task title'
-+    type: string
-+    required: true
 +  - name: description
 +    description: 'Detailed task description'
 +    type: string
 +    required: true
 +  - name: test_command
-+    description: 'Command to run tests (e.g. "npm test", "pytest")'
++    description: 'Override the test command (e.g. "npm test", "pytest"). If not provided, it will be auto-detected from the project.'
 +    type: string
 +    required: false
-+    default: 'npm test'
 +
 +outputs:
 +  - name: summary
@@ -2981,7 +3208,7 @@ index 0000000..ea1a54c
 +
 +      Task title: {{inputs.title}}
 +      Task description: {{inputs.description}}
-+      Test command: {{inputs.test_command}}
++      User-provided test command override (if empty or not set, auto-detect from project): {{inputs.test_command}}
 +
 +      Follow these steps to complete it. Do not move to the next phase until you complete the previous one.
 +
@@ -2998,7 +3225,7 @@ index 0000000..ea1a54c
 +      - Use 1-line bullets wherever possible. Do not fabricate content; if information is unavailable or irrelevant, skip it
 +      - Find the main file or files affected by these changes. Then, identify other secondary files. Focus mostly on main files and avoid a deep research in the secondary ones
 +      - Identify existing test files, test frameworks, and test configuration
-+      - Identify the test command and how to run tests for this project
++      - Determine the correct test command for this project by examining package.json, Makefile, pyproject.toml, go.mod, or other build/test configuration files. If a user-provided test command is shown above, use that instead.
 +      - Follow the template strictly
 +      - Just output the template. Skip any text before and after
 +      - Use globs when a change affects multiple files
@@ -3019,7 +3246,8 @@ index 0000000..ea1a54c
 +      ## Test Infrastructure
 +
 +      - Test framework: (e.g. vitest, jest, pytest, go test)
-+      - Test command: (the command to run relevant tests)
++      - Build command: (the command to compile/build the project, if applicable. e.g. "go build ./...", "pnpm build", "cargo build", "make build". Write "none" if the language is interpreted or the test command handles compilation implicitly)
++      - Test command: (the exact command to run the relevant tests for this project)
 +      - Existing test files: list of relevant test files
 +      - Test patterns: describe the testing conventions used in this project
 +
@@ -3041,10 +3269,13 @@ index 0000000..ea1a54c
 +
 +      </template>
 +
-+      IMPORTANT: After writing context.md, you MUST extract the task complexity value and the test command and return them.
++      IMPORTANT: After writing context.md, you MUST extract the task complexity value, build command, and test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
 +    outputs:
 +      - name: complexity
 +        description: 'Task complexity: either "simple" or "complex"'
++        type: string
++      - name: build_command
++        description: 'The command to build/compile the project, or "none" if not needed'
 +        type: string
 +      - name: test_command
 +        description: 'The command to run tests for this project'
@@ -3280,20 +3511,26 @@ index 0000000..ea1a54c
 +  - id: test_fix_loop
 +    type: loop
 +    name: 'Test & Fix Loop'
-+    until: steps.run_tests.outputs.exit_code == 0
++    until: steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0
 +    maxIterations: 5
 +    steps:
++      - id: build
++        type: command
++        name: 'Build'
++        if: steps.context.outputs.build_command != none
++        command: '{{steps.context.outputs.build_command}}'
++
 +      - id: run_tests
 +        type: command
 +        name: 'Run Tests'
-+        command: '{{inputs.test_command}}'
++        command: '{{steps.context.outputs.test_command}}'
 +
 +      - id: fix_code
 +        type: agent
-+        name: 'Fix Failing Tests'
++        name: 'Fix Build or Test Failures'
 +        if: steps.run_tests.outputs.exit_code != 0
 +        prompt: |
-+          Tests are failing. Your job is to fix the implementation so all tests pass.
++          The build or tests are failing. Your job is to fix the implementation so it compiles and all tests pass.
 +
 +          ---
 +
@@ -3301,6 +3538,18 @@ index 0000000..ea1a54c
 +          Title: {{inputs.title}}
 +          Description:
 +          {{inputs.description}}
++
++          Build output (stdout):
++          ```
++          {{steps.build.outputs.stdout}}
++          ```
++
++          Build errors (stderr):
++          ```
++          {{steps.build.outputs.stderr}}
++          ```
++
++          Build exit code: {{steps.build.outputs.exit_code}}
 +
 +          Test command output (stdout):
 +          ```
@@ -3322,149 +3571,270 @@ index 0000000..ea1a54c
 +
 +          ### Instructions
 +
-+          1. Analyze the test failures carefully
-+          2. Identify the root cause of each failure
-+          3. Fix the implementation code (NOT the tests) to make tests pass
-+          4. Only modify tests if they have genuine bugs (not just because they're failing)
-+          5. Make minimal, targeted fixes
-+          6. After making fixes, verify your changes are consistent with the project patterns
++          1. If the build failed, fix compile errors first — the code must build before tests can run
++          2. Analyze the test failures carefully
++          3. Identify the root cause of each failure
++          4. Fix the implementation code (NOT the tests) to make tests pass
++          5. Only modify tests if they have genuine bugs (not just because they're failing)
++          6. Make minimal, targeted fixes
++          7. After making fixes, verify your changes are consistent with the project patterns
 +        outputs:
 +          - name: fixes_description
 +            description: 'Description of fixes applied'
 +            type: string
 +
-+  - id: review
-+    type: agent
-+    name: 'Code Review'
-+    prompt: |
-+      You are in review mode, performing a strict code review for this TDD task.
-+      Examine the task context, plan, tests, and implementation.
++      - id: checkpoint
++        type: command
++        name: 'Checkpoint & Circle Detection'
++        if: steps.build.outputs.exit_code != 0 || steps.run_tests.outputs.exit_code != 0
++        command: |
++          git add -A
++          git diff --cached --quiet && exit 0
++          git commit -m "[checkpoint] test-fix"
++          TREE_HASH=$(git rev-parse HEAD^{tree})
++          HASH_FILE="/output/.tree_hashes"
++          if [ -f "$HASH_FILE" ] && grep -qF "$TREE_HASH" "$HASH_FILE"; then
++            echo "Circle detected: tree $TREE_HASH already seen"
++            exit 1
++          fi
++          echo "$TREE_HASH" >> "$HASH_FILE"
 +
-+      ---
++  - id: review_loop
++    type: loop
++    name: 'Review & Fix Loop'
++    until: steps.code_review.outputs.issues_found != true || steps.review_checkpoint.outputs.exit_code != 0
++    maxIterations: 5
++    steps:
++      - id: git_diff
++        type: command
++        name: 'Capture Git Diff'
++        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1)'
 +
-+      Title: {{inputs.title}}
-+      Description:
-+      {{inputs.description}}
-+      Task Complexity: {{steps.context.outputs.complexity}}
++      - id: code_review
++        type: agent
++        name: 'Code Review'
++        prompt: |
++          You are in review mode, performing a strict code review for this TDD task.
++          Review the git diff below — this is the actual diff of all changes made for this task. Use it as your primary source of truth, then read specific source files when you need more context.
 +
-+      Plan:
-+      ```
-+      {{steps.plan.outputs.plan_file}}
-+      ```
++          ---
 +
-+      Changes:
-+      ```
-+      {{steps.implement.outputs.changes_file}}
-+      ```
-+      ---
++          Title: {{inputs.title}}
++          Description:
++          {{inputs.description}}
++          Task Complexity: {{steps.context.outputs.complexity}}
 +
-+      ### Phase 1: Confirm if review is required
++          Plan:
++          ```
++          {{steps.plan.outputs.plan_file}}
++          ```
 +
-+      Check the task complexity from above.
++          Git diff (all changes for this task):
++          ```diff
++          {{steps.git_diff.outputs.stdout}}
++          ```
 +
-+      - Simple task: skip the review entirely. Output: {"skipped": "true", "issues_found": "false"} and do NOT create any file. Stop here.
-+      - Complex task: continue with the next phase.
++          Previous test results (if any):
++          stdout: {{steps.run_tests_after_review.outputs.stdout}}
++          stderr: {{steps.run_tests_after_review.outputs.stderr}}
++          exit_code: {{steps.run_tests_after_review.outputs.exit_code}}
++          ---
 +
-+      ### Phase 2: For complex tasks, perform the review
++          ### Phase 1: Confirm if review is required
 +
-+      1. Compare the implementation in "Changes" against "Plan"
-+      2. Review code changes for quality, and adherence to existing patterns
-+      3. Verify task requirements are satisfied
-+      4. Check that tests are comprehensive and meaningful
-+      5. Check security concerns
++          Check the task complexity from above.
 +
-+      ### Phase 3: Output
++          - Simple task: skip the review entirely. Output: {"skipped": "true", "issues_found": "false"} and do NOT create any file. Stop here.
++          - Complex task: continue with the next phase.
 +
-+      - If the implementation is satisfactory: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
-+      - Do not fabricate content; if information is unavailable or irrelevant, skip it
-+      - If issues are found: output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
++          ### Phase 2: For complex tasks, perform the review
 +
-+      <template>
-+      # Code Review
++          Use the git diff above as the primary input for your review. It shows exactly what was changed.
++          Be thorough — flag everything wrong in the changed code. But stay in scope: only review lines and files that were changed for this task. Do not flag issues in pre-existing code that the task did not touch.
 +
-+      ## Overall Assessment
++          1. Review every hunk in the diff for correctness, quality, and adherence to existing patterns
++          2. Compare the changes against the Plan — verify task requirements are satisfied
++          3. Check that tests are comprehensive and meaningful
++          4. Check security concerns in the changed code
++          5. **Verify the code has no obvious errors**: unused variables, missing imports, type errors, syntax errors, dead code, and other regressions visible in the diff
++          6. Check naming, formatting, comments, and code style in the changed lines — flag anything that doesn't match the project's conventions
++          7. If previous test results are present above, check whether the failures were addressed
++          8. Read specific source files only when you need more context around the changed lines
++          9. **Stay in scope**: do not suggest changes to code outside the diff. Do not add features, refactor surrounding code, or improve files the task did not modify
 +
-+      Brief summary of the implementation quality and major concerns
++          ### Phase 3: Output
 +
-+      ## Plan Adherence Issues
++          - If the implementation is satisfactory with no issues of any kind: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
++          - Do not fabricate content; if information is unavailable or irrelevant, skip it
++          - Only report issues you can confirm from the diff or by reading the actual source files
++          - If ANY issues are found in the changed code — including nits and style issues — output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
 +
-+      ### Deviations from plan.md:
++          <template>
++          # Code Review
 +
-+      - [Deviation]: [Why it matters and what to do]
++          ## Overall Assessment
 +
-+      ## Code Quality Issues
++          Brief summary of the implementation quality
 +
-+      ### [File path/section]
++          ## Issues
 +
-+      **Issue**: [Concise description of the problem]
-+      **Severity**: Must Fix | Nice to have
-+      **Recommendation**: [Actionable action]
-+      **Code location**: [Line numbers or function names]
++          ### [File path/section]
 +
-+      ## Test Coverage
++          **Issue**: [Concise description of the problem]
++          **Fix**: [Exact actionable fix — what to change and where]
++          **Code location**: [Line numbers or function names]
 +
-+      - Assessment of test quality and coverage gaps
++          (Repeat for every issue found in the changed code. Include everything: bugs, logic errors, compile errors, unused variables, missing imports, naming, style, nits, test gaps, security concerns, plan deviations. Do not flag issues in code the task did not change.)
++          </template>
++        outputs:
++          - name: skipped
++            description: 'Whether review was skipped (true/false)'
++            type: string
++          - name: issues_found
++            description: 'Whether issues were found (true/false)'
++            type: string
++          - name: review_file
++            description: 'Code review file with issues (only created if issues found)'
++            type: file
++            filename: review.md
 +
-+      ## Security Concerns
++      - id: apply_fixes
++        type: agent
++        name: 'Apply Review Fixes'
++        if: steps.code_review.outputs.issues_found == true
++        prompt: |
++          You are in apply-review mode. Your fixes will be tested and re-reviewed, so they must be correct.
 +
-+      ### [Specific security issue]
++          ---
 +
-+      **Risk**: [Concise Risk description]
-+      **Severity**: Must Fix | Nice to have
-+      **Recommendation**: [Actionable action]
-+      </template>
-+    outputs:
-+      - name: skipped
-+        description: 'Whether review was skipped (true/false)'
-+        type: string
-+      - name: issues_found
-+        description: 'Whether issues were found (true/false)'
-+        type: string
-+      - name: review_file
-+        description: 'Code review file with issues (only created if issues found)'
-+        type: file
-+        filename: review.md
++          Title: {{inputs.title}}
++          Description:
++          {{inputs.description}}
 +
-+  - id: apply_review
-+    type: agent
-+    name: 'Apply Review Fixes'
-+    if: steps.review.outputs.issues_found == true
-+    prompt: |
-+      You are in apply-review mode.
++          Git diff (current state of all changes):
++          ```diff
++          {{steps.git_diff.outputs.stdout}}
++          ```
 +
-+      ---
++          Review:
++          ```
++          {{steps.code_review.outputs.review_file}}
++          ```
 +
-+      Title: {{inputs.title}}
-+      Description:
-+      {{inputs.description}}
++          Test command: {{steps.context.outputs.test_command}}
 +
-+      Context:
-+      ```
-+      {{steps.context.outputs.context_file}}
-+      ```
++          Context:
++          ```
++          {{steps.context.outputs.context_file}}
++          ```
 +
-+      Review:
-+      ```
-+      {{steps.review.outputs.review_file}}
-+      ```
++          ---
 +
-+      ---
++          ### Instructions
 +
-+      ### Instructions
++          Fix every issue in the review — bugs, nits, style, naming, everything. But stay in scope: only modify code that was changed for this task. Do not refactor, improve, or touch code outside the scope of the review.
 +
-+      1. Read all issues in Review
-+      2. Fix issues systematically by priority: Must Fix → Nice to have
-+      3. Follow review recommendations exactly — do not invent alternative solutions
-+      4. Ensure fixes preserve existing functionality and do not introduce regressions
-+      5. Reference Context for consistency
-+    outputs:
-+      - name: fixes_applied
-+        description: 'Whether fixes were applied (true/false)'
-+        type: string
-+      - name: review_fixes_file
-+        description: 'Updated changes file with review fixes appended'
-+        type: file
-+        filename: review_fixes.md
++          1. Read all issues in Review
++          2. Fix every single one. Do not skip any issue regardless of size
++          3. Follow review recommendations exactly — do not invent alternative solutions
++          4. Only modify files and lines relevant to the review issues — do not make unrelated changes
++          5. Ensure fixes preserve existing functionality and do not introduce regressions
++          6. Reference Context for consistency
++          7. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
++          8. Do not leave unused variables, missing imports, or dead code — clean up after yourself
++        outputs:
++          - name: fixes_applied
++            description: 'Whether fixes were applied (true/false)'
++            type: string
++          - name: review_fixes_file
++            description: 'Updated changes file with review fixes appended'
++            type: file
++            filename: review_fixes.md
++
++      - id: build_after_review
++        type: command
++        name: 'Build After Review'
++        if: steps.context.outputs.build_command != none
++        command: '{{steps.context.outputs.build_command}}'
++
++      - id: run_tests_after_review
++        type: command
++        name: 'Run Tests After Review'
++        if: steps.apply_fixes.outputs.fixes_applied == true
++        command: '{{steps.context.outputs.test_command}}'
++
++      - id: fix_regressions
++        type: agent
++        name: 'Fix Review Regressions'
++        if: steps.run_tests_after_review.outputs.exit_code != 0
++        prompt: |
++          Review fixes broke the build or tests. Your job is to fix the regressions while preserving the review improvements.
++
++          ---
++
++          Task:
++          Title: {{inputs.title}}
++          Description:
++          {{inputs.description}}
++
++          Build output (stdout):
++          ```
++          {{steps.build_after_review.outputs.stdout}}
++          ```
++
++          Build errors (stderr):
++          ```
++          {{steps.build_after_review.outputs.stderr}}
++          ```
++
++          Build exit code: {{steps.build_after_review.outputs.exit_code}}
++
++          Test command output (stdout):
++          ```
++          {{steps.run_tests_after_review.outputs.stdout}}
++          ```
++
++          Test command errors (stderr):
++          ```
++          {{steps.run_tests_after_review.outputs.stderr}}
++          ```
++
++          Test exit code: {{steps.run_tests_after_review.outputs.exit_code}}
++
++          Review that was applied:
++          ```
++          {{steps.code_review.outputs.review_file}}
++          ```
++          ---
++
++          ### Instructions
++
++          1. If the build failed, fix compile errors first — the code must build before tests can run
++          2. Analyze the test/build failures carefully
++          3. Identify which review fixes caused the regressions
++          3. Fix the code to make tests pass while keeping valid review improvements
++          4. Do NOT revert review fixes wholesale — preserve improvements that aren't causing failures
++          5. Make minimal, targeted fixes
++        outputs:
++          - name: fixes_description
++            description: 'Description of regression fixes applied'
++            type: string
++
++      - id: review_checkpoint
++        type: command
++        name: 'Review Checkpoint & Circle Detection'
++        if: steps.code_review.outputs.issues_found == true
++        command: |
++          git add -A
++          git diff --cached --quiet && exit 0
++          git commit -m "[checkpoint] review-fix"
++          TREE_HASH=$(git rev-parse HEAD^{tree})
++          HASH_FILE="/output/.tree_hashes"
++          if [ -f "$HASH_FILE" ] && grep -qF "$TREE_HASH" "$HASH_FILE"; then
++            echo "Circle detected: tree $TREE_HASH already seen"
++            exit 1
++          fi
++          echo "$TREE_HASH" >> "$HASH_FILE"
 +
 +  - id: summary
 +    type: agent
@@ -3690,7 +4060,7 @@ index 534fed8..68445f6 100644
      it('should accept empty strings in string fields', () => {
        // Zod z.string() accepts empty strings by default
 diff --git a/packages/core/src/files/workflow.ts b/packages/core/src/files/workflow.ts
-index fa959ea..ca80137 100644
+index fa959ea..ffa7e88 100644
 --- a/packages/core/src/files/workflow.ts
 +++ b/packages/core/src/files/workflow.ts
 @@ -10,6 +10,7 @@ import {
@@ -3904,16 +4274,30 @@ index fa959ea..ca80137 100644
          }
        }
      }
-@@ -574,6 +646,46 @@ export class WorkflowManager {
+@@ -574,6 +646,60 @@ export class WorkflowManager {
      };
    }
  
 +  /**
-+   * Evaluate a simple condition string for step `if` fields.
-+   * Supports: steps.<id>.outputs.<name> == <value>
-+   *           steps.<id>.outputs.<name> != <value>
++   * Evaluate a condition string for step `if` fields.
++   * Supports OR (`||`) to join multiple clauses.
++   * Each clause: steps.<id>.outputs.<name> == <value>
++   *              steps.<id>.outputs.<name> != <value>
 +   */
 +  private evaluateSimpleCondition(
++    condition: string,
++    stepsOutput: Map<string, Map<string, string>>
++  ): boolean {
++    const parts = condition.split(/\s*\|\|\s*/);
++    return parts.some(part =>
++      this.evaluateSingleCondition(part.trim(), stepsOutput)
++    );
++  }
++
++  /**
++   * Evaluate a single condition clause (no OR).
++   */
++  private evaluateSingleCondition(
 +    condition: string,
 +    stepsOutput: Map<string, Map<string, string>>
 +  ): boolean {
@@ -3952,10 +4336,10 @@ index fa959ea..ca80137 100644
     * Validate provided inputs against workflow requirements
     * @param providedInputs - Map of input name to value
 diff --git a/packages/core/src/git.ts b/packages/core/src/git.ts
-index c04ca92..61c0aaa 100644
+index cadcbdc..61cf5ef 100644
 --- a/packages/core/src/git.ts
 +++ b/packages/core/src/git.ts
-@@ -443,6 +443,7 @@ export class Git {
+@@ -442,6 +442,7 @@ export class Git {
      try {
        launchSync('git', ['rebase', onto], {
          cwd: options.worktreePath ?? this.cwd,
@@ -3963,6 +4347,22 @@ index c04ca92..61c0aaa 100644
        });
        return { success: true };
      } catch (err) {
+@@ -902,6 +903,15 @@ export class Git {
+     }));
+   }
+ 
++  /**
++   * Soft-reset the current branch to the given ref, keeping all changes staged.
++   */
++  resetSoft(ref: string, options: GitWorktreeOptions = {}): void {
++    launchSync('git', ['reset', '--soft', ref], {
++      cwd: options.worktreePath ?? this.cwd,
++    });
++  }
++
+   /**
+    * Count file lines efficiently.
+    * @see https://stackoverflow.com/a/41439945
 diff --git a/packages/schemas/src/index.ts b/packages/schemas/src/index.ts
 index 7682519..f2494a8 100644
 --- a/packages/schemas/src/index.ts
@@ -3991,10 +4391,10 @@ index 7682519..f2494a8 100644
  
  // Previous Iteration library
 diff --git a/packages/schemas/src/workflow/schema.ts b/packages/schemas/src/workflow/schema.ts
-index 0acf35b..353c115 100644
+index 0acf35b..9c057c8 100644
 --- a/packages/schemas/src/workflow/schema.ts
 +++ b/packages/schemas/src/workflow/schema.ts
-@@ -86,16 +86,30 @@ export const WorkflowConfigSchema = z.object({
+@@ -86,16 +86,40 @@ export const WorkflowConfigSchema = z.object({
    timeout: z.number().optional(),
    /** Whether to continue on step failures */
    continueOnError: z.boolean().optional(),
@@ -4004,11 +4404,21 @@ index 0acf35b..353c115 100644
  
  /**
 - * Base step schema shared by all step types
-+ * Regex for validating condition expressions used in `if` and `until` fields.
++ * Regex for validating a single condition expression.
 + * Format: steps.<id>.outputs.<name> == <value>
 + *         steps.<id>.outputs.<name> != <value>
   */
-+const CONDITION_REGEX = /^steps\.[\w-]+\.outputs\.[\w-]+\s*(==|!=)\s*.+$/;
++const SINGLE_CONDITION_REGEX =
++  /^steps\.[\w-]+\.outputs\.[\w-]+\s*(==|!=)\s*.+$/;
++
++/**
++ * Validate a condition string that may contain multiple clauses joined by `||`.
++ * Each clause must individually match the single-condition format.
++ */
++function isValidCondition(condition: string): boolean {
++  const parts = condition.split(/\s*\|\|\s*/);
++  return parts.every(part => SINGLE_CONDITION_REGEX.test(part.trim()));
++}
 +
  const WorkflowBaseStepSchema = z.object({
    /** Unique step identifier */
@@ -4018,15 +4428,15 @@ index 0acf35b..353c115 100644
 +  /** Optional condition; step is skipped when it evaluates to false */
 +  if: z
 +    .string()
-+    .regex(
-+      CONDITION_REGEX,
-+      'Condition must match format: steps.<id>.outputs.<name> == <value>'
-+    )
++    .refine(isValidCondition, {
++      message:
++        'Condition must match format: steps.<id>.outputs.<name> == <value> (clauses may be joined with ||)',
++    })
 +    .optional(),
  });
  
  /**
-@@ -140,47 +154,25 @@ export const WorkflowCommandStepSchema = WorkflowBaseStepSchema.extend({
+@@ -140,47 +164,23 @@ export const WorkflowCommandStepSchema = WorkflowBaseStepSchema.extend({
  });
  
  /**
@@ -4050,10 +4460,13 @@ index 0acf35b..353c115 100644
 -/**
 - * Parallel step schema (recursive)
 - * Executes multiple steps concurrently
-- */
--// biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
++ * Loop step schema (recursive)
++ * Repeats sub-steps until a condition is met or max iterations reached
+  */
+ // biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
 -export const WorkflowParallelStepSchema: z.ZodType<any> =
--  WorkflowBaseStepSchema.extend({
++export const WorkflowLoopStepSchema: z.ZodType<any> =
+   WorkflowBaseStepSchema.extend({
 -    /** Step type - 'parallel' */
 -    type: z.literal('parallel'),
 -    /** Steps to execute in parallel */
@@ -4063,13 +4476,10 @@ index 0acf35b..353c115 100644
 -/**
 - * Sequential step schema (recursive)
 - * Executes multiple steps in order
-+ * Loop step schema (recursive)
-+ * Repeats sub-steps until a condition is met or max iterations reached
-  */
- // biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
+- */
+-// biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
 -export const WorkflowSequentialStepSchema: z.ZodType<any> =
-+export const WorkflowLoopStepSchema: z.ZodType<any> =
-   WorkflowBaseStepSchema.extend({
+-  WorkflowBaseStepSchema.extend({
 -    /** Step type - 'sequential' */
 -    type: z.literal('sequential'),
 -    /** Ordered list of steps to execute */
@@ -4078,18 +4488,16 @@ index 0acf35b..353c115 100644
 +    /** Sub-steps to repeat each iteration */
      steps: z.lazy(() => z.array(WorkflowStepSchema)),
 +    /** Condition to check after each sub-step; loop exits when true */
-+    until: z
-+      .string()
-+      .regex(
-+        CONDITION_REGEX,
-+        'Condition must match format: steps.<id>.outputs.<name> == <value>'
-+      ),
++    until: z.string().refine(isValidCondition, {
++      message:
++        'Condition must match format: steps.<id>.outputs.<name> == <value> (clauses may be joined with ||)',
++    }),
 +    /** Maximum iterations before giving up (default: 3) */
 +    maxIterations: z.number().int().positive().optional(),
    });
  
  /**
-@@ -188,11 +180,32 @@ export const WorkflowSequentialStepSchema: z.ZodType<any> =
+@@ -188,11 +188,32 @@ export const WorkflowSequentialStepSchema: z.ZodType<any> =
   * Forward declared for recursive types
   */
  // biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
@@ -4123,7 +4531,7 @@ index 0acf35b..353c115 100644
  /**
   * Complete agent workflow schema
   * Defines the structure of a workflow YAML file
-@@ -218,7 +231,7 @@ export const WorkflowSchema = z
+@@ -218,7 +239,7 @@ export const WorkflowSchema = z
    })
    .refine(
      data => {
@@ -4170,1416 +4578,6 @@ index f9e8a37..76c7900 100644
 +export function isLoopStep(step: WorkflowStep): step is WorkflowLoopStep {
 +  return step.type === 'loop';
 +}
--- 
-2.53.0
-
-From 04c76eed6e94ec035bf3a3445beb9f7fec5d95a3 Mon Sep 17 00:00:00 2001
-From: Ben U <dataforxyz@gmail.com>
-Date: Thu, 26 Feb 2026 18:34:46 -0600
-Subject: [PATCH] fix: swe-tdd workflow non-interactive mode and input handling
-
-- Remove required title input from swe-tdd (auto-injected by setup.ts like swe)
-- Remove hardcoded npm test default; test command is now auto-detected from project
-- Skip optional input prompts when -y flag is set to prevent enquirer crash
-- Pass all user-provided workflow inputs to container (not just title/description)
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
----
- packages/cli/src/commands/task.ts          |  9 +++++++++
- packages/cli/src/lib/setup.ts              |  5 ++++-
- packages/cli/src/lib/workflows/swe-tdd.yml | 17 ++++++-----------
- 3 files changed, 19 insertions(+), 12 deletions(-)
-
-diff --git a/packages/cli/src/commands/task.ts b/packages/cli/src/commands/task.ts
-index c70951d..f03b541 100644
---- a/packages/cli/src/commands/task.ts
-+++ b/packages/cli/src/commands/task.ts
-@@ -1034,6 +1034,15 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
-           continue;
-         }
- 
-+        // When running non-interactively (-y), skip optional inputs.
-+        // They will use their default value or be auto-detected by the workflow.
-+        if (yes && !input.required) {
-+          if (input.default !== undefined) {
-+            inputsData.set(input.name, String(input.default));
-+          }
-+          continue;
-+        }
-+
-         let enquirerType;
-         switch (input.type) {
-           case 'string':
-diff --git a/packages/cli/src/lib/setup.ts b/packages/cli/src/lib/setup.ts
-index 7918fde..dc28579 100644
---- a/packages/cli/src/lib/setup.ts
-+++ b/packages/cli/src/lib/setup.ts
-@@ -520,7 +520,10 @@ echo "======================================="
-     // Use the current iteration's expanded title/description when available,
-     // falling back to the original task-level values for the first iteration.
-     const currentIteration = this.task.getLastIteration();
--    const inputs = {
-+    const inputs: Record<string, string> = {
-+      // Start with all user-provided workflow inputs stored in the task
-+      ...this.task.inputs,
-+      // Always override title/description with the expanded versions
-       title: currentIteration?.title ?? this.task.title,
-       description: currentIteration?.description ?? this.task.description,
-     };
-diff --git a/packages/cli/src/lib/workflows/swe-tdd.yml b/packages/cli/src/lib/workflows/swe-tdd.yml
-index ea1a54c..31be415 100644
---- a/packages/cli/src/lib/workflows/swe-tdd.yml
-+++ b/packages/cli/src/lib/workflows/swe-tdd.yml
-@@ -7,19 +7,14 @@ name: 'swe-tdd'
- description: 'Test-driven development workflow that writes tests first, then implements and iterates until tests pass'
- 
- inputs:
--  - name: title
--    description: 'Task title'
--    type: string
--    required: true
-   - name: description
-     description: 'Detailed task description'
-     type: string
-     required: true
-   - name: test_command
--    description: 'Command to run tests (e.g. "npm test", "pytest")'
-+    description: 'Override the test command (e.g. "npm test", "pytest"). If not provided, it will be auto-detected from the project.'
-     type: string
-     required: false
--    default: 'npm test'
- 
- outputs:
-   - name: summary
-@@ -57,7 +52,7 @@ steps:
- 
-       Task title: {{inputs.title}}
-       Task description: {{inputs.description}}
--      Test command: {{inputs.test_command}}
-+      User-provided test command override (if empty or not set, auto-detect from project): {{inputs.test_command}}
- 
-       Follow these steps to complete it. Do not move to the next phase until you complete the previous one.
- 
-@@ -74,7 +69,7 @@ steps:
-       - Use 1-line bullets wherever possible. Do not fabricate content; if information is unavailable or irrelevant, skip it
-       - Find the main file or files affected by these changes. Then, identify other secondary files. Focus mostly on main files and avoid a deep research in the secondary ones
-       - Identify existing test files, test frameworks, and test configuration
--      - Identify the test command and how to run tests for this project
-+      - Determine the correct test command for this project by examining package.json, Makefile, pyproject.toml, go.mod, or other build/test configuration files. If a user-provided test command is shown above, use that instead.
-       - Follow the template strictly
-       - Just output the template. Skip any text before and after
-       - Use globs when a change affects multiple files
-@@ -95,7 +90,7 @@ steps:
-       ## Test Infrastructure
- 
-       - Test framework: (e.g. vitest, jest, pytest, go test)
--      - Test command: (the command to run relevant tests)
-+      - Test command: (the exact command to run the relevant tests for this project)
-       - Existing test files: list of relevant test files
-       - Test patterns: describe the testing conventions used in this project
- 
-@@ -117,7 +112,7 @@ steps:
- 
-       </template>
- 
--      IMPORTANT: After writing context.md, you MUST extract the task complexity value and the test command and return them.
-+      IMPORTANT: After writing context.md, you MUST extract the task complexity value and the test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files.
-     outputs:
-       - name: complexity
-         description: 'Task complexity: either "simple" or "complex"'
-@@ -362,7 +357,7 @@ steps:
-       - id: run_tests
-         type: command
-         name: 'Run Tests'
--        command: '{{inputs.test_command}}'
-+        command: '{{steps.context.outputs.test_command}}'
- 
-       - id: fix_code
-         type: agent
--- 
-2.53.0
-
-From 2fdb706fb6d8ecdbf8673bd52a779d205f4cb05e Mon Sep 17 00:00:00 2001
-From: Ben U <dataforxyz@gmail.com>
-Date: Fri, 27 Feb 2026 11:54:51 -0600
-Subject: [PATCH] fix: add review & fix loop to swe-tdd workflow to prevent
- post-review regressions
-
-The swe-tdd workflow had a gap where review fixes could break the build
-undetected: tests passed, then code review found issues, then apply_review
-modified code with no subsequent test run. This restructures the review
-phase into a self-correcting loop:
-
-- Replace separate review/apply_review steps with a review_loop that
-  iterates until the review finds no issues (max 3 iterations)
-- Add a git_diff command step that captures a fresh diff each iteration,
-  giving the reviewer actual code changes instead of a text summary
-- Add test verification after applying review fixes
-- Add a fix_regressions agent to handle test failures from review fixes
-- Strengthen apply_fixes prompt to run tests and clean up after itself
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
----
- packages/cli/src/lib/workflows/swe-tdd.yml | 282 +++++++++++++--------
- 1 file changed, 183 insertions(+), 99 deletions(-)
-
-diff --git a/packages/cli/src/lib/workflows/swe-tdd.yml b/packages/cli/src/lib/workflows/swe-tdd.yml
-index 31be415..cbb5614 100644
---- a/packages/cli/src/lib/workflows/swe-tdd.yml
-+++ b/packages/cli/src/lib/workflows/swe-tdd.yml
-@@ -404,138 +404,222 @@ steps:
-             description: 'Description of fixes applied'
-             type: string
- 
--  - id: review
--    type: agent
--    name: 'Code Review'
--    prompt: |
--      You are in review mode, performing a strict code review for this TDD task.
--      Examine the task context, plan, tests, and implementation.
-+  - id: review_loop
-+    type: loop
-+    name: 'Review & Fix Loop'
-+    until: steps.code_review.outputs.issues_found != true
-+    maxIterations: 5
-+    steps:
-+      - id: git_diff
-+        type: command
-+        name: 'Capture Git Diff'
-+        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1)'
- 
--      ---
-+      - id: code_review
-+        type: agent
-+        name: 'Code Review'
-+        prompt: |
-+          You are in review mode, performing a strict code review for this TDD task.
-+          Review the git diff below — this is the actual diff of all changes made for this task. Use it as your primary source of truth, then read specific source files when you need more context.
- 
--      Title: {{inputs.title}}
--      Description:
--      {{inputs.description}}
--      Task Complexity: {{steps.context.outputs.complexity}}
-+          ---
- 
--      Plan:
--      ```
--      {{steps.plan.outputs.plan_file}}
--      ```
-+          Title: {{inputs.title}}
-+          Description:
-+          {{inputs.description}}
-+          Task Complexity: {{steps.context.outputs.complexity}}
- 
--      Changes:
--      ```
--      {{steps.implement.outputs.changes_file}}
--      ```
--      ---
-+          Plan:
-+          ```
-+          {{steps.plan.outputs.plan_file}}
-+          ```
- 
--      ### Phase 1: Confirm if review is required
-+          Git diff (all changes for this task):
-+          ```diff
-+          {{steps.git_diff.outputs.stdout}}
-+          ```
- 
--      Check the task complexity from above.
-+          Previous test results (if any):
-+          stdout: {{steps.run_tests_after_review.outputs.stdout}}
-+          stderr: {{steps.run_tests_after_review.outputs.stderr}}
-+          exit_code: {{steps.run_tests_after_review.outputs.exit_code}}
-+          ---
- 
--      - Simple task: skip the review entirely. Output: {"skipped": "true", "issues_found": "false"} and do NOT create any file. Stop here.
--      - Complex task: continue with the next phase.
-+          ### Phase 1: Confirm if review is required
- 
--      ### Phase 2: For complex tasks, perform the review
-+          Check the task complexity from above.
- 
--      1. Compare the implementation in "Changes" against "Plan"
--      2. Review code changes for quality, and adherence to existing patterns
--      3. Verify task requirements are satisfied
--      4. Check that tests are comprehensive and meaningful
--      5. Check security concerns
-+          - Simple task: skip the review entirely. Output: {"skipped": "true", "issues_found": "false"} and do NOT create any file. Stop here.
-+          - Complex task: continue with the next phase.
- 
--      ### Phase 3: Output
-+          ### Phase 2: For complex tasks, perform the review
- 
--      - If the implementation is satisfactory: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
--      - Do not fabricate content; if information is unavailable or irrelevant, skip it
--      - If issues are found: output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
-+          Use the git diff above as the primary input for your review. It shows exactly what was changed.
- 
--      <template>
--      # Code Review
-+          1. Review every hunk in the diff for correctness, quality, and adherence to existing patterns
-+          2. Compare the changes against the Plan — verify task requirements are satisfied
-+          3. Check that tests are comprehensive and meaningful
-+          4. Check security concerns
-+          5. **Verify the code has no obvious errors**: check for unused variables, missing imports, type errors, syntax errors, and other regressions visible in the diff
-+          6. If previous test results are present above, check whether the failures were addressed
-+          7. Read specific source files only when you need more context around the changed lines
- 
--      ## Overall Assessment
-+          ### Phase 3: Output
- 
--      Brief summary of the implementation quality and major concerns
-+          - If the implementation is satisfactory: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
-+          - Do not fabricate content; if information is unavailable or irrelevant, skip it
-+          - Only report issues you can confirm from the diff or by reading the actual source files
-+          - If issues are found: output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
- 
--      ## Plan Adherence Issues
-+          <template>
-+          # Code Review
- 
--      ### Deviations from plan.md:
-+          ## Overall Assessment
- 
--      - [Deviation]: [Why it matters and what to do]
-+          Brief summary of the implementation quality and major concerns
- 
--      ## Code Quality Issues
-+          ## Plan Adherence Issues
- 
--      ### [File path/section]
-+          ### Deviations from plan.md:
- 
--      **Issue**: [Concise description of the problem]
--      **Severity**: Must Fix | Nice to have
--      **Recommendation**: [Actionable action]
--      **Code location**: [Line numbers or function names]
-+          - [Deviation]: [Why it matters and what to do]
- 
--      ## Test Coverage
-+          ## Code Quality Issues
- 
--      - Assessment of test quality and coverage gaps
-+          ### [File path/section]
- 
--      ## Security Concerns
-+          **Issue**: [Concise description of the problem]
-+          **Severity**: Must Fix | Nice to have
-+          **Recommendation**: [Actionable action]
-+          **Code location**: [Line numbers or function names]
- 
--      ### [Specific security issue]
-+          ## Build & Compile Issues
- 
--      **Risk**: [Concise Risk description]
--      **Severity**: Must Fix | Nice to have
--      **Recommendation**: [Actionable action]
--      </template>
--    outputs:
--      - name: skipped
--        description: 'Whether review was skipped (true/false)'
--        type: string
--      - name: issues_found
--        description: 'Whether issues were found (true/false)'
--        type: string
--      - name: review_file
--        description: 'Code review file with issues (only created if issues found)'
--        type: file
--        filename: review.md
-+          - List any compile errors, unused variables, missing imports, or type errors found in the diff
- 
--  - id: apply_review
--    type: agent
--    name: 'Apply Review Fixes'
--    if: steps.review.outputs.issues_found == true
--    prompt: |
--      You are in apply-review mode.
-+          ## Test Coverage
- 
--      ---
-+          - Assessment of test quality and coverage gaps
- 
--      Title: {{inputs.title}}
--      Description:
--      {{inputs.description}}
-+          ## Security Concerns
- 
--      Context:
--      ```
--      {{steps.context.outputs.context_file}}
--      ```
-+          ### [Specific security issue]
- 
--      Review:
--      ```
--      {{steps.review.outputs.review_file}}
--      ```
-+          **Risk**: [Concise Risk description]
-+          **Severity**: Must Fix | Nice to have
-+          **Recommendation**: [Actionable action]
-+          </template>
-+        outputs:
-+          - name: skipped
-+            description: 'Whether review was skipped (true/false)'
-+            type: string
-+          - name: issues_found
-+            description: 'Whether issues were found (true/false)'
-+            type: string
-+          - name: review_file
-+            description: 'Code review file with issues (only created if issues found)'
-+            type: file
-+            filename: review.md
- 
--      ---
-+      - id: apply_fixes
-+        type: agent
-+        name: 'Apply Review Fixes'
-+        if: steps.code_review.outputs.issues_found == true
-+        prompt: |
-+          You are in apply-review mode. Your fixes will be tested and re-reviewed, so they must be correct.
- 
--      ### Instructions
-+          ---
- 
--      1. Read all issues in Review
--      2. Fix issues systematically by priority: Must Fix → Nice to have
--      3. Follow review recommendations exactly — do not invent alternative solutions
--      4. Ensure fixes preserve existing functionality and do not introduce regressions
--      5. Reference Context for consistency
--    outputs:
--      - name: fixes_applied
--        description: 'Whether fixes were applied (true/false)'
--        type: string
--      - name: review_fixes_file
--        description: 'Updated changes file with review fixes appended'
--        type: file
--        filename: review_fixes.md
-+          Title: {{inputs.title}}
-+          Description:
-+          {{inputs.description}}
-+
-+          Git diff (current state of all changes):
-+          ```diff
-+          {{steps.git_diff.outputs.stdout}}
-+          ```
-+
-+          Review:
-+          ```
-+          {{steps.code_review.outputs.review_file}}
-+          ```
-+
-+          Test command: {{steps.context.outputs.test_command}}
-+
-+          Context:
-+          ```
-+          {{steps.context.outputs.context_file}}
-+          ```
-+
-+          ---
-+
-+          ### Instructions
-+
-+          1. Read all issues in Review
-+          2. Fix issues systematically by priority: Must Fix → Nice to have
-+          3. Follow review recommendations exactly — do not invent alternative solutions
-+          4. Ensure fixes preserve existing functionality and do not introduce regressions
-+          5. Reference Context for consistency
-+          6. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
-+          7. Do not leave unused variables, missing imports, or dead code — clean up after yourself
-+        outputs:
-+          - name: fixes_applied
-+            description: 'Whether fixes were applied (true/false)'
-+            type: string
-+          - name: review_fixes_file
-+            description: 'Updated changes file with review fixes appended'
-+            type: file
-+            filename: review_fixes.md
-+
-+      - id: run_tests_after_review
-+        type: command
-+        name: 'Run Tests After Review'
-+        if: steps.apply_fixes.outputs.fixes_applied == true
-+        command: '{{steps.context.outputs.test_command}}'
-+
-+      - id: fix_regressions
-+        type: agent
-+        name: 'Fix Review Regressions'
-+        if: steps.run_tests_after_review.outputs.exit_code != 0
-+        prompt: |
-+          Review fixes broke the build. Your job is to fix the regressions while preserving the review improvements.
-+
-+          ---
-+
-+          Task:
-+          Title: {{inputs.title}}
-+          Description:
-+          {{inputs.description}}
-+
-+          Test command output (stdout):
-+          ```
-+          {{steps.run_tests_after_review.outputs.stdout}}
-+          ```
-+
-+          Test command errors (stderr):
-+          ```
-+          {{steps.run_tests_after_review.outputs.stderr}}
-+          ```
-+
-+          Test exit code: {{steps.run_tests_after_review.outputs.exit_code}}
-+
-+          Review that was applied:
-+          ```
-+          {{steps.code_review.outputs.review_file}}
-+          ```
-+          ---
-+
-+          ### Instructions
-+
-+          1. Analyze the test/build failures carefully
-+          2. Identify which review fixes caused the regressions
-+          3. Fix the code to make tests pass while keeping valid review improvements
-+          4. Do NOT revert review fixes wholesale — preserve improvements that aren't causing failures
-+          5. Make minimal, targeted fixes
-+        outputs:
-+          - name: fixes_description
-+            description: 'Description of regression fixes applied'
-+            type: string
- 
-   - id: summary
-     type: agent
--- 
-2.53.0
-
-From 24a95d8bd6f666ec7b423f04312a13162b861d4e Mon Sep 17 00:00:00 2001
-From: Ben U <dataforxyz@gmail.com>
-Date: Fri, 27 Feb 2026 12:18:24 -0600
-Subject: [PATCH] feat: add checkpoint commits and circle detection to workflow
- loops
-
-Add checkpoint commits after each fix attempt in swe-tdd workflow loops
-to detect when agents go in circles (reverting and re-applying the same
-changes). Checkpoint commits are squashed into a single clean commit at
-merge/push/rebase time, so the end result is identical to today.
-
-- Add resetSoft() and getTreeHash() methods to Git class
-- Add OR (||) support in condition evaluators and schema validation
-- Add checkpoint & circle detection steps in test_fix_loop and review_loop
-- Add squash helper to collapse checkpoint commits before shipping
-- Integrate squash into merge, push, and rebase commands
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
----
- .../agent/src/lib/__tests__/condition.test.ts | 76 +++++++++++++++
- packages/agent/src/lib/condition.ts           | 14 ++-
- packages/cli/src/commands/merge.ts            | 16 +++-
- packages/cli/src/commands/push.ts             | 10 +-
- packages/cli/src/commands/rebase.ts           | 16 +++-
- packages/cli/src/lib/squash.ts                | 23 +++++
- packages/cli/src/lib/workflows/swe-tdd.yml    | 93 +++++++++++--------
- packages/core/src/files/workflow.ts           | 20 +++-
- packages/core/src/git.ts                      | 27 ++++++
- packages/schemas/src/workflow/schema.ts       | 32 ++++---
- 10 files changed, 266 insertions(+), 61 deletions(-)
- create mode 100644 packages/cli/src/lib/squash.ts
-
-diff --git a/packages/agent/src/lib/__tests__/condition.test.ts b/packages/agent/src/lib/__tests__/condition.test.ts
-index 9cc89f3..e8c515c 100644
---- a/packages/agent/src/lib/__tests__/condition.test.ts
-+++ b/packages/agent/src/lib/__tests__/condition.test.ts
-@@ -168,4 +168,80 @@ describe('evaluateCondition', () => {
-       evaluateCondition('steps.check.outputs.status == passed', stepsOutput)
-     ).toBe(false);
-   });
-+
-+  describe('OR (||) conditions', () => {
-+    it('returns true when first clause is true', () => {
-+      const stepsOutput = new Map<string, Map<string, string>>();
-+      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
-+      stepsOutput.set('checkpoint', new Map([['exit_code', '0']]));
-+
-+      expect(
-+        evaluateCondition(
-+          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
-+          stepsOutput
-+        )
-+      ).toBe(true);
-+    });
-+
-+    it('returns true when second clause is true', () => {
-+      const stepsOutput = new Map<string, Map<string, string>>();
-+      stepsOutput.set('run_tests', new Map([['exit_code', '1']]));
-+      stepsOutput.set('checkpoint', new Map([['exit_code', '1']]));
-+
-+      expect(
-+        evaluateCondition(
-+          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
-+          stepsOutput
-+        )
-+      ).toBe(true);
-+    });
-+
-+    it('returns false when neither clause is true', () => {
-+      const stepsOutput = new Map<string, Map<string, string>>();
-+      stepsOutput.set('run_tests', new Map([['exit_code', '1']]));
-+      stepsOutput.set('checkpoint', new Map([['exit_code', '0']]));
-+
-+      expect(
-+        evaluateCondition(
-+          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
-+          stepsOutput
-+        )
-+      ).toBe(false);
-+    });
-+
-+    it('returns true when both clauses are true', () => {
-+      const stepsOutput = new Map<string, Map<string, string>>();
-+      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
-+      stepsOutput.set('checkpoint', new Map([['exit_code', '1']]));
-+
-+      expect(
-+        evaluateCondition(
-+          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
-+          stepsOutput
-+        )
-+      ).toBe(true);
-+    });
-+
-+    it('handles whitespace around ||', () => {
-+      const stepsOutput = new Map<string, Map<string, string>>();
-+      stepsOutput.set('a', new Map([['x', '1']]));
-+      stepsOutput.set('b', new Map([['y', '2']]));
-+
-+      expect(
-+        evaluateCondition(
-+          'steps.a.outputs.x == 1  ||  steps.b.outputs.y == 2',
-+          stepsOutput
-+        )
-+      ).toBe(true);
-+    });
-+
-+    it('works with a single clause (no ||)', () => {
-+      const stepsOutput = new Map<string, Map<string, string>>();
-+      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
-+
-+      expect(
-+        evaluateCondition('steps.run_tests.outputs.exit_code == 0', stepsOutput)
-+      ).toBe(true);
-+    });
-+  });
- });
-diff --git a/packages/agent/src/lib/condition.ts b/packages/agent/src/lib/condition.ts
-index 7d6d944..aab26b6 100644
---- a/packages/agent/src/lib/condition.ts
-+++ b/packages/agent/src/lib/condition.ts
-@@ -17,14 +17,26 @@ function normalizeBoolean(value: string): string {
- 
- /**
-  * Evaluate a condition string against the current step outputs.
-+ * Supports OR (`||`) to join multiple clauses — returns true if any clause is true.
-  *
-- * @param condition - e.g. "steps.run_tests.outputs.exit_code == 0"
-+ * @param condition - e.g. "steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0"
-  * @param stepsOutput - Map of step ID → output Map
-  * @returns true if condition is met
-  */
- export function evaluateCondition(
-   condition: string,
-   stepsOutput: Map<string, Map<string, string>>
-+): boolean {
-+  const parts = condition.split(/\s*\|\|\s*/);
-+  return parts.some(part => evaluateSingleCondition(part.trim(), stepsOutput));
-+}
-+
-+/**
-+ * Evaluate a single condition clause (no OR).
-+ */
-+function evaluateSingleCondition(
-+  condition: string,
-+  stepsOutput: Map<string, Map<string, string>>
- ): boolean {
-   // All comparisons are string-based: command outputs and YAML values are always strings,
-   // so e.g. `exit_code == 0` compares the string "0" to the string "0".
-diff --git a/packages/cli/src/commands/merge.ts b/packages/cli/src/commands/merge.ts
-index f53be99..339634d 100644
---- a/packages/cli/src/commands/merge.ts
-+++ b/packages/cli/src/commands/merge.ts
-@@ -38,6 +38,7 @@ import {
-   requireProjectContext,
- } from '../lib/context.js';
- import type { CommandDefinition } from '../types.js';
-+import { squashCheckpointCommits } from '../lib/squash.js';
- 
- const { prompt } = enquirer;
- 
-@@ -487,10 +488,19 @@ const mergeCommand = async (taskId: string, options: MergeOptions = {}) => {
-       return;
-     }
- 
-+    // Squash checkpoint commits into staged changes before evaluating state
-+    const squashed = squashCheckpointCommits(
-+      git,
-+      task.baseCommit,
-+      task.worktreePath
-+    );
-+
-     // Check if worktree has changes to commit or if there are unmerged commits
--    const hasWorktreeChanges = git.hasUncommittedChanges({
--      worktreePath: task.worktreePath,
--    });
-+    const hasWorktreeChanges =
-+      squashed ||
-+      git.hasUncommittedChanges({
-+        worktreePath: task.worktreePath,
-+      });
-     const taskBranch = task.branchName;
-     const hasUnmerged = git.hasUnmergedCommits(taskBranch);
- 
-diff --git a/packages/cli/src/commands/push.ts b/packages/cli/src/commands/push.ts
-index 5abfa55..e1ff9ed 100644
---- a/packages/cli/src/commands/push.ts
-+++ b/packages/cli/src/commands/push.ts
-@@ -21,6 +21,7 @@ import { showRoverChat, TIP_TITLES } from '../utils/display.js';
- import { statusColor } from '../utils/task-status.js';
- import { executeHooks } from '../lib/hooks.js';
- import type { CommandDefinition } from '../types.js';
-+import { squashCheckpointCommits } from '../lib/squash.js';
- 
- const { prompt } = enquirer;
- 
-@@ -170,11 +171,18 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
-       });
-     }
- 
-+    // Squash checkpoint commits into staged changes before evaluating state
-+    const squashed = squashCheckpointCommits(
-+      git,
-+      task.baseCommit,
-+      task.worktreePath
-+    );
-+
-     // Check for changes
-     const fileChanges = git.uncommittedChanges({
-       worktreePath: task.worktreePath,
-     });
--    const hasChanges = fileChanges.length > 0;
-+    const hasChanges = squashed || fileChanges.length > 0;
-     result.hasChanges = hasChanges;
- 
-     if (!hasChanges) {
-diff --git a/packages/cli/src/commands/rebase.ts b/packages/cli/src/commands/rebase.ts
-index dee827e..604a614 100644
---- a/packages/cli/src/commands/rebase.ts
-+++ b/packages/cli/src/commands/rebase.ts
-@@ -26,6 +26,7 @@ import {
- } from '../lib/context.js';
- import type { CommandDefinition } from '../types.js';
- import { parseAgentString } from '../utils/agent-parser.js';
-+import { squashCheckpointCommits } from '../lib/squash.js';
- import {
-   truncateConflictContext,
-   getBlameContext,
-@@ -461,10 +462,19 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
-     const currentBranch = git.getCurrentBranch();
-     jsonOutput.currentBranch = currentBranch;
- 
-+    // Squash checkpoint commits into staged changes before evaluating state
-+    const squashed = squashCheckpointCommits(
-+      git,
-+      task.baseCommit,
-+      task.worktreePath
-+    );
-+
-     // Check if worktree has changes to commit
--    const hasWorktreeChanges = git.hasUncommittedChanges({
--      worktreePath: task.worktreePath,
--    });
-+    const hasWorktreeChanges =
-+      squashed ||
-+      git.hasUncommittedChanges({
-+        worktreePath: task.worktreePath,
-+      });
- 
-     jsonOutput.hasWorktreeChanges = hasWorktreeChanges;
- 
-diff --git a/packages/cli/src/lib/squash.ts b/packages/cli/src/lib/squash.ts
-new file mode 100644
-index 0000000..c79063c
---- /dev/null
-+++ b/packages/cli/src/lib/squash.ts
-@@ -0,0 +1,23 @@
-+import type { Git } from 'rover-core';
-+
-+/**
-+ * Squash all checkpoint commits made since `baseCommit` into a single set of
-+ * staged changes. After this call the working tree is unchanged but all
-+ * checkpoint commits between `baseCommit` and HEAD are collapsed — the next
-+ * `git commit` will produce a single clean commit.
-+ *
-+ * @returns true if a squash was performed, false if it was a no-op.
-+ */
-+export function squashCheckpointCommits(
-+  git: Git,
-+  baseCommit: string | undefined,
-+  worktreePath: string
-+): boolean {
-+  if (!baseCommit) return false;
-+
-+  const head = git.getCommitHash('HEAD', { worktreePath });
-+  if (!head || head === baseCommit) return false;
-+
-+  git.resetSoft(baseCommit, { worktreePath });
-+  return true;
-+}
-diff --git a/packages/cli/src/lib/workflows/swe-tdd.yml b/packages/cli/src/lib/workflows/swe-tdd.yml
-index cbb5614..87466e8 100644
---- a/packages/cli/src/lib/workflows/swe-tdd.yml
-+++ b/packages/cli/src/lib/workflows/swe-tdd.yml
-@@ -351,7 +351,7 @@ steps:
-   - id: test_fix_loop
-     type: loop
-     name: 'Test & Fix Loop'
--    until: steps.run_tests.outputs.exit_code == 0
-+    until: steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0
-     maxIterations: 5
-     steps:
-       - id: run_tests
-@@ -404,10 +404,26 @@ steps:
-             description: 'Description of fixes applied'
-             type: string
- 
-+      - id: checkpoint
-+        type: command
-+        name: 'Checkpoint & Circle Detection'
-+        if: steps.run_tests.outputs.exit_code != 0
-+        command: |
-+          git add -A
-+          git diff --cached --quiet && exit 0
-+          git commit -m "[checkpoint] test-fix"
-+          TREE_HASH=$(git rev-parse HEAD^{tree})
-+          HASH_FILE="/output/.tree_hashes"
-+          if [ -f "$HASH_FILE" ] && grep -qF "$TREE_HASH" "$HASH_FILE"; then
-+            echo "Circle detected: tree $TREE_HASH already seen"
-+            exit 1
-+          fi
-+          echo "$TREE_HASH" >> "$HASH_FILE"
-+
-   - id: review_loop
-     type: loop
-     name: 'Review & Fix Loop'
--    until: steps.code_review.outputs.issues_found != true
-+    until: steps.code_review.outputs.issues_found != true || steps.review_checkpoint.outputs.exit_code != 0
-     maxIterations: 5
-     steps:
-       - id: git_diff
-@@ -455,59 +471,41 @@ steps:
-           ### Phase 2: For complex tasks, perform the review
- 
-           Use the git diff above as the primary input for your review. It shows exactly what was changed.
-+          Be thorough — flag everything wrong in the changed code. But stay in scope: only review lines and files that were changed for this task. Do not flag issues in pre-existing code that the task did not touch.
- 
-           1. Review every hunk in the diff for correctness, quality, and adherence to existing patterns
-           2. Compare the changes against the Plan — verify task requirements are satisfied
-           3. Check that tests are comprehensive and meaningful
--          4. Check security concerns
--          5. **Verify the code has no obvious errors**: check for unused variables, missing imports, type errors, syntax errors, and other regressions visible in the diff
--          6. If previous test results are present above, check whether the failures were addressed
--          7. Read specific source files only when you need more context around the changed lines
-+          4. Check security concerns in the changed code
-+          5. **Verify the code has no obvious errors**: unused variables, missing imports, type errors, syntax errors, dead code, and other regressions visible in the diff
-+          6. Check naming, formatting, comments, and code style in the changed lines — flag anything that doesn't match the project's conventions
-+          7. If previous test results are present above, check whether the failures were addressed
-+          8. Read specific source files only when you need more context around the changed lines
-+          9. **Stay in scope**: do not suggest changes to code outside the diff. Do not add features, refactor surrounding code, or improve files the task did not modify
- 
-           ### Phase 3: Output
- 
--          - If the implementation is satisfactory: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
-+          - If the implementation is satisfactory with no issues of any kind: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
-           - Do not fabricate content; if information is unavailable or irrelevant, skip it
-           - Only report issues you can confirm from the diff or by reading the actual source files
--          - If issues are found: output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
-+          - If ANY issues are found in the changed code — including nits and style issues — output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
- 
-           <template>
-           # Code Review
- 
-           ## Overall Assessment
- 
--          Brief summary of the implementation quality and major concerns
--
--          ## Plan Adherence Issues
-+          Brief summary of the implementation quality
- 
--          ### Deviations from plan.md:
--
--          - [Deviation]: [Why it matters and what to do]
--
--          ## Code Quality Issues
-+          ## Issues
- 
-           ### [File path/section]
- 
-           **Issue**: [Concise description of the problem]
--          **Severity**: Must Fix | Nice to have
--          **Recommendation**: [Actionable action]
-+          **Fix**: [Exact actionable fix — what to change and where]
-           **Code location**: [Line numbers or function names]
- 
--          ## Build & Compile Issues
--
--          - List any compile errors, unused variables, missing imports, or type errors found in the diff
--
--          ## Test Coverage
--
--          - Assessment of test quality and coverage gaps
--
--          ## Security Concerns
--
--          ### [Specific security issue]
--
--          **Risk**: [Concise Risk description]
--          **Severity**: Must Fix | Nice to have
--          **Recommendation**: [Actionable action]
-+          (Repeat for every issue found in the changed code. Include everything: bugs, logic errors, compile errors, unused variables, missing imports, naming, style, nits, test gaps, security concerns, plan deviations. Do not flag issues in code the task did not change.)
-           </template>
-         outputs:
-           - name: skipped
-@@ -555,13 +553,16 @@ steps:
- 
-           ### Instructions
- 
-+          Fix every issue in the review — bugs, nits, style, naming, everything. But stay in scope: only modify code that was changed for this task. Do not refactor, improve, or touch code outside the scope of the review.
-+
-           1. Read all issues in Review
--          2. Fix issues systematically by priority: Must Fix → Nice to have
-+          2. Fix every single one. Do not skip any issue regardless of size
-           3. Follow review recommendations exactly — do not invent alternative solutions
--          4. Ensure fixes preserve existing functionality and do not introduce regressions
--          5. Reference Context for consistency
--          6. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
--          7. Do not leave unused variables, missing imports, or dead code — clean up after yourself
-+          4. Only modify files and lines relevant to the review issues — do not make unrelated changes
-+          5. Ensure fixes preserve existing functionality and do not introduce regressions
-+          6. Reference Context for consistency
-+          7. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
-+          8. Do not leave unused variables, missing imports, or dead code — clean up after yourself
-         outputs:
-           - name: fixes_applied
-             description: 'Whether fixes were applied (true/false)'
-@@ -621,6 +622,22 @@ steps:
-             description: 'Description of regression fixes applied'
-             type: string
- 
-+      - id: review_checkpoint
-+        type: command
-+        name: 'Review Checkpoint & Circle Detection'
-+        if: steps.code_review.outputs.issues_found == true
-+        command: |
-+          git add -A
-+          git diff --cached --quiet && exit 0
-+          git commit -m "[checkpoint] review-fix"
-+          TREE_HASH=$(git rev-parse HEAD^{tree})
-+          HASH_FILE="/output/.tree_hashes"
-+          if [ -f "$HASH_FILE" ] && grep -qF "$TREE_HASH" "$HASH_FILE"; then
-+            echo "Circle detected: tree $TREE_HASH already seen"
-+            exit 1
-+          fi
-+          echo "$TREE_HASH" >> "$HASH_FILE"
-+
-   - id: summary
-     type: agent
-     name: 'Summary'
-diff --git a/packages/core/src/files/workflow.ts b/packages/core/src/files/workflow.ts
-index ca80137..ffa7e88 100644
---- a/packages/core/src/files/workflow.ts
-+++ b/packages/core/src/files/workflow.ts
-@@ -647,13 +647,27 @@ export class WorkflowManager {
-   }
- 
-   /**
--   * Evaluate a simple condition string for step `if` fields.
--   * Supports: steps.<id>.outputs.<name> == <value>
--   *           steps.<id>.outputs.<name> != <value>
-+   * Evaluate a condition string for step `if` fields.
-+   * Supports OR (`||`) to join multiple clauses.
-+   * Each clause: steps.<id>.outputs.<name> == <value>
-+   *              steps.<id>.outputs.<name> != <value>
-    */
-   private evaluateSimpleCondition(
-     condition: string,
-     stepsOutput: Map<string, Map<string, string>>
-+  ): boolean {
-+    const parts = condition.split(/\s*\|\|\s*/);
-+    return parts.some(part =>
-+      this.evaluateSingleCondition(part.trim(), stepsOutput)
-+    );
-+  }
-+
-+  /**
-+   * Evaluate a single condition clause (no OR).
-+   */
-+  private evaluateSingleCondition(
-+    condition: string,
-+    stepsOutput: Map<string, Map<string, string>>
-   ): boolean {
-     const trimmed = condition.trim();
-     const match = trimmed.match(
-diff --git a/packages/core/src/git.ts b/packages/core/src/git.ts
-index 61c0aaa..b892d27 100644
---- a/packages/core/src/git.ts
-+++ b/packages/core/src/git.ts
-@@ -904,6 +904,33 @@ export class Git {
-     }));
-   }
- 
-+  /**
-+   * Soft-reset the current branch to the given ref, keeping all changes staged.
-+   */
-+  resetSoft(ref: string, options: GitWorktreeOptions = {}): void {
-+    launchSync('git', ['reset', '--soft', ref], {
-+      cwd: options.worktreePath ?? this.cwd,
-+    });
-+  }
-+
-+  /**
-+   * Get the tree hash for a given ref (the hash of the directory tree, not the commit).
-+   * Useful for detecting identical working-tree states across different commits.
-+   */
-+  getTreeHash(ref: string = 'HEAD', options: GitWorktreeOptions = {}): string {
-+    try {
-+      return (
-+        launchSync('git', ['rev-parse', `${ref}^{tree}`], {
-+          cwd: options.worktreePath ?? this.cwd,
-+        })
-+          .stdout?.toString()
-+          .trim() || ''
-+      );
-+    } catch {
-+      return '';
-+    }
-+  }
-+
-   /**
-    * Count file lines efficiently.
-    * @see https://stackoverflow.com/a/41439945
-diff --git a/packages/schemas/src/workflow/schema.ts b/packages/schemas/src/workflow/schema.ts
-index 353c115..9c057c8 100644
---- a/packages/schemas/src/workflow/schema.ts
-+++ b/packages/schemas/src/workflow/schema.ts
-@@ -91,11 +91,21 @@ export const WorkflowConfigSchema = z.object({
- });
- 
- /**
-- * Regex for validating condition expressions used in `if` and `until` fields.
-+ * Regex for validating a single condition expression.
-  * Format: steps.<id>.outputs.<name> == <value>
-  *         steps.<id>.outputs.<name> != <value>
-  */
--const CONDITION_REGEX = /^steps\.[\w-]+\.outputs\.[\w-]+\s*(==|!=)\s*.+$/;
-+const SINGLE_CONDITION_REGEX =
-+  /^steps\.[\w-]+\.outputs\.[\w-]+\s*(==|!=)\s*.+$/;
-+
-+/**
-+ * Validate a condition string that may contain multiple clauses joined by `||`.
-+ * Each clause must individually match the single-condition format.
-+ */
-+function isValidCondition(condition: string): boolean {
-+  const parts = condition.split(/\s*\|\|\s*/);
-+  return parts.every(part => SINGLE_CONDITION_REGEX.test(part.trim()));
-+}
- 
- const WorkflowBaseStepSchema = z.object({
-   /** Unique step identifier */
-@@ -105,10 +115,10 @@ const WorkflowBaseStepSchema = z.object({
-   /** Optional condition; step is skipped when it evaluates to false */
-   if: z
-     .string()
--    .regex(
--      CONDITION_REGEX,
--      'Condition must match format: steps.<id>.outputs.<name> == <value>'
--    )
-+    .refine(isValidCondition, {
-+      message:
-+        'Condition must match format: steps.<id>.outputs.<name> == <value> (clauses may be joined with ||)',
-+    })
-     .optional(),
- });
- 
-@@ -165,12 +175,10 @@ export const WorkflowLoopStepSchema: z.ZodType<any> =
-     /** Sub-steps to repeat each iteration */
-     steps: z.lazy(() => z.array(WorkflowStepSchema)),
-     /** Condition to check after each sub-step; loop exits when true */
--    until: z
--      .string()
--      .regex(
--        CONDITION_REGEX,
--        'Condition must match format: steps.<id>.outputs.<name> == <value>'
--      ),
-+    until: z.string().refine(isValidCondition, {
-+      message:
-+        'Condition must match format: steps.<id>.outputs.<name> == <value> (clauses may be joined with ||)',
-+    }),
-     /** Maximum iterations before giving up (default: 3) */
-     maxIterations: z.number().int().positive().optional(),
-   });
--- 
-2.53.0
-
-From ebe27567fcce300b0f19626a742eb849178762dc Mon Sep 17 00:00:00 2001
-From: Ben U <dataforxyz@gmail.com>
-Date: Fri, 27 Feb 2026 12:33:57 -0600
-Subject: [PATCH] feat: add build step and scope review to changed code in
- swe-tdd workflow
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
-
-- Add build_command output to context analysis (auto-detected from
-  project: go build, pnpm build, cargo build, etc. or "none")
-- Add build step before tests in both test_fix_loop and review_loop
-  so compile errors are caught early with clear diagnostics
-- Fix_code agent now gets build output alongside test output
-- Review prompt: flag everything wrong in changed code (nits, style,
-  naming) but stay in scope — don't touch pre-existing code
-- Apply fixes prompt: fix every issue, no exceptions, but only modify
-  files and lines relevant to the review
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
----
- packages/cli/src/lib/workflows/swe-tdd.yml | 68 +++++++++++++++++-----
- 1 file changed, 55 insertions(+), 13 deletions(-)
-
-diff --git a/packages/cli/src/lib/workflows/swe-tdd.yml b/packages/cli/src/lib/workflows/swe-tdd.yml
-index 87466e8..4508128 100644
---- a/packages/cli/src/lib/workflows/swe-tdd.yml
-+++ b/packages/cli/src/lib/workflows/swe-tdd.yml
-@@ -90,6 +90,7 @@ steps:
-       ## Test Infrastructure
- 
-       - Test framework: (e.g. vitest, jest, pytest, go test)
-+      - Build command: (the command to compile/build the project, if applicable. e.g. "go build ./...", "pnpm build", "cargo build", "make build". Write "none" if the language is interpreted or the test command handles compilation implicitly)
-       - Test command: (the exact command to run the relevant tests for this project)
-       - Existing test files: list of relevant test files
-       - Test patterns: describe the testing conventions used in this project
-@@ -112,11 +113,14 @@ steps:
- 
-       </template>
- 
--      IMPORTANT: After writing context.md, you MUST extract the task complexity value and the test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files.
-+      IMPORTANT: After writing context.md, you MUST extract the task complexity value, build command, and test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
-     outputs:
-       - name: complexity
-         description: 'Task complexity: either "simple" or "complex"'
-         type: string
-+      - name: build_command
-+        description: 'The command to build/compile the project, or "none" if not needed'
-+        type: string
-       - name: test_command
-         description: 'The command to run tests for this project'
-         type: string
-@@ -354,6 +358,12 @@ steps:
-     until: steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0
-     maxIterations: 5
-     steps:
-+      - id: build
-+        type: command
-+        name: 'Build'
-+        if: steps.context.outputs.build_command != none
-+        command: '{{steps.context.outputs.build_command}}'
-+
-       - id: run_tests
-         type: command
-         name: 'Run Tests'
-@@ -361,10 +371,10 @@ steps:
- 
-       - id: fix_code
-         type: agent
--        name: 'Fix Failing Tests'
-+        name: 'Fix Build or Test Failures'
-         if: steps.run_tests.outputs.exit_code != 0
-         prompt: |
--          Tests are failing. Your job is to fix the implementation so all tests pass.
-+          The build or tests are failing. Your job is to fix the implementation so it compiles and all tests pass.
- 
-           ---
- 
-@@ -373,6 +383,18 @@ steps:
-           Description:
-           {{inputs.description}}
- 
-+          Build output (stdout):
-+          ```
-+          {{steps.build.outputs.stdout}}
-+          ```
-+
-+          Build errors (stderr):
-+          ```
-+          {{steps.build.outputs.stderr}}
-+          ```
-+
-+          Build exit code: {{steps.build.outputs.exit_code}}
-+
-           Test command output (stdout):
-           ```
-           {{steps.run_tests.outputs.stdout}}
-@@ -393,12 +415,13 @@ steps:
- 
-           ### Instructions
- 
--          1. Analyze the test failures carefully
--          2. Identify the root cause of each failure
--          3. Fix the implementation code (NOT the tests) to make tests pass
--          4. Only modify tests if they have genuine bugs (not just because they're failing)
--          5. Make minimal, targeted fixes
--          6. After making fixes, verify your changes are consistent with the project patterns
-+          1. If the build failed, fix compile errors first — the code must build before tests can run
-+          2. Analyze the test failures carefully
-+          3. Identify the root cause of each failure
-+          4. Fix the implementation code (NOT the tests) to make tests pass
-+          5. Only modify tests if they have genuine bugs (not just because they're failing)
-+          6. Make minimal, targeted fixes
-+          7. After making fixes, verify your changes are consistent with the project patterns
-         outputs:
-           - name: fixes_description
-             description: 'Description of fixes applied'
-@@ -407,7 +430,7 @@ steps:
-       - id: checkpoint
-         type: command
-         name: 'Checkpoint & Circle Detection'
--        if: steps.run_tests.outputs.exit_code != 0
-+        if: steps.build.outputs.exit_code != 0 || steps.run_tests.outputs.exit_code != 0
-         command: |
-           git add -A
-           git diff --cached --quiet && exit 0
-@@ -572,6 +595,12 @@ steps:
-             type: file
-             filename: review_fixes.md
- 
-+      - id: build_after_review
-+        type: command
-+        name: 'Build After Review'
-+        if: steps.context.outputs.build_command != none
-+        command: '{{steps.context.outputs.build_command}}'
-+
-       - id: run_tests_after_review
-         type: command
-         name: 'Run Tests After Review'
-@@ -583,7 +612,7 @@ steps:
-         name: 'Fix Review Regressions'
-         if: steps.run_tests_after_review.outputs.exit_code != 0
-         prompt: |
--          Review fixes broke the build. Your job is to fix the regressions while preserving the review improvements.
-+          Review fixes broke the build or tests. Your job is to fix the regressions while preserving the review improvements.
- 
-           ---
- 
-@@ -592,6 +621,18 @@ steps:
-           Description:
-           {{inputs.description}}
- 
-+          Build output (stdout):
-+          ```
-+          {{steps.build_after_review.outputs.stdout}}
-+          ```
-+
-+          Build errors (stderr):
-+          ```
-+          {{steps.build_after_review.outputs.stderr}}
-+          ```
-+
-+          Build exit code: {{steps.build_after_review.outputs.exit_code}}
-+
-           Test command output (stdout):
-           ```
-           {{steps.run_tests_after_review.outputs.stdout}}
-@@ -612,8 +653,9 @@ steps:
- 
-           ### Instructions
- 
--          1. Analyze the test/build failures carefully
--          2. Identify which review fixes caused the regressions
-+          1. If the build failed, fix compile errors first — the code must build before tests can run
-+          2. Analyze the test/build failures carefully
-+          3. Identify which review fixes caused the regressions
-           3. Fix the code to make tests pass while keeping valid review improvements
-           4. Do NOT revert review fixes wholesale — preserve improvements that aren't causing failures
-           5. Make minimal, targeted fixes
--- 
-2.53.0
-
-From 14b69679cc76c343bc44a2084be2ac359621578d Mon Sep 17 00:00:00 2001
-From: Ben U <dataforxyz@gmail.com>
-Date: Fri, 27 Feb 2026 12:55:55 -0600
-Subject: [PATCH] refactor: rename squashCheckpointCommits to
- collapseTaskCommits and remove getTreeHash
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
-
-- Rename squashCheckpointCommits → collapseTaskCommits to reflect that all task
-  commits (not just checkpoints) are collapsed via git reset --soft
-- Update JSDoc to clarify idempotency and full-range collapse semantics
-- Remove unused getTreeHash method from Git class
-- Fix condition.ts warning message: "condition" → "clause"
-
-Co-Authored-By: Claude <noreply@anthropic.com>
----
- packages/agent/src/lib/condition.ts |  2 +-
- packages/cli/src/commands/merge.ts  |  6 +++---
- packages/cli/src/commands/push.ts   |  6 +++---
- packages/cli/src/commands/rebase.ts |  6 +++---
- packages/cli/src/lib/squash.ts      | 19 +++++++++++++------
- packages/core/src/git.ts            | 18 ------------------
- 6 files changed, 23 insertions(+), 34 deletions(-)
-
-diff --git a/packages/agent/src/lib/condition.ts b/packages/agent/src/lib/condition.ts
-index aab26b6..fca57f7 100644
---- a/packages/agent/src/lib/condition.ts
-+++ b/packages/agent/src/lib/condition.ts
-@@ -49,7 +49,7 @@ function evaluateSingleCondition(
-   );
-   if (!match) {
-     console.warn(
--      `Warning: condition "${condition}" does not match expected format "steps.<id>.outputs.<name> == <value>"`
-+      `Warning: clause "${condition}" does not match expected format "steps.<id>.outputs.<name> == <value>"`
-     );
-     return false;
-   }
-diff --git a/packages/cli/src/commands/merge.ts b/packages/cli/src/commands/merge.ts
-index 339634d..806370e 100644
---- a/packages/cli/src/commands/merge.ts
-+++ b/packages/cli/src/commands/merge.ts
-@@ -38,7 +38,7 @@ import {
-   requireProjectContext,
- } from '../lib/context.js';
- import type { CommandDefinition } from '../types.js';
--import { squashCheckpointCommits } from '../lib/squash.js';
-+import { collapseTaskCommits } from '../lib/squash.js';
- 
- const { prompt } = enquirer;
- 
-@@ -488,8 +488,8 @@ const mergeCommand = async (taskId: string, options: MergeOptions = {}) => {
-       return;
-     }
- 
--    // Squash checkpoint commits into staged changes before evaluating state
--    const squashed = squashCheckpointCommits(
-+    // Collapse all task commits into staged changes before evaluating state
-+    const squashed = collapseTaskCommits(
-       git,
-       task.baseCommit,
-       task.worktreePath
-diff --git a/packages/cli/src/commands/push.ts b/packages/cli/src/commands/push.ts
-index e1ff9ed..816dc73 100644
---- a/packages/cli/src/commands/push.ts
-+++ b/packages/cli/src/commands/push.ts
-@@ -21,7 +21,7 @@ import { showRoverChat, TIP_TITLES } from '../utils/display.js';
- import { statusColor } from '../utils/task-status.js';
- import { executeHooks } from '../lib/hooks.js';
- import type { CommandDefinition } from '../types.js';
--import { squashCheckpointCommits } from '../lib/squash.js';
-+import { collapseTaskCommits } from '../lib/squash.js';
- 
- const { prompt } = enquirer;
- 
-@@ -171,8 +171,8 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
-       });
-     }
- 
--    // Squash checkpoint commits into staged changes before evaluating state
--    const squashed = squashCheckpointCommits(
-+    // Collapse all task commits into staged changes before evaluating state
-+    const squashed = collapseTaskCommits(
-       git,
-       task.baseCommit,
-       task.worktreePath
-diff --git a/packages/cli/src/commands/rebase.ts b/packages/cli/src/commands/rebase.ts
-index 604a614..7e60a3d 100644
---- a/packages/cli/src/commands/rebase.ts
-+++ b/packages/cli/src/commands/rebase.ts
-@@ -26,7 +26,7 @@ import {
- } from '../lib/context.js';
- import type { CommandDefinition } from '../types.js';
- import { parseAgentString } from '../utils/agent-parser.js';
--import { squashCheckpointCommits } from '../lib/squash.js';
-+import { collapseTaskCommits } from '../lib/squash.js';
- import {
-   truncateConflictContext,
-   getBlameContext,
-@@ -462,8 +462,8 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
-     const currentBranch = git.getCurrentBranch();
-     jsonOutput.currentBranch = currentBranch;
- 
--    // Squash checkpoint commits into staged changes before evaluating state
--    const squashed = squashCheckpointCommits(
-+    // Collapse all task commits into staged changes before evaluating state
-+    const squashed = collapseTaskCommits(
-       git,
-       task.baseCommit,
-       task.worktreePath
-diff --git a/packages/cli/src/lib/squash.ts b/packages/cli/src/lib/squash.ts
-index c79063c..e887a1c 100644
---- a/packages/cli/src/lib/squash.ts
-+++ b/packages/cli/src/lib/squash.ts
-@@ -1,14 +1,21 @@
- import type { Git } from 'rover-core';
- 
- /**
-- * Squash all checkpoint commits made since `baseCommit` into a single set of
-- * staged changes. After this call the working tree is unchanged but all
-- * checkpoint commits between `baseCommit` and HEAD are collapsed — the next
-- * `git commit` will produce a single clean commit.
-+ * Collapse **all** commits made since `baseCommit` into a single set of staged
-+ * changes via `git reset --soft`. This includes both checkpoint commits and any
-+ * regular commits in the range — rover task worktrees are isolated so every
-+ * commit since the base belongs to the current task.
-  *
-- * @returns true if a squash was performed, false if it was a no-op.
-+ * After this call the working tree is unchanged, HEAD points to `baseCommit`,
-+ * and the cumulative diff is staged. The next `git commit` produces one clean
-+ * commit.
-+ *
-+ * Idempotent: if HEAD already equals `baseCommit` (e.g. after a prior squash)
-+ * this is a no-op and returns false.
-+ *
-+ * @returns true if commits were collapsed, false if it was a no-op.
-  */
--export function squashCheckpointCommits(
-+export function collapseTaskCommits(
-   git: Git,
-   baseCommit: string | undefined,
-   worktreePath: string
-diff --git a/packages/core/src/git.ts b/packages/core/src/git.ts
-index b892d27..41cdbef 100644
---- a/packages/core/src/git.ts
-+++ b/packages/core/src/git.ts
-@@ -913,24 +913,6 @@ export class Git {
-     });
-   }
- 
--  /**
--   * Get the tree hash for a given ref (the hash of the directory tree, not the commit).
--   * Useful for detecting identical working-tree states across different commits.
--   */
--  getTreeHash(ref: string = 'HEAD', options: GitWorktreeOptions = {}): string {
--    try {
--      return (
--        launchSync('git', ['rev-parse', `${ref}^{tree}`], {
--          cwd: options.worktreePath ?? this.cwd,
--        })
--          .stdout?.toString()
--          .trim() || ''
--      );
--    } catch {
--      return '';
--    }
--  }
--
-   /**
-    * Count file lines efficiently.
-    * @see https://stackoverflow.com/a/41439945
 -- 
 2.53.0
 

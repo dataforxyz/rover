@@ -1,19 +1,13 @@
-From 3c565e5174a9f30f1ce07d090963ecfdaf0bd845 Mon Sep 17 00:00:00 2001
+From 9831b5dae28afe8e6c3a73a83ba54a5422c83b84 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Thu, 26 Feb 2026 19:06:34 -0600
-Subject: [PATCH] feat: show context entries in inspect command
+Subject: [PATCH 6/8] feat: show context entries in inspect command
 
 The inspect command now displays context entries (e.g., --context gitlab:issue/9)
 in both human-readable and JSON output. Also populates task.source from context
 metadata for feature parity with the deprecated --from-github flag.
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
----
- packages/cli/src/commands/inspect.ts        | 19 +++++++++++++++++++
- packages/cli/src/commands/task.ts           | 16 ++++++++++++++++
- packages/cli/src/output-types.ts            |  5 +++++
- packages/core/src/files/task-description.ts |  8 ++++++++
- 4 files changed, 48 insertions(+)
 
 diff --git a/packages/cli/src/commands/inspect.ts b/packages/cli/src/commands/inspect.ts
 index e351306..78cb0a1 100644
@@ -53,7 +47,7 @@ index e351306..78cb0a1 100644
        showTitle('Workspace');
  
 diff --git a/packages/cli/src/commands/task.ts b/packages/cli/src/commands/task.ts
-index 793bf98..c70951d 100644
+index a3f4aab..f03b541 100644
 --- a/packages/cli/src/commands/task.ts
 +++ b/packages/cli/src/commands/task.ts
 @@ -463,6 +463,22 @@ const createTaskForAgent = async (

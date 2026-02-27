@@ -1,7 +1,8 @@
-From 2be4dc0359ce0e249b642be57ffdf7fa361d1ed8 Mon Sep 17 00:00:00 2001
+From e5f375c45c4d5ced370055a058bef48c61900719 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Wed, 25 Feb 2026 21:12:28 -0600
-Subject: [PATCH] feat: add rover rebase command with AI conflict resolution
+Subject: [PATCH 1/8] feat: add rover rebase command with AI conflict
+ resolution
 
 Add rover rebase command as counterpart to merge, with:
 - AI-powered conflict resolution via --agent flag
@@ -9,27 +10,6 @@ Add rover rebase command as counterpart to merge, with:
 - Context-optimized prompts using git blame and region extraction
 - Output sanitization (strip markdown fences, reject unresolved conflicts)
 - Truncation prevention for AI-resolved files
----
- packages/cli/src/commands/merge.ts            | 275 +++++--
- packages/cli/src/commands/rebase.ts           | 758 ++++++++++++++++++
- .../lib/__tests__/context-optimizer.test.ts   | 425 ++++++++++
- packages/cli/src/lib/agents/claude.ts         |  29 +-
- packages/cli/src/lib/agents/codex.ts          |  29 +-
- packages/cli/src/lib/agents/cursor.ts         |  29 +-
- packages/cli/src/lib/agents/gemini.ts         |  29 +-
- packages/cli/src/lib/agents/index.ts          |  20 +-
- packages/cli/src/lib/agents/qwen.ts           |  29 +-
- packages/cli/src/lib/context-optimizer.ts     | 216 +++++
- packages/cli/src/lib/prompts/index.ts         |  17 +
- .../resolve-merge-conflicts-regions.md        |  32 +
- .../lib/prompts/resolve-merge-conflicts.md    |   2 +-
- packages/cli/src/program.ts                   |  54 +-
- packages/core/src/git.ts                      | 111 ++-
- 15 files changed, 1969 insertions(+), 86 deletions(-)
- create mode 100644 packages/cli/src/commands/rebase.ts
- create mode 100644 packages/cli/src/lib/__tests__/context-optimizer.test.ts
- create mode 100644 packages/cli/src/lib/context-optimizer.ts
- create mode 100644 packages/cli/src/lib/prompts/resolve-merge-conflicts-regions.md
 
 diff --git a/packages/cli/src/commands/merge.ts b/packages/cli/src/commands/merge.ts
 index 569aca5..f53be99 100644
