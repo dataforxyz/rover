@@ -1,5 +1,5 @@
 import colors from 'ansi-colors';
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface CheckpointCompletedStep {
@@ -134,6 +134,21 @@ export function saveCheckpoint(
     console.error(
       colors.yellow(
         `Warning: Failed to save checkpoint: ${err instanceof Error ? err.message : String(err)}`
+      )
+    );
+  }
+}
+
+export function clearCheckpointFile(outputDir: string | undefined): void {
+  if (!outputDir) return;
+  try {
+    const checkpointPath = join(outputDir, 'checkpoint.json');
+    if (!existsSync(checkpointPath)) return;
+    rmSync(checkpointPath, { force: true });
+  } catch (err) {
+    console.error(
+      colors.yellow(
+        `Warning: Failed to clear checkpoint: ${err instanceof Error ? err.message : String(err)}`
       )
     );
   }

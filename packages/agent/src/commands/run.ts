@@ -25,6 +25,7 @@ import { ACPRunner } from '../lib/acp-runner.js';
 import { createAgent } from '../lib/agents/index.js';
 import { executeStep, shouldSkipStep } from '../lib/step-executor.js';
 import {
+  clearCheckpointFile,
   createCheckpointStore,
   loadCheckpoint,
   saveCheckpoint,
@@ -703,6 +704,7 @@ export const runCommand = async (
           });
         } else {
           output.success = true;
+          clearCheckpointFile(options.output);
           statusManager?.complete('Workflow completed successfully');
           logger?.info('workflow_complete', 'Workflow completed successfully', {
             taskId: options.taskId,

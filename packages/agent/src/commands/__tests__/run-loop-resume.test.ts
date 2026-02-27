@@ -96,6 +96,56 @@ steps:
         type: string
 `;
 
+const NESTED_LOOP_WORKFLOW_YAML = `
+version: "1.0"
+name: test-nested-loop-resume
+description: Nested loop resume integration workflow
+defaults:
+  tool: codex
+steps:
+  - id: step1
+    type: agent
+    name: Step 1
+    prompt: "Initial step"
+    outputs:
+      - name: result1
+        description: Initial result
+        type: string
+  - id: outer_loop
+    type: loop
+    name: Outer Loop
+    until: steps.inner_cmd.outputs.exit_code == 0
+    maxIterations: 2
+    steps:
+      - id: inner_loop
+        type: loop
+        name: Inner Loop
+        until: steps.inner_cmd.outputs.exit_code == 0
+        maxIterations: 2
+        steps:
+          - id: inner_cmd
+            type: command
+            name: Inner Command
+            command: npm test
+          - id: inner_fix
+            type: agent
+            name: Inner Fix
+            if: steps.inner_cmd.outputs.exit_code != 0
+            prompt: "Fix inner failure: {{steps.inner_cmd.outputs.stderr}}"
+            outputs:
+              - name: patch
+                description: Patch result
+                type: string
+  - id: step3
+    type: agent
+    name: Step 3
+    prompt: "Finalize nested loop workflow"
+    outputs:
+      - name: result3
+        description: Final result
+        type: string
+`;
+
 function makeResult(
   id: string,
   success: boolean,
@@ -214,8 +264,86 @@ describe('run command: loop checkpoint resume integration', () => {
     const status = JSON.parse(readFileSync(statusPath, 'utf8'));
     expect(status.status).toBe('completed');
 
-    expect(existsSync(checkpointPath)).toBe(true);
-    const checkpoint = JSON.parse(readFileSync(checkpointPath, 'utf8'));
-    expect(checkpoint.loopProgress).toBeUndefined();
+    expect(existsSync(checkpointPath)).toBe(false);
+  });
+
+  it('resumes a nested loop from saved inner loop progress and clears the checkpoint on success', async () => {
+    writeFileSync(workflowPath, NESTED_LOOP_WORKFLOW_YAML, 'utf8');
+
+    const checkpointPath = join(outputDir, 'checkpoint.json');
+    writeFileSync(
+      checkpointPath,
+      JSON.stringify(
+        {
+          completedSteps: [{ id: 'step1', outputs: { result1: 'hello' } }],
+          loopProgress: {
+            outer_loop: {
+              iteration: 1,
+              nextSubStepIndex: 0,
+              subStepOutputs: {},
+              skippedSubSteps: [],
+            },
+            inner_loop: {
+              iteration: 1,
+              nextSubStepIndex: 1,
+              subStepOutputs: {
+                inner_cmd: {
+                  exit_code: '1',
+                  stderr: 'inner failing tests',
+                },
+              },
+              skippedSubSteps: [],
+            },
+          },
+          failedStepId: 'inner_fix',
+          error: 'Rate limit exceeded',
+          isRetryable: true,
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    (Runner as unknown as Mock).mockImplementation((_, stepId: string) => {
+      const resultByStepId: Record<string, StepResult> = {
+        inner_fix: makeResult('inner_fix', true, { patch: 'nested applied' }),
+        step3: makeResult('step3', true, { result3: 'nested done' }),
+      };
+      const instance = {
+        stepId,
+        run: vi.fn().mockResolvedValue(resultByStepId[stepId]),
+      };
+      runnerInstances.push(instance);
+      return instance;
+    });
+
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 0,
+      stdout: 'PASS',
+      stderr: '',
+    } as never);
+
+    const promise = runCommand(workflowPath, {
+      input: [],
+      output: outputDir,
+      taskId: 'nested-loop-task-1',
+      statusFile: statusPath,
+      checkpoint: checkpointPath,
+    });
+
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(capturedExitCode).toBe(0);
+    expect(runnerInstances.map(instance => instance.stepId)).toEqual([
+      'inner_fix',
+      'step3',
+    ]);
+    expect(launch).toHaveBeenCalledTimes(1);
+
+    const status = JSON.parse(readFileSync(statusPath, 'utf8'));
+    expect(status.status).toBe('completed');
+    expect(existsSync(checkpointPath)).toBe(false);
   });
 });
