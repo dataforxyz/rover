@@ -25,6 +25,7 @@ import { getTelemetry } from '../lib/telemetry.js';
 import { formatTaskStatus, statusColor } from '../utils/task-status.js';
 import type { ListTasksOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
+import { RetryScheduler } from '../lib/retry-scheduler.js';
 
 /**
  * Format duration from start to now or completion
@@ -88,6 +89,8 @@ interface TaskRow {
   currentStep: string;
   duration: string;
   error?: string;
+  /** AI provider that caused the pause (for display purposes) */
+  provider?: string;
   /** Group ID for grouped rendering (project ID in global mode) */
   groupId?: string;
 }
@@ -118,7 +121,8 @@ const maybeIterationStatus = (
  */
 const buildTaskRow = (
   task: TaskDescriptionManager,
-  groupId?: string
+  groupId?: string,
+  retryScheduler?: RetryScheduler
 ): TaskRow => {
   const lastIteration = task.getLastIteration();
   const taskStatus = task.status;
@@ -140,6 +144,25 @@ const buildTaskRow = (
     agentDisplay = `${task.agent}:${task.agentModel}`;
   }
 
+  // Resolve provider for paused tasks
+  const pauseProvider =
+    taskStatus === 'PAUSED'
+      ? iterationStatus?.provider || task.agent || undefined
+      : undefined;
+
+  // For paused tasks, show retry time instead of step name
+  let currentStepDisplay = iterationStatus?.currentStep || '-';
+  if (taskStatus === 'PAUSED' && retryScheduler && pauseProvider) {
+    const retryTime = retryScheduler.getScheduledTime(pauseProvider);
+    if (retryTime) {
+      const timeStr = retryTime.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      currentStepDisplay = `retry at ${timeStr}`;
+    }
+  }
+
   return {
     id: task.id.toString(),
     title: task.title || 'Unknown Task',
@@ -147,9 +170,10 @@ const buildTaskRow = (
     workflow: task.workflowName || '-',
     status: taskStatus,
     progress: iterationStatus?.progress || 0,
-    currentStep: iterationStatus?.currentStep || '-',
+    currentStep: currentStepDisplay,
     duration: iterationStatus ? formatDuration(startedAt, endTime) : '-',
     error: task.error,
+    provider: pauseProvider,
     groupId,
   };
 };
@@ -174,6 +198,8 @@ const listCommand = async (
     verbose?: boolean;
     json?: boolean;
     watching?: boolean;
+    /** Internal: retry scheduler passed through from watch mode */
+    _retryScheduler?: RetryScheduler;
   } = {}
 ) => {
   if (options.json !== undefined) {
@@ -251,11 +277,29 @@ const listCommand = async (
     }
 
     // Update task status and detect completions for onComplete hooks
+    const retryScheduler = options._retryScheduler;
     for (const { task, project: projectData } of tasksWithProjects) {
       try {
         // Update status from iteration
         task.updateStatusFromIteration();
         const currentStatus = task.status;
+
+        // Auto-retry integration: register/unregister paused tasks
+        if (retryScheduler && projectData) {
+          if (currentStatus === 'PAUSED') {
+            const lastIteration = task.getLastIteration();
+            const iterStatus = maybeIterationStatus(lastIteration);
+            const provider = iterStatus?.provider || task.agent || 'unknown';
+            retryScheduler.registerPausedTask(provider, task.id, projectData);
+          } else {
+            // If task was paused but is no longer, unregister
+            const provider =
+              maybeIterationStatus(task.getLastIteration())?.provider ||
+              task.agent ||
+              'unknown';
+            retryScheduler.unregisterTask(provider, task.id);
+          }
+        }
 
         // Check if this is a terminal status that should trigger onComplete hooks
         const isTerminalStatus =
@@ -340,7 +384,8 @@ const listCommand = async (
 
     // Prepare table data
     const tableData: TaskRow[] = tasksWithProjects.map(
-      ({ task, project: projectData }) => buildTaskRow(task, projectData?.id)
+      ({ task, project: projectData }) =>
+        buildTaskRow(task, projectData?.id, retryScheduler)
     );
 
     // Define table columns
@@ -377,10 +422,10 @@ const listCommand = async (
       {
         header: 'Status',
         key: 'status',
-        width: 12,
-        format: (value: string) => {
+        width: 16,
+        format: (value: string, row: TaskRow) => {
           const colorFunc = statusColor(value);
-          return colorFunc(formatTaskStatus(value));
+          return colorFunc(formatTaskStatus(value, row.provider));
         },
       },
       {
@@ -440,6 +485,11 @@ const listCommand = async (
     }
 
     // Watch mode (configurable refresh interval, default 3 seconds)
+    if (options.watch && !options._retryScheduler) {
+      // Create a retry scheduler for auto-resuming paused tasks (only once, on the initial watch call)
+      options._retryScheduler = new RetryScheduler();
+    }
+
     if (options.watch) {
       // CLI argument takes precedence, then settings, then default (3s)
       let intervalSeconds: number;
@@ -477,10 +527,16 @@ const listCommand = async (
         )
       );
 
+      const watchScheduler = options._retryScheduler;
       const watchInterval = setInterval(async () => {
         // Clear screen and show updated status
         process.stdout.write('\x1b[2J\x1b[0f');
-        await listCommand({ ...options, watch: false, watching: true });
+        await listCommand({
+          ...options,
+          watch: false,
+          watching: true,
+          _retryScheduler: watchScheduler,
+        });
         console.log(
           colors.gray(
             `\n⏱️  Refreshing every ${intervalSeconds}s (Ctrl+C to exit)...`
@@ -491,6 +547,7 @@ const listCommand = async (
       // Handle Ctrl+C
       process.on('SIGINT', () => {
         clearInterval(watchInterval);
+        watchScheduler?.destroy();
         process.exit(0);
       });
     }

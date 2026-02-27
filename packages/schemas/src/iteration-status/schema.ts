@@ -40,4 +40,7 @@ export const IterationStatusSchema = z.object({
 
   /** Error information */
   error: z.string().optional(),
+
+  /** AI provider that caused the pause (e.g., 'claude', 'gemini') */
+  provider: z.string().optional(),
 });

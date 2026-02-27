@@ -1,18 +1,8 @@
 import colors from 'ansi-colors';
 import { join } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
-import { generateBranchName } from '../utils/branch-name.js';
-import {
-  UserSettingsManager,
-  IterationManager,
-  AI_AGENT,
-  Git,
-  ProjectConfigManager,
-  type ProjectManager,
-} from 'rover-core';
+import { existsSync } from 'node:fs';
 import { TaskNotFoundError } from 'rover-schemas';
 import { exitWithError, exitWithSuccess } from '../utils/exit.js';
-import { createSandbox } from '../lib/sandbox/index.js';
 import type { CLIJsonOutput } from '../types.js';
 import { getTelemetry } from '../lib/telemetry.js';
 import {
@@ -20,8 +10,7 @@ import {
   setJsonMode,
   requireProjectContext,
 } from '../lib/context.js';
-import yoctoSpinner from 'yocto-spinner';
-import { copyEnvironmentFiles } from '../utils/env-files.js';
+import { resumeTask } from '../lib/resume-helper.js';
 import type { CommandDefinition } from '../types.js';
 
 /**
@@ -81,7 +70,7 @@ const resumeCommand = async (
   }
 
   try {
-    // Load task using ProjectManager
+    // Load task to display info before resuming
     const task = project.getTask(numericTaskId);
     if (!task) {
       throw new TaskNotFoundError(numericTaskId);
@@ -102,7 +91,7 @@ const resumeCommand = async (
       return;
     }
 
-    // Find checkpoint.json in the last iteration's output directory
+    // Display resume info
     const iterationPath = join(
       task.iterationsPath(),
       task.iterations.toString()
@@ -118,55 +107,6 @@ const resumeCommand = async (
       );
     }
 
-    // Ensure worktree exists and is valid
-    let worktreePath = task.worktreePath;
-    let branchName = task.branchName;
-
-    if (!worktreePath || !branchName) {
-      worktreePath = project.getWorkspacePath(numericTaskId);
-      branchName = generateBranchName(numericTaskId);
-
-      const spinner = !json
-        ? yoctoSpinner({ text: 'Setting up workspace...' }).start()
-        : null;
-
-      try {
-        const git = new Git({ cwd: project.path });
-        git.createWorktree(worktreePath, branchName);
-
-        // Copy user .env development files
-        copyEnvironmentFiles(project.path, worktreePath);
-
-        // Configure sparse checkout to exclude files matching exclude patterns
-        const projectConfig = ProjectConfigManager.load(project.path);
-        if (
-          projectConfig.excludePatterns &&
-          projectConfig.excludePatterns.length > 0
-        ) {
-          git.setupSparseCheckout(worktreePath, projectConfig.excludePatterns);
-        }
-
-        // Update task with workspace information
-        task.setWorkspace(worktreePath, branchName);
-
-        if (spinner) spinner.success('Workspace setup complete');
-      } catch (error) {}
-    }
-
-    // Ensure iterations directory exists
-    mkdirSync(iterationPath, { recursive: true });
-
-    // Create initial iteration.json if it doesn't exist
-    const iterationJsonPath = join(iterationPath, 'iteration.json');
-    if (!existsSync(iterationJsonPath)) {
-      IterationManager.createInitial(
-        iterationPath,
-        task.id,
-        task.title,
-        task.description
-      );
-    }
-
     const resumedAt = new Date().toISOString();
 
     if (!isJsonMode()) {
@@ -174,8 +114,14 @@ const resumeCommand = async (
       console.log(colors.gray('├── ID: ') + colors.cyan(task.id.toString()));
       console.log(colors.gray('├── Title: ') + task.title);
       console.log(colors.gray('├── Status: ') + colors.yellow(task.status));
-      console.log(colors.gray('├── Workspace: ') + colors.cyan(worktreePath));
-      console.log(colors.gray('├── Branch: ') + colors.cyan(branchName));
+      console.log(
+        colors.gray('├── Workspace: ') +
+          colors.cyan(task.worktreePath || 'will be created')
+      );
+      console.log(
+        colors.gray('├── Branch: ') +
+          colors.cyan(task.branchName || 'will be created')
+      );
       console.log(
         colors.gray('├── Checkpoint: ') +
           (hasCheckpoint ? colors.green('found') : colors.yellow('not found'))
@@ -192,47 +138,29 @@ const resumeCommand = async (
       console.log('');
     }
 
-    // Mark task as in progress
-    task.markInProgress();
-
     // Track resume event (reuse restart telemetry)
     telemetry?.eventRestartTask();
 
-    // Check if user provided a custom agent image via environment variable
-    if (process.env.ROVER_AGENT_IMAGE) {
-      task.setAgentImage(process.env.ROVER_AGENT_IMAGE);
+    // Use the shared resume helper
+    const success = await resumeTask(project, numericTaskId);
+
+    if (!success) {
+      jsonOutput.error = `Failed to resume task ${taskId}`;
+      await exitWithError(jsonOutput, { telemetry });
+      return;
     }
 
-    // Start sandbox container for task execution
-    try {
-      const sandbox = await createSandbox(task, undefined, {
-        projectPath: project.path,
-        checkpointPath: hasCheckpoint ? checkpointPath : undefined,
-      });
-      const containerId = await sandbox.createAndStart();
-
-      // Update task metadata with new container ID
-      task.setContainerInfo(
-        containerId,
-        'running',
-        process.env.DOCKER_HOST
-          ? { dockerHost: process.env.DOCKER_HOST }
-          : undefined
-      );
-    } catch (error) {
-      // If sandbox execution fails, reset task back to PAUSED/FAILED status
-      task.markPaused('Resume failed: container could not start');
-      throw error;
-    }
+    // Reload task for updated status
+    const updatedTask = project.getTask(numericTaskId)!;
 
     // Output final JSON after all operations are complete
     jsonOutput = {
       ...jsonOutput,
       success: true,
-      taskId: task.id,
-      title: task.title,
-      description: task.description,
-      status: task.status,
+      taskId: updatedTask.id,
+      title: updatedTask.title,
+      description: updatedTask.description,
+      status: updatedTask.status,
       resumedAt,
     };
 
@@ -240,10 +168,10 @@ const resumeCommand = async (
       tips: [
         'Use ' + colors.cyan('rover list') + ' to check the list of tasks',
         'Use ' +
-          colors.cyan(`rover logs -f ${task.id}`) +
+          colors.cyan(`rover logs -f ${updatedTask.id}`) +
           ' to watch the task logs',
         'Use ' +
-          colors.cyan(`rover inspect ${task.id}`) +
+          colors.cyan(`rover inspect ${updatedTask.id}`) +
           ' to check the task status',
       ],
       telemetry,

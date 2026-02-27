@@ -368,6 +368,44 @@ describe('IterationStatusManager', () => {
       expect(loaded.currentStep).toBe('Running agent');
       expect(loaded.completedAt).toBeUndefined();
     });
+
+    it('should record provider when given', () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause-provider',
+        'Start'
+      );
+
+      status.pause('Step 1', 'Credit limit', 'claude');
+
+      expect(status.provider).toBe('claude');
+      expect(status.status).toBe('paused');
+    });
+
+    it('should persist provider to disk', () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause-provider-persist',
+        'Start'
+      );
+
+      status.pause('Step 1', 'Credit limit', 'gemini');
+
+      const loaded = IterationStatusManager.load(statusFilePath);
+      expect(loaded.provider).toBe('gemini');
+    });
+
+    it('should not set provider when not given (backward compat)', () => {
+      const status = IterationStatusManager.createInitial(
+        statusFilePath,
+        'task-pause-no-provider',
+        'Start'
+      );
+
+      status.pause('Step 1', 'Some error');
+
+      expect(status.provider).toBeUndefined();
+    });
   });
 
   describe('getter methods', () => {

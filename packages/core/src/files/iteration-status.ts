@@ -152,10 +152,13 @@ export class IterationStatusManager {
    * Mark status as paused (e.g., due to credit limit exhaustion)
    * Unlike fail(), this does NOT set completedAt since the workflow is not terminal.
    */
-  pause(currentStep: string, error: string): void {
+  pause(currentStep: string, error: string, provider?: string): void {
     this.data.status = 'paused';
     this.data.currentStep = currentStep;
     this.data.error = error;
+    if (provider) {
+      this.data.provider = provider;
+    }
     this.data.updatedAt = new Date().toISOString();
     this.save();
   }
@@ -206,6 +209,10 @@ export class IterationStatusManager {
 
   get error(): string | undefined {
     return this.data.error;
+  }
+
+  get provider(): string | undefined {
+    return this.data.provider;
   }
 
   /**
