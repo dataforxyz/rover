@@ -1,0 +1,286 @@
+From 5e839cf090ebae6375a0295087df88c0096464fc Mon Sep 17 00:00:00 2001
+From: Ben U <dataforxyz@gmail.com>
+Date: Thu, 26 Feb 2026 19:16:05 -0600
+Subject: [PATCH] fix: clamp progress bar fill to prevent negative repeat count
+
+When progress exceeds 100%, Math.round could produce a filled count
+greater than barLength, making barLength - filled negative and crashing
+String.repeat with RangeError: Invalid count value: -1.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ packages/cli/src/commands/list.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/packages/cli/src/commands/list.ts b/packages/cli/src/commands/list.ts
+index 41ed678..a3a6360 100644
+--- a/packages/cli/src/commands/list.ts
++++ b/packages/cli/src/commands/list.ts
+@@ -58,7 +58,7 @@ const formatProgress = (step?: string, progress?: number): string => {
+   if (step === undefined || progress === undefined) return colors.gray('─────');
+ 
+   const barLength = 8;
+-  const filled = Math.round((progress / 100) * barLength);
++  const filled = Math.max(0, Math.min(barLength, Math.round((progress / 100) * barLength)));
+   const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
+ 
+   if (step === 'FAILED') {
+-- 
+2.53.0
+
+From 1338edb5336ed2a3e99593be9b49064d33dc6622 Mon Sep 17 00:00:00 2001
+From: Ben U <dataforxyz@gmail.com>
+Date: Thu, 26 Feb 2026 19:43:33 -0600
+Subject: [PATCH] fix: use bash and source .profile in command runner for
+ proper PATH setup
+
+Switch command runner from sh to bash and source ~/.profile before
+executing commands so language-specific PATH additions (Go, Python, Rust)
+are available. Also use local agent image for dev builds and add go
+binary accessibility verification in sandbox setup.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../src/lib/__tests__/command-runner.test.ts  | 21 +++++++++++++------
+ packages/agent/src/lib/command-runner.ts      | 10 +++++++--
+ packages/cli/src/commands/list.ts             |  5 ++++-
+ .../cli/src/lib/sandbox/container-common.ts   |  6 +++---
+ packages/cli/src/lib/sandbox/languages/go.ts  | 10 ++++++++-
+ 5 files changed, 39 insertions(+), 13 deletions(-)
+
+diff --git a/packages/agent/src/lib/__tests__/command-runner.test.ts b/packages/agent/src/lib/__tests__/command-runner.test.ts
+index 3985c63..e1c47ce 100644
+--- a/packages/agent/src/lib/__tests__/command-runner.test.ts
++++ b/packages/agent/src/lib/__tests__/command-runner.test.ts
+@@ -215,8 +215,11 @@ describe('runCommandStep', () => {
+     await runCommandStep(step, new Map(), new Map(), 60);
+ 
+     expect(mockedLaunch).toHaveBeenCalledWith(
+-      'sh',
+-      ['-c', 'sleep 1'],
++      'bash',
++      [
++        '-c',
++        '[ -f "$HOME/.profile" ] && . "$HOME/.profile" 2>/dev/null; sleep 1',
++      ],
+       expect.objectContaining({ timeout: 60_000 })
+     );
+   });
+@@ -244,8 +247,11 @@ describe('runCommandStep', () => {
+ 
+     // Default is 300 seconds = 300_000 ms
+     expect(mockedLaunch).toHaveBeenCalledWith(
+-      'sh',
+-      ['-c', 'echo hi'],
++      'bash',
++      [
++        '-c',
++        '[ -f "$HOME/.profile" ] && . "$HOME/.profile" 2>/dev/null; echo hi',
++      ],
+       expect.objectContaining({ timeout: 300_000 })
+     );
+   });
+@@ -278,8 +284,11 @@ describe('runCommandStep', () => {
+ 
+     // Command runs through shell; args are shell-escaped
+     expect(mockedLaunch).toHaveBeenCalledWith(
+-      'sh',
+-      ['-c', "npm test '--filter' 'unit'"],
++      'bash',
++      [
++        '-c',
++        '[ -f "$HOME/.profile" ] && . "$HOME/.profile" 2>/dev/null; npm test \'--filter\' \'unit\'',
++      ],
+       expect.objectContaining({ reject: false })
+     );
+   });
+diff --git a/packages/agent/src/lib/command-runner.ts b/packages/agent/src/lib/command-runner.ts
+index 9cf156b..b6a564c 100644
+--- a/packages/agent/src/lib/command-runner.ts
++++ b/packages/agent/src/lib/command-runner.ts
+@@ -79,7 +79,7 @@ export async function runCommandStep(
+     resolvePlaceholders(arg, inputs, stepsOutput)
+   );
+ 
+-  // SECURITY NOTE: The `command` field is passed **unescaped** to `sh -c`
++  // SECURITY NOTE: The `command` field is passed **unescaped** to `bash -c`
+   // so that workflow authors can use pipes, redirections, and other shell
+   // features.  Only `args` are individually shell-escaped.  This means
+   // placeholders resolved into the `command` string (e.g.
+@@ -96,8 +96,14 @@ export async function runCommandStep(
+ 
+   const timeout = (timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT) * 1000;
+ 
++  // Use bash instead of sh (dash on Debian) to handle inaccessible PATH
++  // entries gracefully. Source .profile so language-specific PATH additions
++  // (Go, Python, Rust, etc.) are available in the spawned shell.
++  const wrappedCommand =
++    '[ -f "$HOME/.profile" ] && . "$HOME/.profile" 2>/dev/null; ' + fullCommand;
++
+   try {
+-    const result = await launch('sh', ['-c', fullCommand], {
++    const result = await launch('bash', ['-c', wrappedCommand], {
+       reject: false,
+       timeout,
+     });
+diff --git a/packages/cli/src/commands/list.ts b/packages/cli/src/commands/list.ts
+index a3a6360..8b66780 100644
+--- a/packages/cli/src/commands/list.ts
++++ b/packages/cli/src/commands/list.ts
+@@ -58,7 +58,10 @@ const formatProgress = (step?: string, progress?: number): string => {
+   if (step === undefined || progress === undefined) return colors.gray('─────');
+ 
+   const barLength = 8;
+-  const filled = Math.max(0, Math.min(barLength, Math.round((progress / 100) * barLength)));
++  const filled = Math.max(
++    0,
++    Math.min(barLength, Math.round((progress / 100) * barLength))
++  );
+   const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
+ 
+   if (step === 'FAILED') {
+diff --git a/packages/cli/src/lib/sandbox/container-common.ts b/packages/cli/src/lib/sandbox/container-common.ts
+index dc2c7b0..708d5da 100644
+--- a/packages/cli/src/lib/sandbox/container-common.ts
++++ b/packages/cli/src/lib/sandbox/container-common.ts
+@@ -27,14 +27,14 @@ export function getDefaultAgentImage(): string {
+     const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+     const version = packageJson.version;
+ 
+-    // Use agent-dev:latest for dev versions, agent:v{version} for production
++    // Use local image for dev versions, remote image for production
+     if (version.includes('-dev')) {
+-      return 'ghcr.io/endorhq/rover/agent-dev:latest';
++      return 'rover-agent-local:latest';
+     } else {
+       return `ghcr.io/endorhq/rover/agent:v${version}`;
+     }
+   } catch (_err) {
+-    return 'ghcr.io/endorhq/rover/agent-dev:latest';
++    return 'rover-agent-local:latest';
+   }
+ }
+ 
+diff --git a/packages/cli/src/lib/sandbox/languages/go.ts b/packages/cli/src/lib/sandbox/languages/go.ts
+index 07961f5..af520a4 100644
+--- a/packages/cli/src/lib/sandbox/languages/go.ts
++++ b/packages/cli/src/lib/sandbox/languages/go.ts
+@@ -14,6 +14,14 @@ export class GoSandboxPackage extends SandboxPackage {
+     return `mkdir -p $HOME/go/bin
+ echo 'export PATH="$HOME/go/bin:$PATH"' >> $HOME/.profile
+ echo 'export GOPATH="$HOME/go"' >> $HOME/.profile
+-source $HOME/.profile`;
++source $HOME/.profile
++# Verify go is accessible
++if ! go version > /dev/null 2>&1; then
++  echo "⚠ Warning: go binary is not accessible, attempting to fix permissions"
++  GO_PATH=$(which go 2>/dev/null || echo "")
++  if [ -n "$GO_PATH" ]; then
++    sudo chmod +x "$GO_PATH" 2>/dev/null || true
++  fi
++fi`;
+   }
+ }
+-- 
+2.53.0
+
+From 82ab290484d580677c9d103f333ee095fad2310e Mon Sep 17 00:00:00 2001
+From: Ben U <dataforxyz@gmail.com>
+Date: Thu, 26 Feb 2026 20:16:11 -0600
+Subject: [PATCH] fix: return directory listing when ACP readTextFile is called
+ on a directory
+
+Instead of throwing an EISDIR internal error when the agent tries to
+read a directory path, return a formatted directory listing so the agent
+can discover files and read the correct one.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ packages/agent/src/lib/acp-client.ts | 56 ++++++++++++++++++++++------
+ 1 file changed, 45 insertions(+), 11 deletions(-)
+
+diff --git a/packages/agent/src/lib/acp-client.ts b/packages/agent/src/lib/acp-client.ts
+index 7db1ef7..b87380c 100644
+--- a/packages/agent/src/lib/acp-client.ts
++++ b/packages/agent/src/lib/acp-client.ts
+@@ -22,7 +22,13 @@ import {
+ } from '@agentclientprotocol/sdk';
+ import colors from 'ansi-colors';
+ import { execa, type ResultPromise } from 'execa';
+-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
++import {
++  mkdirSync,
++  readFileSync,
++  readdirSync,
++  statSync,
++  writeFileSync,
++} from 'node:fs';
+ import { dirname } from 'node:path';
+ import { generateRandomId, VERBOSE } from 'rover-core';
+ 
+@@ -251,6 +257,24 @@ export class ACPClient implements Client {
+     throw RequestError.resourceNotFound(path);
+   }
+ 
++  /**
++   * Format a directory listing for when readTextFile is called on a directory.
++   * Returns a text listing with file/directory indicators so the agent can
++   * pick the right file to read next.
++   */
++  private formatDirectoryListing(dirPath: string): string {
++    const entries = readdirSync(dirPath).sort();
++    const lines = entries.map(name => {
++      try {
++        const stat = statSync(`${dirPath}/${name}`);
++        return stat.isDirectory() ? `${name}/` : name;
++      } catch {
++        return name;
++      }
++    });
++    return `Directory listing for ${dirPath}:\n\n${lines.join('\n')}`;
++  }
++
+   readTextFile?(params: ReadTextFileRequest): Promise<ReadTextFileResponse> {
+     if (VERBOSE) {
+       console.log(
+@@ -270,17 +294,27 @@ export class ACPClient implements Client {
+         );
+       }
+     } catch (error) {
+-      if (
+-        error instanceof Error &&
+-        'code' in error &&
+-        error.code === 'ENOENT'
+-      ) {
+-        if (VERBOSE) {
+-          console.log(
+-            colors.yellow(`[ACP] readTextFile: File not found ${params.path}`)
+-          );
++      if (error instanceof Error && 'code' in error) {
++        if (error.code === 'ENOENT') {
++          if (VERBOSE) {
++            console.log(
++              colors.yellow(`[ACP] readTextFile: File not found ${params.path}`)
++            );
++          }
++          return this.onFileNotFound(params.path);
++        }
++        if (error.code === 'EISDIR') {
++          if (VERBOSE) {
++            console.log(
++              colors.yellow(
++                `[ACP] readTextFile: Path is a directory, returning listing for ${params.path}`
++              )
++            );
++          }
++          return Promise.resolve({
++            content: this.formatDirectoryListing(params.path),
++          });
+         }
+-        return this.onFileNotFound(params.path);
+       }
+       console.log(
+         colors.red(`[ACP] readTextFile error:`),
+-- 
+2.53.0
+

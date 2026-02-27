@@ -1,0 +1,271 @@
+From baf12418fffeb37811450afb3b10a2e5a37ccb28 Mon Sep 17 00:00:00 2001
+From: Ben U <dataforxyz@gmail.com>
+Date: Thu, 26 Feb 2026 20:39:33 -0600
+Subject: [PATCH] fix: use image digest instead of tag name for cache
+ invalidation
+
+Resolve the agent image tag to its actual image ID via `docker image
+inspect` before computing the setup hash. This ensures the cache is
+invalidated when an image is rebuilt with the same tag.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../src/lib/sandbox/container-image-cache.ts  | 21 ++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/packages/cli/src/lib/sandbox/container-image-cache.ts b/packages/cli/src/lib/sandbox/container-image-cache.ts
+index c0a4d2b..878795c 100644
+--- a/packages/cli/src/lib/sandbox/container-image-cache.ts
++++ b/packages/cli/src/lib/sandbox/container-image-cache.ts
+@@ -153,6 +153,24 @@ export async function waitForInitAndCommit(
+   }
+ }
+ 
++/**
++ * Resolve a container image tag to its image ID (digest).
++ * Falls back to the tag string if inspection fails (e.g. image not pulled yet).
++ */
++function resolveImageId(backend: ContainerBackend, imageTag: string): string {
++  try {
++    const result = launchSync(
++      backend,
++      ['image', 'inspect', '--format', '{{.Id}}', imageTag],
++      { reject: false }
++    );
++    const id = result.stdout?.toString().trim();
++    return id || imageTag;
++  } catch {
++    return imageTag;
++  }
++}
++
+ /**
+  * Convenience function: compute hash, build tag, check existence.
+  * Returns the cache tag and whether a cached image already exists.
+@@ -192,8 +210,9 @@ export function checkImageCache(
+     cacheFilesContent = parts.join('\0');
+   }
+ 
++  const agentImageId = resolveImageId(backend, agentImage);
+   const hash = computeSetupHash({
+-    agentImage,
++    agentImage: agentImageId,
+     languages: projectConfig.languages,
+     packageManagers: projectConfig.packageManagers,
+     taskManagers: projectConfig.taskManagers,
+-- 
+2.53.0
+
+From c1426189e54dad7d3b75050afee27d75deee32a8 Mon Sep 17 00:00:00 2001
+From: Ben U <dataforxyz@gmail.com>
+Date: Fri, 27 Feb 2026 12:33:57 -0600
+Subject: [PATCH] fix: use image digest instead of tag name for cache
+ invalidation
+
+Resolve the agent image tag to its actual image ID via `docker image
+inspect` before computing the setup hash. This ensures the cache is
+invalidated when an image is rebuilt with the same tag.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../__tests__/container-image-cache.test.ts   | 160 +++++++++++++++++-
+ .../src/lib/sandbox/container-image-cache.ts  |   2 +-
+ 2 files changed, 160 insertions(+), 2 deletions(-)
+
+diff --git a/packages/cli/src/lib/sandbox/__tests__/container-image-cache.test.ts b/packages/cli/src/lib/sandbox/__tests__/container-image-cache.test.ts
+index 897da66..62602f4 100644
+--- a/packages/cli/src/lib/sandbox/__tests__/container-image-cache.test.ts
++++ b/packages/cli/src/lib/sandbox/__tests__/container-image-cache.test.ts
+@@ -1,6 +1,7 @@
+ import { describe, it, expect, vi, beforeEach } from 'vitest';
+-import { launch } from 'rover-core';
++import { launch, launchSync, getVersion } from 'rover-core';
+ import {
++  checkImageCache,
+   computeSetupHash,
+   getCacheImageTag,
+   getCacheImageLabels,
+@@ -16,6 +17,8 @@ vi.mock('rover-core', async () => {
+   return {
+     ...actual,
+     launch: vi.fn(),
++    launchSync: vi.fn(),
++    getVersion: vi.fn().mockReturnValue('1.0.0-test'),
+   };
+ });
+ 
+@@ -577,3 +580,158 @@ describe('removeCacheImage', () => {
+     expect(result).toBe(false);
+   });
+ });
++
++describe('checkImageCache', () => {
++  const mockedLaunchSync = vi.mocked(launchSync);
++  const mockedGetVersion = vi.mocked(getVersion);
++
++  function makeProjectConfig(
++    overrides: Record<string, unknown> = {}
++  ): Parameters<typeof checkImageCache>[1] {
++    return {
++      projectRoot: '/tmp/test-project',
++      languages: ['typescript'],
++      packageManagers: ['pnpm'],
++      taskManagers: [],
++      mcps: [],
++      initScript: undefined,
++      cacheFiles: undefined,
++      ...overrides,
++    } as any;
++  }
++
++  beforeEach(() => {
++    mockedLaunchSync.mockReset();
++    mockedGetVersion.mockReturnValue('1.0.0-test');
++  });
++
++  it('resolves image tag to image ID for hashing', () => {
++    const imageId = 'sha256:aabbccdd11223344';
++    // First launchSync: resolveImageId
++    mockedLaunchSync.mockReturnValueOnce({
++      stdout: imageId,
++      exitCode: 0,
++    } as any);
++    // Second launchSync: cacheImageExists
++    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
++
++    const result = checkImageCache(
++      ContainerBackend.Docker,
++      makeProjectConfig(),
++      'my-agent:latest',
++      'claude'
++    );
++
++    // Verify resolveImageId was called with the tag
++    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
++      1,
++      ContainerBackend.Docker,
++      ['image', 'inspect', '--format', '{{.Id}}', 'my-agent:latest'],
++      { reject: false }
++    );
++
++    // Verify the hash uses the resolved ID, not the tag
++    const expectedHash = computeSetupHash({
++      agentImage: imageId,
++      languages: ['typescript'],
++      packageManagers: ['pnpm'],
++      taskManagers: [],
++      agent: 'claude',
++      roverVersion: '1.0.0-test',
++      initScriptContent: '',
++      cacheFilesContent: '',
++      mcps: [],
++    });
++    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
++  });
++
++  it('produces different hashes when same tag resolves to different IDs', () => {
++    // First call: image ID "aaa"
++    mockedLaunchSync.mockReturnValueOnce({
++      stdout: 'sha256:aaa',
++      exitCode: 0,
++    } as any);
++    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
++
++    const result1 = checkImageCache(
++      ContainerBackend.Docker,
++      makeProjectConfig(),
++      'my-agent:latest',
++      'claude'
++    );
++
++    // Second call: same tag, different image ID "bbb"
++    mockedLaunchSync.mockReturnValueOnce({
++      stdout: 'sha256:bbb',
++      exitCode: 0,
++    } as any);
++    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
++
++    const result2 = checkImageCache(
++      ContainerBackend.Docker,
++      makeProjectConfig(),
++      'my-agent:latest',
++      'claude'
++    );
++
++    expect(result1.cacheTag).not.toBe(result2.cacheTag);
++  });
++
++  it('falls back to tag string when image inspect fails', () => {
++    // resolveImageId throws
++    mockedLaunchSync.mockImplementationOnce(() => {
++      throw new Error('docker not available');
++    });
++    // cacheImageExists
++    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
++
++    const result = checkImageCache(
++      ContainerBackend.Docker,
++      makeProjectConfig(),
++      'my-agent:latest',
++      'claude'
++    );
++
++    // Hash should be computed with the raw tag as fallback
++    const expectedHash = computeSetupHash({
++      agentImage: 'my-agent:latest',
++      languages: ['typescript'],
++      packageManagers: ['pnpm'],
++      taskManagers: [],
++      agent: 'claude',
++      roverVersion: '1.0.0-test',
++      initScriptContent: '',
++      cacheFilesContent: '',
++      mcps: [],
++    });
++    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
++  });
++
++  it('falls back to tag string when inspect returns empty stdout', () => {
++    mockedLaunchSync.mockReturnValueOnce({
++      stdout: '',
++      exitCode: 0,
++    } as any);
++    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
++
++    const result = checkImageCache(
++      ContainerBackend.Docker,
++      makeProjectConfig(),
++      'my-agent:latest',
++      'claude'
++    );
++
++    const expectedHash = computeSetupHash({
++      agentImage: 'my-agent:latest',
++      languages: ['typescript'],
++      packageManagers: ['pnpm'],
++      taskManagers: [],
++      agent: 'claude',
++      roverVersion: '1.0.0-test',
++      initScriptContent: '',
++      cacheFilesContent: '',
++      mcps: [],
++    });
++    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
++  });
++});
+diff --git a/packages/cli/src/lib/sandbox/container-image-cache.ts b/packages/cli/src/lib/sandbox/container-image-cache.ts
+index 878795c..8e353e5 100644
+--- a/packages/cli/src/lib/sandbox/container-image-cache.ts
++++ b/packages/cli/src/lib/sandbox/container-image-cache.ts
+@@ -154,7 +154,7 @@ export async function waitForInitAndCommit(
+ }
+ 
+ /**
+- * Resolve a container image tag to its image ID (digest).
++ * Resolve a container image tag to its image ID.
+  * Falls back to the tag string if inspection fails (e.g. image not pulled yet).
+  */
+ function resolveImageId(backend: ContainerBackend, imageTag: string): string {
+-- 
+2.53.0
+

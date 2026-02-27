@@ -1,0 +1,119 @@
+From b4ddc1459951493810c660a67094657d93b4ef30 Mon Sep 17 00:00:00 2001
+From: Ben U <dataforxyz@gmail.com>
+Date: Thu, 26 Feb 2026 19:06:34 -0600
+Subject: [PATCH] feat: show context entries in inspect command
+
+The inspect command now displays context entries (e.g., --context gitlab:issue/9)
+in both human-readable and JSON output. Also populates task.source from context
+metadata for feature parity with the deprecated --from-github flag.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ packages/cli/src/commands/inspect.ts        | 19 +++++++++++++++++++
+ packages/cli/src/commands/task.ts           | 16 ++++++++++++++++
+ packages/cli/src/output-types.ts            |  5 +++++
+ packages/core/src/files/task-description.ts |  8 ++++++++
+ 4 files changed, 48 insertions(+)
+
+diff --git a/packages/cli/src/commands/inspect.ts b/packages/cli/src/commands/inspect.ts
+index e351306..78cb0a1 100644
+--- a/packages/cli/src/commands/inspect.ts
++++ b/packages/cli/src/commands/inspect.ts
+@@ -264,6 +264,14 @@ const inspectCommand = async (
+         workflowName: task.workflowName,
+         worktreePath: task.worktreePath,
+         source: task.source,
++        context:
++          iteration.context.length > 0
++            ? iteration.context.map(entry => ({
++                name: entry.name,
++                uri: entry.uri,
++                description: entry.description,
++              }))
++            : undefined,
+       };
+ 
+       await exitWithSuccess(null, jsonOutput, { telemetry });
+@@ -314,6 +322,17 @@ const inspectCommand = async (
+ 
+       showProperties(properties);
+ 
++      // Show context entries if available
++      if (iteration.context.length > 0) {
++        showTitle('Context');
++        showList(
++          iteration.context.map(
++            entry =>
++              `${colors.cyan(entry.uri)} ${colors.gray('→')} ${entry.name}`
++          )
++        );
++      }
++
+       // Workspace information
+       showTitle('Workspace');
+ 
+diff --git a/packages/cli/src/commands/task.ts b/packages/cli/src/commands/task.ts
+index a3f4aab..f03b541 100644
+--- a/packages/cli/src/commands/task.ts
++++ b/packages/cli/src/commands/task.ts
+@@ -463,6 +463,22 @@ const createTaskForAgent = async (
+       uri: entry.uri,
+       description: entry.description,
+     }));
++
++    // Populate task.source from context if not already set
++    if (!source) {
++      const issueEntry = entries.find(entry => {
++        const type = entry.metadata?.type;
++        return type === 'github:issue' || type === 'gitlab:issue';
++      });
++      if (issueEntry?.metadata && 'number' in issueEntry.metadata) {
++        const isGitHub = issueEntry.metadata.type === 'github:issue';
++        task.setSource({
++          type: isGitHub ? 'github' : 'gitlab',
++          id: String(issueEntry.metadata.number),
++          title: issueEntry.name,
++        });
++      }
++    }
+   } catch (error) {
+     processManager?.failLastItem();
+     if (error instanceof ContextFetchError) {
+diff --git a/packages/cli/src/output-types.ts b/packages/cli/src/output-types.ts
+index 7fcd009..513477d 100644
+--- a/packages/cli/src/output-types.ts
++++ b/packages/cli/src/output-types.ts
+@@ -202,6 +202,11 @@ export interface TaskInspectionOutput {
+     title?: string;
+     ref?: Record<string, unknown>;
+   };
++  context?: Array<{
++    name: string;
++    uri: string;
++    description: string;
++  }>;
+ }
+ 
+ export interface RawFileOutput {
+diff --git a/packages/core/src/files/task-description.ts b/packages/core/src/files/task-description.ts
+index e548189..c288b8c 100644
+--- a/packages/core/src/files/task-description.ts
++++ b/packages/core/src/files/task-description.ts
+@@ -764,6 +764,14 @@ export class TaskDescriptionManager {
+   // Data Modification (Setters)
+   // ============================================================
+ 
++  /**
++   * Set task source
++   */
++  setSource(source: TaskDescription['source']): void {
++    this.data.source = source;
++    this.save();
++  }
++
+   /**
+    * Update task title
+    */
+-- 
+2.53.0
+
