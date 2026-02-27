@@ -69,7 +69,9 @@ export class ACPClient implements Client {
   private capturedMessages: string = '';
   private isCapturing: boolean = false;
 
-  // Cost tracking: cumulative cost reported by the agent via usage_update events
+  // Cost tracking is best-effort. The current SDK version used here does not
+  // expose a dedicated usage update event, so this remains zero unless a
+  // future SDK adds cost-bearing session updates that we can consume safely.
   private cumulativeCostAmount: number = 0;
   private cumulativeCostCurrency: string = 'USD';
   private costAtCaptureStart: number = 0;
@@ -96,7 +98,7 @@ export class ACPClient implements Client {
   /**
    * Get the cost incurred during the last capture window (between
    * startCapturing and stopCapturing). Returns the delta in the
-   * cumulative cost reported by the agent via usage_update events.
+   * cumulative cost reported by the agent when available.
    */
   getLastPromptCost(): { amount: number; currency: string } {
     return {
@@ -212,13 +214,6 @@ export class ACPClient implements Client {
 
         if (this.isCapturing && update.content.type === 'text') {
           this.capturedMessages += `[THINKING] ${update.content.text}`;
-        }
-        break;
-      case 'usage_update':
-        // Track cumulative cost reported by the agent
-        if (update.cost) {
-          this.cumulativeCostAmount = update.cost.amount;
-          this.cumulativeCostCurrency = update.cost.currency;
         }
         break;
       case 'available_commands_update':

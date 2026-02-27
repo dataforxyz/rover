@@ -25,61 +25,15 @@ import { ACPRunner } from '../lib/acp-runner.js';
 import { createAgent } from '../lib/agents/index.js';
 import { executeStep, shouldSkipStep } from '../lib/step-executor.js';
 import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+  createCheckpointStore,
+  loadCheckpoint,
+  saveCheckpoint,
+  type CheckpointData,
+  type CheckpointStore,
+} from '../lib/checkpoint-store.js';
+import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-
-/**
- * Checkpoint data structure for pause/resume support.
- * Stores completed step outputs so resumed workflows can skip them.
- */
-export interface CheckpointData {
-  completedSteps: Array<{ id: string; outputs: Record<string, string> }>;
-  failedStepId?: string;
-  error?: string;
-  isRetryable?: boolean;
-}
-
-/**
- * Save checkpoint data to the output directory.
- */
-export function saveCheckpoint(
-  outputDir: string | undefined,
-  data: CheckpointData
-): void {
-  if (!outputDir) return;
-  try {
-    const checkpointPath = join(outputDir, 'checkpoint.json');
-    writeFileSync(checkpointPath, JSON.stringify(data, null, 2), 'utf8');
-    console.log(colors.gray(`  Checkpoint saved to ${checkpointPath}`));
-  } catch (err) {
-    console.error(
-      colors.yellow(
-        `Warning: Failed to save checkpoint: ${err instanceof Error ? err.message : String(err)}`
-      )
-    );
-  }
-}
-
-/**
- * Load checkpoint data from a file path.
- * Returns null if the file doesn't exist or is invalid.
- */
-export function loadCheckpoint(path: string): CheckpointData | null {
-  try {
-    if (!existsSync(path)) return null;
-    const raw = readFileSync(path, 'utf8');
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.completedSteps)) return null;
-    return data as CheckpointData;
-  } catch {
-    return null;
-  }
-}
+export { loadCheckpoint, saveCheckpoint, type CheckpointData };
 
 /**
  * Maximum number of automatic retries for transient errors before pausing.
@@ -145,9 +99,7 @@ function displayStepResults(
 
   const props: Record<string, string> = {
     ID: colors.cyan(result.id),
-    Status: result.success
-      ? colors.green('✓ Success')
-      : colors.red('✗ Failed'),
+    Status: result.success ? colors.green('✓ Success') : colors.red('✗ Failed'),
     Duration: colors.yellow(`${result.duration.toFixed(2)}s`),
   };
 
@@ -307,12 +259,12 @@ const handleContextInjection = (
  * Returns a synthetic StepResult if found, undefined otherwise.
  */
 function getCachedStepResult(
-  checkpoint: CheckpointData | null,
+  checkpointStore: CheckpointStore | undefined,
   stepId: string,
   stepName: string
 ): StepResult | undefined {
-  if (!checkpoint) return undefined;
-  const cached = checkpoint.completedSteps.find(s => s.id === stepId);
+  if (!checkpointStore) return undefined;
+  const cached = checkpointStore.getCompletedStep(stepId);
   if (!cached) return undefined;
 
   console.log(colors.gray(`\n⏭ Skipping completed step: ${stepName}`));
@@ -501,6 +453,7 @@ export const runCommand = async (
           );
         }
       }
+      const checkpointStore = createCheckpointStore(options.output, checkpoint);
 
       // Print Steps
       showList(
@@ -565,7 +518,11 @@ export const runCommand = async (
           stepsOutput: Map<string, Map<string, string>>
         ): Promise<StepResult> => {
           // Checkpoint resume: skip completed steps
-          const cached = getCachedStepResult(checkpoint, step.id, step.name);
+          const cached = getCachedStepResult(
+            checkpointStore,
+            step.id,
+            step.name
+          );
           if (cached) return cached;
 
           // Retry loop with exponential backoff for transient errors
@@ -577,10 +534,7 @@ export const runCommand = async (
                 await acpRunner.createSession();
 
                 // Inject previous step outputs before running
-                for (const [
-                  prevStepId,
-                  prevOutputs,
-                ] of stepsOutput.entries()) {
+                for (const [prevStepId, prevOutputs] of stepsOutput.entries()) {
                   acpRunner.stepsOutput.set(prevStepId, prevOutputs);
                 }
 
@@ -609,10 +563,7 @@ export const runCommand = async (
 
             // Step failed - check if it's a transient error worth retrying
             const errorMsg = result.error || '';
-            if (
-              isTransientError(errorMsg) &&
-              attempt < MAX_TRANSIENT_RETRIES
-            ) {
+            if (isTransientError(errorMsg) && attempt < MAX_TRANSIENT_RETRIES) {
               const delayMs = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
               console.log(
                 colors.yellow(
@@ -631,18 +582,23 @@ export const runCommand = async (
               })
             );
 
+            // Resolve provider from per-step tool config or workflow-level default
+            const provider = step.tool || tool;
+
             const retryable = isRetryableError(errorMsg, result.outputs);
-            saveCheckpoint(options.output, {
+            checkpointStore.saveFailureSnapshot({
               completedSteps,
               failedStepId: step.id,
               error: result.error,
               isRetryable: retryable,
+              provider,
             });
 
             if (retryable) {
               statusManager?.pause(
                 step.name,
-                result.error || 'Usage limit reached'
+                result.error || 'Usage limit reached',
+                provider
               );
               output.paused = true;
               throw new PauseError(
@@ -669,7 +625,11 @@ export const runCommand = async (
           stepsOutput: Map<string, Map<string, string>>
         ): Promise<StepResult> => {
           // Checkpoint resume: skip completed steps
-          const cached = getCachedStepResult(checkpoint, step.id, step.name);
+          const cached = getCachedStepResult(
+            checkpointStore,
+            step.id,
+            step.name
+          );
           if (cached) return cached;
 
           return executeStep(step, {
@@ -684,6 +644,7 @@ export const runCommand = async (
             logger,
             output: options.output,
             acpRunner,
+            checkpointStore,
           });
         },
       };
@@ -698,10 +659,12 @@ export const runCommand = async (
         totalDuration = runResult.totalDuration;
 
         // Display workflow completion summary
-        const successfulSteps = Array.from(
-          runResult.stepsOutput.keys()
+        const successfulSteps = runResult.stepResults.filter(
+          r => r.success
         ).length;
-        const failedSteps = runResult.runSteps - successfulSteps;
+        const failedSteps = runResult.stepResults.filter(
+          r => !r.success
+        ).length;
         const skippedSteps = workflowManager.steps.length - runResult.runSteps;
 
         let status = colors.green('✓ Workflow Completed Successfully');
@@ -718,9 +681,7 @@ export const runCommand = async (
         // are not included in these totals.
         showProperties({
           Duration: colors.cyan(runResult.totalDuration.toFixed(2) + 's'),
-          'Total Steps': colors.cyan(
-            workflowManager.steps.length.toString()
-          ),
+          'Total Steps': colors.cyan(workflowManager.steps.length.toString()),
           'Successful Steps': colors.green(successfulSteps.toString()),
           'Failed Steps': colors.red(failedSteps.toString()),
           'Skipped Steps': colors.yellow(skippedSteps.toString()),
@@ -743,19 +704,15 @@ export const runCommand = async (
         } else {
           output.success = true;
           statusManager?.complete('Workflow completed successfully');
-          logger?.info(
-            'workflow_complete',
-            'Workflow completed successfully',
-            {
-              taskId: options.taskId,
-              duration: runResult.totalDuration,
-              metadata: {
-                successfulSteps,
-                failedSteps: 0,
-                skippedSteps,
-              },
-            }
-          );
+          logger?.info('workflow_complete', 'Workflow completed successfully', {
+            taskId: options.taskId,
+            duration: runResult.totalDuration,
+            metadata: {
+              successfulSteps,
+              failedSteps: 0,
+              skippedSteps,
+            },
+          });
         }
       } catch (err) {
         if (err instanceof PauseError) {

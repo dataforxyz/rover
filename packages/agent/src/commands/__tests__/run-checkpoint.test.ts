@@ -111,6 +111,81 @@ describe('checkpoint save/load', () => {
     expect(loaded!.completedSteps).toHaveLength(2);
     expect(loaded!.failedStepId).toBe('step3');
   });
+
+  it('should save and load provider field', () => {
+    const data: CheckpointData = {
+      completedSteps: [{ id: 'step1', outputs: { result: 'done' } }],
+      failedStepId: 'step2',
+      error: 'Credit limit',
+      isRetryable: true,
+      provider: 'claude',
+    };
+
+    saveCheckpoint(tempDir, data);
+
+    const loaded = loadCheckpoint(join(tempDir, 'checkpoint.json'));
+    expect(loaded).not.toBeNull();
+    expect(loaded!.provider).toBe('claude');
+  });
+
+  it('should save and load loop progress', () => {
+    const data: CheckpointData = {
+      completedSteps: [{ id: 'step1', outputs: { result: 'done' } }],
+      loopProgress: {
+        review_loop: {
+          iteration: 2,
+          nextSubStepIndex: 1,
+          subStepOutputs: {
+            run_tests: { exit_code: '1', stderr: 'failed' },
+          },
+          skippedSubSteps: ['fix_agent'],
+        },
+      },
+      failedStepId: 'review_loop',
+    };
+
+    saveCheckpoint(tempDir, data);
+
+    const loaded = loadCheckpoint(join(tempDir, 'checkpoint.json'));
+    expect(loaded).not.toBeNull();
+    expect(loaded!.loopProgress).toEqual(data.loopProgress);
+  });
+
+  it('should handle checkpoint without provider (backward compat)', () => {
+    const data: CheckpointData = {
+      completedSteps: [],
+      failedStepId: 'step1',
+    };
+
+    saveCheckpoint(tempDir, data);
+
+    const loaded = loadCheckpoint(join(tempDir, 'checkpoint.json'));
+    expect(loaded).not.toBeNull();
+    expect(loaded!.provider).toBeUndefined();
+  });
+
+  it('should ignore malformed loop progress but still load checkpoint', () => {
+    const badPath = join(tempDir, 'bad-loop-progress.json');
+    writeFileSync(
+      badPath,
+      JSON.stringify({
+        completedSteps: [{ id: 'step1', outputs: { result: 'ok' } }],
+        loopProgress: {
+          loop1: {
+            iteration: 'two',
+            nextSubStepIndex: -1,
+            subStepOutputs: 'bad',
+          },
+        },
+      }),
+      'utf8'
+    );
+
+    const loaded = loadCheckpoint(badPath);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.completedSteps).toHaveLength(1);
+    expect(loaded!.loopProgress).toBeUndefined();
+  });
 });
 
 describe('isTransientError', () => {

@@ -17,8 +17,7 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rmSync } from 'node:fs';
-import type { RunnerStepResult } from '../../lib/runner.js';
-import type { ACPRunnerStepResult } from '../../lib/acp-runner.js';
+import type { StepResult } from 'rover-core';
 
 // ── Track process.exit calls ────────────────────────────────────────────
 let capturedExitCode: number | undefined;
@@ -35,7 +34,7 @@ vi.mock('../../lib/runner.js', () => ({
 }));
 
 // ── Mock ACPRunner ──────────────────────────────────────────────────────
-const mockACPRunStep = vi.fn<() => Promise<ACPRunnerStepResult>>();
+const mockACPRunStep = vi.fn<() => Promise<StepResult>>();
 const mockACPInitializeConnection = vi.fn().mockResolvedValue(undefined);
 const mockACPCreateSession = vi.fn().mockResolvedValue('session-1');
 const mockACPCloseSession = vi.fn();
@@ -51,6 +50,16 @@ vi.mock('../../lib/acp-runner.js', () => ({
     close: mockACPClose,
     stepsOutput: mockACPStepsOutput,
   })),
+}));
+
+// ── Mock agents/index and step-executor (required by run.ts imports) ────
+vi.mock('../../lib/agents/index.js', () => ({
+  createAgent: vi.fn().mockReturnValue({ getLogSources: () => [] }),
+}));
+
+vi.mock('../../lib/step-executor.js', () => ({
+  executeStep: vi.fn(),
+  shouldSkipStep: vi.fn().mockReturnValue(false),
 }));
 
 // ── Import after mocks ─────────────────────────────────────────────────
@@ -97,27 +106,7 @@ function makeResult(
   id: string,
   success: boolean,
   extra?: { error?: string; outputs?: Map<string, string> }
-): RunnerStepResult {
-  const outputs = new Map<string, string>();
-  if (extra?.outputs) {
-    for (const [k, v] of extra.outputs.entries()) {
-      outputs.set(k, v);
-    }
-  }
-  return {
-    id,
-    success,
-    duration: 1.0,
-    outputs,
-    error: extra?.error,
-  };
-}
-
-function makeACPResult(
-  id: string,
-  success: boolean,
-  extra?: { error?: string; outputs?: Map<string, string> }
-): ACPRunnerStepResult {
+): StepResult {
   const outputs = new Map<string, string>();
   if (extra?.outputs) {
     for (const [k, v] of extra.outputs.entries()) {
@@ -188,7 +177,7 @@ describe('run command: pause/resume integration', () => {
   });
 
   // ── Helper to write workflow YAML ───────────────────────────────────
-  function writeWorkflow(tool = 'gemini') {
+  function writeWorkflow(tool = 'codex') {
     workflowPath = join(tempDir, 'workflow.yaml');
     writeFileSync(workflowPath, WORKFLOW_YAML(tool), 'utf8');
   }
@@ -212,7 +201,7 @@ describe('run command: pause/resume integration', () => {
   }
 
   // ────────────────────────────────────────────────────────────────────
-  // Standard Mode Tests (Runner, tool=gemini)
+  // Standard Mode Tests (Runner, tool=codex — non-ACP tool)
   // ────────────────────────────────────────────────────────────────────
 
   describe('Standard mode (Runner)', () => {
@@ -220,7 +209,7 @@ describe('run command: pause/resume integration', () => {
      * Setup run mocks for standard mode.
      * Each result is assigned to the Nth Runner instance created.
      */
-    function setupRunnerResults(results: RunnerStepResult[]) {
+    function setupRunnerResults(results: StepResult[]) {
       // Runner constructor creates instances; each gets its own run mock.
       // We pre-configure the results so that instance N returns results[N].
       let callIndex = 0;
@@ -235,7 +224,7 @@ describe('run command: pause/resume integration', () => {
     }
 
     it('Test 1: all steps succeed → exit 0, no checkpoint, status completed', async () => {
-      writeWorkflow('gemini');
+      writeWorkflow();
 
       setupRunnerResults([
         makeResult('step1', true, {
@@ -259,7 +248,7 @@ describe('run command: pause/resume integration', () => {
     });
 
     it('Test 2: non-retryable error → exit 1, checkpoint isRetryable=false, status failed', async () => {
-      writeWorkflow('gemini');
+      writeWorkflow();
 
       setupRunnerResults([
         makeResult('step1', true, {
@@ -288,7 +277,7 @@ describe('run command: pause/resume integration', () => {
     });
 
     it('Test 3: retryable error → exit 2, checkpoint isRetryable=true, status paused', async () => {
-      writeWorkflow('gemini');
+      writeWorkflow();
 
       setupRunnerResults([
         makeResult('step1', true, {
@@ -314,7 +303,7 @@ describe('run command: pause/resume integration', () => {
     });
 
     it('Test 4: resume from checkpoint skips completed steps', async () => {
-      writeWorkflow('gemini');
+      writeWorkflow();
 
       // Pre-write checkpoint with step1 completed
       const checkpointPath = join(outputDir, 'checkpoint.json');
@@ -355,7 +344,7 @@ describe('run command: pause/resume integration', () => {
     });
 
     it('Test 5: transient error retries then pauses', async () => {
-      writeWorkflow('gemini');
+      writeWorkflow();
 
       // step1 fails 3 times with transient error (initial + 2 retries)
       const transientResult = makeResult('step1', false, {
@@ -378,7 +367,7 @@ describe('run command: pause/resume integration', () => {
     });
 
     it('Test 6: transient error succeeds on retry → no pause', async () => {
-      writeWorkflow('gemini');
+      writeWorkflow();
 
       // step1 attempt 1: transient failure. attempt 2: success.
       // step2 and step3: success.
@@ -418,12 +407,12 @@ describe('run command: pause/resume integration', () => {
 
       mockACPRunStep
         .mockResolvedValueOnce(
-          makeACPResult('step1', true, {
+          makeResult('step1', true, {
             outputs: new Map([['result1', 'hello']]),
           })
         )
         .mockResolvedValueOnce(
-          makeACPResult('step2', false, {
+          makeResult('step2', false, {
             error: "You've hit your limit",
           })
         );
@@ -445,7 +434,7 @@ describe('run command: pause/resume integration', () => {
       writeWorkflow('claude');
 
       mockACPRunStep.mockResolvedValueOnce(
-        makeACPResult('step1', false, {
+        makeResult('step1', false, {
           error: 'invalid api key',
         })
       );
@@ -482,12 +471,12 @@ describe('run command: pause/resume integration', () => {
       // Only step2 and step3 should run via ACP
       mockACPRunStep
         .mockResolvedValueOnce(
-          makeACPResult('step2', true, {
+          makeResult('step2', true, {
             outputs: new Map([['result2', 'world']]),
           })
         )
         .mockResolvedValueOnce(
-          makeACPResult('step3', true, {
+          makeResult('step3', true, {
             outputs: new Map([['result3', 'done']]),
           })
         );
@@ -498,8 +487,9 @@ describe('run command: pause/resume integration', () => {
 
       // runStep should only be called for step2 and step3
       expect(mockACPRunStep).toHaveBeenCalledTimes(2);
-      expect(mockACPRunStep.mock.calls[0][0]).toBe('step2');
-      expect(mockACPRunStep.mock.calls[1][0]).toBe('step3');
+      const calls = mockACPRunStep.mock.calls as unknown as string[][];
+      expect(calls[0]?.[0]).toBe('step2');
+      expect(calls[1]?.[0]).toBe('step3');
 
       const status = readStatusFile(statusPath);
       expect(status.status).toBe('completed');
@@ -515,17 +505,17 @@ describe('run command: pause/resume integration', () => {
       // All 3 steps should run since checkpoint is invalid
       mockACPRunStep
         .mockResolvedValueOnce(
-          makeACPResult('step1', true, {
+          makeResult('step1', true, {
             outputs: new Map([['result1', 'hello']]),
           })
         )
         .mockResolvedValueOnce(
-          makeACPResult('step2', true, {
+          makeResult('step2', true, {
             outputs: new Map([['result2', 'world']]),
           })
         )
         .mockResolvedValueOnce(
-          makeACPResult('step3', true, {
+          makeResult('step3', true, {
             outputs: new Map([['result3', 'done']]),
           })
         );

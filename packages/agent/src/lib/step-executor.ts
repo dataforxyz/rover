@@ -23,6 +23,10 @@ import { Runner, type RunnerStepResult } from './runner.js';
 import { runCommandStep, type CommandStepResult } from './command-runner.js';
 import { evaluateCondition } from './condition.js';
 import type { ACPRunner, ACPRunnerStepResult } from './acp-runner.js';
+import type {
+  CheckpointLoopProgress,
+  CheckpointStore,
+} from './checkpoint-store.js';
 
 export interface StepExecutorConfig {
   workflow: WorkflowManager;
@@ -36,6 +40,7 @@ export interface StepExecutorConfig {
   logger?: JsonlLogger;
   output?: string;
   acpRunner?: ACPRunner;
+  checkpointStore?: CheckpointStore;
 }
 
 export type StepResult =
@@ -44,6 +49,73 @@ export type StepResult =
   | ACPRunnerStepResult;
 
 const DEFAULT_MAX_ITERATIONS = 3;
+
+interface StepTreeNode {
+  id: string;
+  steps?: StepTreeNode[];
+}
+
+function collectNestedStepIds(step: StepTreeNode): string[] {
+  return [step.id, ...(step.steps?.flatMap(collectNestedStepIds) ?? [])];
+}
+
+function snapshotLoopSubStepOutputs(
+  loopStep: WorkflowLoopStep,
+  stepsOutput: Map<string, Map<string, string>>
+): Record<string, Record<string, string>> {
+  const subStepOutputs: Record<string, Record<string, string>> = {};
+
+  for (const stepId of loopStep.steps.flatMap((step: WorkflowStep) =>
+    collectNestedStepIds(step)
+  )) {
+    const outputs = stepsOutput.get(stepId);
+    if (!outputs || outputs.size === 0) continue;
+    subStepOutputs[stepId] = Object.fromEntries(outputs);
+  }
+
+  return subStepOutputs;
+}
+
+function persistLoopProgress(
+  loopStep: WorkflowLoopStep,
+  config: StepExecutorConfig,
+  iteration: number,
+  nextSubStepIndex: number,
+  skippedSubSteps: Set<string>
+): void {
+  config.checkpointStore?.setLoopProgress(loopStep.id, {
+    iteration,
+    nextSubStepIndex,
+    subStepOutputs: snapshotLoopSubStepOutputs(loopStep, config.stepsOutput),
+    skippedSubSteps: Array.from(skippedSubSteps),
+  });
+}
+
+function restoreLoopProgress(
+  loopStep: WorkflowLoopStep,
+  config: StepExecutorConfig,
+  progress: CheckpointLoopProgress
+): boolean {
+  const knownStepIds = new Set(
+    loopStep.steps.flatMap((step: WorkflowStep) => collectNestedStepIds(step))
+  );
+
+  for (const [stepId, outputs] of Object.entries(progress.subStepOutputs)) {
+    if (!knownStepIds.has(stepId)) continue;
+    config.stepsOutput.set(stepId, new Map(Object.entries(outputs)));
+  }
+
+  for (const stepId of progress.skippedSubSteps) {
+    if (!knownStepIds.has(stepId)) continue;
+    config.stepsOutput.set(stepId, new Map());
+  }
+
+  return (
+    progress.iteration > 0 &&
+    progress.nextSubStepIndex >= 0 &&
+    progress.nextSubStepIndex <= loopStep.steps.length
+  );
+}
 
 /**
  * Check whether a step should be skipped based on its `if` condition.
@@ -128,6 +200,43 @@ async function executeLoopStep(
   let conditionMet = false;
   let lastIteration = 0;
   let lastError: string | undefined;
+  const checkpointProgress = config.checkpointStore?.getLoopProgress(
+    loopStep.id
+  );
+  let startIteration = 1;
+  let resumeSubStepIndex = 0;
+  let skippedSubSteps = new Set<string>();
+
+  if (checkpointProgress) {
+    const validProgress = restoreLoopProgress(
+      loopStep,
+      config,
+      checkpointProgress
+    );
+    if (validProgress) {
+      startIteration = checkpointProgress.iteration;
+      resumeSubStepIndex = checkpointProgress.nextSubStepIndex;
+      skippedSubSteps = new Set(checkpointProgress.skippedSubSteps);
+
+      if (resumeSubStepIndex === loopStep.steps.length) {
+        startIteration += 1;
+        resumeSubStepIndex = 0;
+      }
+
+      console.log(
+        colors.cyan(
+          `  ↺ Resuming loop "${loopStep.name}" at iteration ${startIteration}, sub-step ${resumeSubStepIndex + 1}`
+        )
+      );
+    } else {
+      console.log(
+        colors.yellow(
+          `  ⚠ Ignoring invalid checkpoint state for loop "${loopStep.name}"`
+        )
+      );
+      config.checkpointStore?.clearLoopProgress(loopStep.id);
+    }
+  }
 
   console.log(
     colors.blue(
@@ -135,19 +244,39 @@ async function executeLoopStep(
     )
   );
 
-  for (let iteration = 1; iteration <= maxIterations; iteration++) {
+  for (
+    let iteration = startIteration;
+    iteration <= maxIterations;
+    iteration++
+  ) {
     lastIteration = iteration;
     console.log(
       colors.cyan(`\n  ↻ Loop iteration ${iteration}/${maxIterations}`)
     );
 
-    for (const subStep of loopStep.steps) {
+    const subStepStartIndex =
+      iteration === startIteration ? resumeSubStepIndex : 0;
+
+    for (
+      let subStepIndex = subStepStartIndex;
+      subStepIndex < loopStep.steps.length;
+      subStepIndex++
+    ) {
+      const subStep = loopStep.steps[subStepIndex];
       // Check `if` condition on sub-steps (mirrors top-level skip in run.ts)
       if (shouldSkipStep(subStep, config.stepsOutput)) {
         console.log(
           colors.gray(`  ⏭ Skipping step "${subStep.name}" (condition not met)`)
         );
         config.stepsOutput.set(subStep.id, new Map());
+        skippedSubSteps.add(subStep.id);
+        persistLoopProgress(
+          loopStep,
+          config,
+          iteration,
+          subStepIndex + 1,
+          skippedSubSteps
+        );
         continue;
       }
 
@@ -159,6 +288,14 @@ async function executeLoopStep(
 
       // Store sub-step outputs
       config.stepsOutput.set(subStep.id, subResult.outputs);
+      skippedSubSteps.delete(subStep.id);
+      persistLoopProgress(
+        loopStep,
+        config,
+        iteration,
+        subStepIndex + 1,
+        skippedSubSteps
+      );
 
       if (!subResult.success) {
         lastError = subResult.error;
@@ -186,7 +323,14 @@ async function executeLoopStep(
       console.log(colors.green(`  ✓ Loop condition met, exiting loop`));
     }
 
-    if (conditionMet) break;
+    if (conditionMet) {
+      config.checkpointStore?.clearLoopProgress(loopStep.id);
+      break;
+    }
+
+    if (iteration < maxIterations) {
+      persistLoopProgress(loopStep, config, iteration + 1, 0, skippedSubSteps);
+    }
   }
 
   const duration = (performance.now() - start) / 1000;
@@ -195,6 +339,7 @@ async function executeLoopStep(
   outputs.set('condition_met', String(conditionMet));
 
   if (!conditionMet) {
+    config.checkpointStore?.clearLoopProgress(loopStep.id);
     console.log(
       colors.yellow(
         `  ⚠ Loop "${loopStep.name}" reached max iterations (${maxIterations}) without condition being met`
