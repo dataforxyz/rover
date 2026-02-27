@@ -12,6 +12,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import {
   ContainerBackend,
+  getWorktreeGitMounts,
   resolveAgentImage,
   warnIfCustomImage,
   tmpUserGroupFiles,
@@ -159,6 +160,7 @@ export class PodmanSandbox extends Sandbox {
       `${userInfo_.uid}:${userInfo_.gid}`,
       '-v',
       `${worktreePath}:/workspace:Z,rw`,
+      ...getWorktreeGitMounts(worktreePath),
       '-v',
       `${iteration.iterationPath}:/output:Z,rw`
     );
@@ -465,6 +467,7 @@ export class PodmanSandbox extends Sandbox {
       `${userInfo_.uid}:${userInfo_.gid}`,
       '-v',
       `${worktreePath}:/workspace:Z,rw`,
+      ...getWorktreeGitMounts(worktreePath),
       '-v',
       `${iteration.iterationPath}:/output:Z,rw`,
       ...containerMounts,
