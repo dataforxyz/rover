@@ -1,4 +1,4 @@
-From 430fde526c27aa842822138bcfd7c575883c186d Mon Sep 17 00:00:00 2001
+From 035c984a82100dd14f8ea9bd47a6760d04bde112 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Wed, 25 Feb 2026 21:13:02 -0600
 Subject: [PATCH] fix: isInstalled robustness and composer checksum

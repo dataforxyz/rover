@@ -1,4 +1,4 @@
-From b4ddc1459951493810c660a67094657d93b4ef30 Mon Sep 17 00:00:00 2001
+From 3c565e5174a9f30f1ce07d090963ecfdaf0bd845 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Thu, 26 Feb 2026 19:06:34 -0600
 Subject: [PATCH] feat: show context entries in inspect command
@@ -53,7 +53,7 @@ index e351306..78cb0a1 100644
        showTitle('Workspace');
  
 diff --git a/packages/cli/src/commands/task.ts b/packages/cli/src/commands/task.ts
-index a3f4aab..f03b541 100644
+index 793bf98..c70951d 100644
 --- a/packages/cli/src/commands/task.ts
 +++ b/packages/cli/src/commands/task.ts
 @@ -463,6 +463,22 @@ const createTaskForAgent = async (

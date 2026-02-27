@@ -1,4 +1,4 @@
-From 9c7f05f6bcb737b36538f29d7e5948801573a83a Mon Sep 17 00:00:00 2001
+From 2be4dc0359ce0e249b642be57ffdf7fa361d1ed8 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Wed, 25 Feb 2026 21:12:28 -0600
 Subject: [PATCH] feat: add rover rebase command with AI conflict resolution

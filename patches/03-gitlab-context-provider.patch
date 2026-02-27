@@ -1,4 +1,4 @@
-From 08ccf59445405bf8a69de8ad6dd7d23138d1492e Mon Sep 17 00:00:00 2001
+From 205a79f70c160415bd65c6529d44b8b125462648 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Wed, 25 Feb 2026 21:14:14 -0600
 Subject: [PATCH] feat: add GitLab support as context provider
@@ -367,10 +367,10 @@ index 0000000..05c0ac0
 +  });
 +});
 diff --git a/packages/cli/src/lib/setup.ts b/packages/cli/src/lib/setup.ts
-index 877b73e..ebb2d0f 100644
+index 37212b9..c1dfac1 100644
 --- a/packages/cli/src/lib/setup.ts
 +++ b/packages/cli/src/lib/setup.ts
-@@ -249,7 +249,6 @@ source $HOME/.profile`;
+@@ -250,7 +250,6 @@ source $HOME/.profile`;
      // --- package installation ---
      let installAllPackages = '';
      if (!useCachedImage) {

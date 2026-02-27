@@ -1,4 +1,4 @@
-From fd1b3a294a2900dc852d38c1d85de756616ff80f Mon Sep 17 00:00:00 2001
+From a013c50ca9b0ce3cdc5a0766a1dbcdcf0a51a775 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Wed, 25 Feb 2026 22:19:28 -0600
 Subject: [PATCH] feat: add command step, loop step, and swe-tdd workflow
@@ -46,7 +46,7 @@ refactoring, and comprehensive test coverage.
  create mode 100644 packages/cli/src/lib/workflows/swe-tdd.yml
 
 diff --git a/packages/agent/src/commands/run.ts b/packages/agent/src/commands/run.ts
-index 51cc3fe..082d284 100644
+index ae6b46d..d6a2322 100644
 --- a/packages/agent/src/commands/run.ts
 +++ b/packages/agent/src/commands/run.ts
 @@ -15,12 +15,15 @@ import {
@@ -101,7 +101,7 @@ index 51cc3fe..082d284 100644
    }
  };
  
-@@ -442,6 +457,32 @@ export const runCommand = async (
+@@ -426,6 +441,32 @@ export const runCommand = async (
              return await stepRunner.run(options.output);
            }
          },
@@ -134,7 +134,7 @@ index 51cc3fe..082d284 100644
        };
  
        const onStepComplete: OnStepComplete = (step, result, context) => {
-@@ -468,6 +509,8 @@ export const runCommand = async (
+@@ -452,6 +493,8 @@ export const runCommand = async (
          }
  
          showTitle('🎉 Workflow Execution Summary');
@@ -1324,7 +1324,7 @@ index 0000000..940212e
 +  });
 +});
 diff --git a/packages/agent/src/lib/acp-runner.ts b/packages/agent/src/lib/acp-runner.ts
-index 6d6924a..13efb69 100644
+index 3b008a3..d27fd05 100644
 --- a/packages/agent/src/lib/acp-runner.ts
 +++ b/packages/agent/src/lib/acp-runner.ts
 @@ -16,6 +16,7 @@ import {
@@ -1381,7 +1381,7 @@ index 6d6924a..13efb69 100644
  export class ACPRunner {
    private workflow: WorkflowManager;
    private inputs: Map<string, string>;
-@@ -464,6 +469,12 @@ export class ACPRunner {
+@@ -481,6 +486,12 @@ export class ACPRunner {
      const outputs = new Map<string, string>();
      const step = this.workflow.getStep(stepId);
  
@@ -1394,7 +1394,7 @@ index 6d6924a..13efb69 100644
      // Calculate current progress
      const stepIndex = this.workflow.steps.findIndex(
        (s: WorkflowStep) => s.id === stepId
-@@ -595,78 +606,39 @@ export class ACPRunner {
+@@ -624,78 +635,39 @@ export class ACPRunner {
     * to avoid the agent trying to read from stale file locations.
     */
    private buildACPPrompt(step: WorkflowAgentStep): string {
@@ -1501,7 +1501,7 @@ index 6d6924a..13efb69 100644
      const outputInstructions = this.generateOutputInstructions(step);
      prompt += outputInstructions;
  
-@@ -677,9 +649,10 @@ export class ACPRunner {
+@@ -706,9 +678,10 @@ export class ACPRunner {
      }
  
      // Display warnings if any
@@ -1867,7 +1867,7 @@ index 0000000..226892a
 +  return { text: result, warnings };
 +}
 diff --git a/packages/agent/src/lib/runner.ts b/packages/agent/src/lib/runner.ts
-index 20c0238..3cb7f1e 100644
+index 59f2d61..6ce6621 100644
 --- a/packages/agent/src/lib/runner.ts
 +++ b/packages/agent/src/lib/runner.ts
 @@ -27,6 +27,8 @@ import type {
@@ -1879,7 +1879,7 @@ index 20c0238..3cb7f1e 100644
  import {
    parseAgentError,
    isWaitingForAuthentication,
-@@ -80,8 +82,14 @@ export class Runner {
+@@ -73,8 +75,14 @@ export class Runner {
      private currentStepIndex: number = 0,
      private logger?: JsonlLogger
    ) {
@@ -1896,7 +1896,7 @@ index 20c0238..3cb7f1e 100644
  
      // Determine which tool to use
      const stepTool = this.workflow.getStepTool(stepId, this.defaultTool);
-@@ -712,7 +720,7 @@ export class Runner {
+@@ -705,7 +713,7 @@ export class Runner {
        fileOutputs.forEach((output: WorkflowOutput) => {
          instructions += `- **${output.name}**: ${output.description}\n`;
  
@@ -1905,7 +1905,7 @@ index 20c0238..3cb7f1e 100644
            // Gemini and Qwen refuse to write files using relative paths, so we must
            // provide an absolute path in the prompt.
            const absolutePath = resolve(output.filename!);
-@@ -758,86 +766,43 @@ export class Runner {
+@@ -751,86 +759,43 @@ export class Runner {
     * Adds output instructions based on the step's expected outputs.
     */
    prompt(): string {
@@ -2237,7 +2237,7 @@ index 0000000..bf5336a
 +  };
 +}
 diff --git a/packages/cli/E2E_TESTS.md b/packages/cli/E2E_TESTS.md
-index db49df8..38b6a98 100644
+index 628679f..bae79a5 100644
 --- a/packages/cli/E2E_TESTS.md
 +++ b/packages/cli/E2E_TESTS.md
 @@ -5,7 +5,6 @@ This end to end testing description focuses on the `rover` CLI.
@@ -2248,7 +2248,7 @@ index db49df8..38b6a98 100644
  - [Task Creation](#task-creation)
  - [Task Listing](#task-listing)
  - [Task Inspection](#task-inspection)
-@@ -55,13 +54,12 @@ default when running non-interactively with the `--yes` flag.
+@@ -56,13 +55,12 @@ default when running non-interactively with the `--yes` flag.
  
  Rover must inspect the repository to identify the programming languages,
  package managers, and task managers in use. For languages, it must
@@ -2267,7 +2267,7 @@ index db49df8..38b6a98 100644
  must detect Make, Just, and Task based on the presence of `Makefile`,
  `Justfile`, and `Taskfile.yml` respectively. Polyglot projects with
  multiple languages, package managers, and task managers must be detected
-@@ -109,25 +107,6 @@ recognize the project as initialized.
+@@ -110,25 +108,6 @@ recognize the project as initialized.
  
  ---
  
@@ -2293,7 +2293,7 @@ index db49df8..38b6a98 100644
  ## Task Creation
  
  The `rover task` command creates a new task, assigns it to an AI agent,
-@@ -684,29 +663,6 @@ about a specific workflow, including its name, description, inputs, and
+@@ -685,29 +664,6 @@ about a specific workflow, including its name, description, inputs, and
  a step-by-step diagram of the workflow flow. The `--raw` flag must show
  the raw YAML content of the workflow definition.
  
@@ -2869,7 +2869,7 @@ index 1b2bf1a..acaf6c8 100644
            expect(step.outputs).toBeDefined();
            expect(Array.isArray(step.outputs)).toBe(true);
 diff --git a/packages/cli/src/lib/entrypoint.sh b/packages/cli/src/lib/entrypoint.sh
-index 54ed1d4..810abd2 100644
+index 2992342..3649740 100644
 --- a/packages/cli/src/lib/entrypoint.sh
 +++ b/packages/cli/src/lib/entrypoint.sh
 @@ -10,8 +10,6 @@
@@ -2882,14 +2882,14 @@ index 54ed1d4..810abd2 100644
  # Some tools might be installed under /root/local/.bin conditionally
  # depending on the chosen agent and requirements, make this directory
 diff --git a/packages/cli/src/lib/setup.ts b/packages/cli/src/lib/setup.ts
-index ebb2d0f..a7c58d8 100644
+index c1dfac1..7918fde 100644
 --- a/packages/cli/src/lib/setup.ts
 +++ b/packages/cli/src/lib/setup.ts
-@@ -305,7 +305,7 @@ ${installScripts.join('\n')}
+@@ -306,7 +306,7 @@ ${installScripts.join('\n')}
        agentInstallSection = `# Agent-specific CLI installation and credential setup
  echo -e "\\n📦 Installing Agent CLI and setting up credentials"
  # Pass the environment variables to ensure it loads the right credentials
--sudo -E rover-agent install $AGENT
+-sudo rover-agent install $AGENT
 +sudo -E rover-agent install $AGENT --user-dir $HOME
  # Set the right permissions after installing and moving credentials
  sudo chown -R $(id -u):$(id -g) $HOME
@@ -3690,7 +3690,7 @@ index 534fed8..68445f6 100644
      it('should accept empty strings in string fields', () => {
        // Zod z.string() accepts empty strings by default
 diff --git a/packages/core/src/files/workflow.ts b/packages/core/src/files/workflow.ts
-index 83a78a9..a83376a 100644
+index fa959ea..ca80137 100644
 --- a/packages/core/src/files/workflow.ts
 +++ b/packages/core/src/files/workflow.ts
 @@ -10,6 +10,7 @@ import {
@@ -3701,7 +3701,7 @@ index 83a78a9..a83376a 100644
    isCommandStep,
    type Workflow,
    type WorkflowInput,
-@@ -42,8 +43,16 @@ export type AgentStepExecutor = (
+@@ -46,8 +47,16 @@ export type AgentStepExecutor = (
    stepsOutput: Map<string, Map<string, string>>
  ) => Promise<StepResult>;
  
@@ -3718,7 +3718,7 @@ index 83a78a9..a83376a 100644
  }
  
  export type OnStepComplete = (
-@@ -222,10 +231,7 @@ export class WorkflowManager {
+@@ -226,10 +235,7 @@ export class WorkflowManager {
     * Only works with WorkflowAgentStep - other step types don't have tool property
     */
    getStepTool(stepId: string, defaultTool?: string): string | undefined {
@@ -3730,7 +3730,7 @@ index 83a78a9..a83376a 100644
  
      // Check if this is an agent step (only agent steps have tool/model)
      if (!isAgentStep(step)) {
-@@ -242,10 +248,7 @@ export class WorkflowManager {
+@@ -246,10 +252,7 @@ export class WorkflowManager {
     * Only works with WorkflowAgentStep - other step types don't have model property
     */
    getStepModel(stepId: string, defaultModel?: string): string | undefined {
@@ -3742,7 +3742,7 @@ index 83a78a9..a83376a 100644
  
      // Check if this is an agent step (only agent steps have tool/model)
      if (!isAgentStep(step)) {
-@@ -258,17 +261,61 @@ export class WorkflowManager {
+@@ -262,17 +265,61 @@ export class WorkflowManager {
    }
  
    /**
@@ -3807,7 +3807,7 @@ index 83a78a9..a83376a 100644
    /**
     * Get agent step by ID
     * Throws if the step is not an agent step
-@@ -325,8 +372,8 @@ export class WorkflowManager {
+@@ -329,8 +376,8 @@ export class WorkflowManager {
      position: 'before' | 'after' = 'before',
      referenceStepId?: string
    ): void {
@@ -3818,7 +3818,7 @@ index 83a78a9..a83376a 100644
      if (existingStep) {
        throw new Error(
          `Cannot inject step: a step with ID "${step.id}" already exists`
-@@ -343,17 +390,17 @@ export class WorkflowManager {
+@@ -347,17 +394,17 @@ export class WorkflowManager {
        return;
      }
  
@@ -3842,7 +3842,7 @@ index 83a78a9..a83376a 100644
      }
    }
  
-@@ -512,12 +559,36 @@ export class WorkflowManager {
+@@ -516,12 +563,36 @@ export class WorkflowManager {
  
      for (let stepIndex = 0; stepIndex < this._steps.length; stepIndex++) {
        const step = this._steps[stepIndex];
@@ -3881,7 +3881,7 @@ index 83a78a9..a83376a 100644
        } else if (isAgentStep(step)) {
          result = await runner.runAgentStep(step, stepIndex, stepsOutput);
        } else {
-@@ -535,9 +606,11 @@ export class WorkflowManager {
+@@ -539,9 +610,11 @@ export class WorkflowManager {
          totalDuration,
        });
  
@@ -3896,7 +3896,7 @@ index 83a78a9..a83376a 100644
          const continueOnError = this.data.config?.continueOnError || false;
          if (!continueOnError) {
            console.log(
-@@ -554,7 +627,6 @@ export class WorkflowManager {
+@@ -558,7 +631,6 @@ export class WorkflowManager {
                `\n⚠ Step '${step.name}' failed but continueOnError is true. Continuing with next step.`
              )
            );
@@ -3904,7 +3904,7 @@ index 83a78a9..a83376a 100644
          }
        }
      }
-@@ -570,6 +642,46 @@ export class WorkflowManager {
+@@ -574,6 +646,46 @@ export class WorkflowManager {
      };
    }
  
@@ -3952,10 +3952,10 @@ index 83a78a9..a83376a 100644
     * Validate provided inputs against workflow requirements
     * @param providedInputs - Map of input name to value
 diff --git a/packages/core/src/git.ts b/packages/core/src/git.ts
-index cadcbdc..732030c 100644
+index c04ca92..61c0aaa 100644
 --- a/packages/core/src/git.ts
 +++ b/packages/core/src/git.ts
-@@ -442,6 +442,7 @@ export class Git {
+@@ -443,6 +443,7 @@ export class Git {
      try {
        launchSync('git', ['rebase', onto], {
          cwd: options.worktreePath ?? this.cwd,
@@ -4173,7 +4173,7 @@ index f9e8a37..76c7900 100644
 -- 
 2.53.0
 
-From 917fa6ad0e5816d770da0f89a0bd60f063ba0e3b Mon Sep 17 00:00:00 2001
+From 04c76eed6e94ec035bf3a3445beb9f7fec5d95a3 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Thu, 26 Feb 2026 18:34:46 -0600
 Subject: [PATCH] fix: swe-tdd workflow non-interactive mode and input handling
@@ -4191,10 +4191,10 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
  3 files changed, 19 insertions(+), 12 deletions(-)
 
 diff --git a/packages/cli/src/commands/task.ts b/packages/cli/src/commands/task.ts
-index 793bf98..a3f4aab 100644
+index c70951d..f03b541 100644
 --- a/packages/cli/src/commands/task.ts
 +++ b/packages/cli/src/commands/task.ts
-@@ -1018,6 +1018,15 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
+@@ -1034,6 +1034,15 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
            continue;
          }
  
@@ -4211,10 +4211,10 @@ index 793bf98..a3f4aab 100644
          switch (input.type) {
            case 'string':
 diff --git a/packages/cli/src/lib/setup.ts b/packages/cli/src/lib/setup.ts
-index a7c58d8..75ceb90 100644
+index 7918fde..dc28579 100644
 --- a/packages/cli/src/lib/setup.ts
 +++ b/packages/cli/src/lib/setup.ts
-@@ -509,7 +509,10 @@ echo "======================================="
+@@ -520,7 +520,10 @@ echo "======================================="
      // Use the current iteration's expanded title/description when available,
      // falling back to the original task-level values for the first iteration.
      const currentIteration = this.task.getLastIteration();
@@ -4299,7 +4299,7 @@ index ea1a54c..31be415 100644
 -- 
 2.53.0
 
-From 2d684ce7ab4f6cda34798218ccd321720f6dc439 Mon Sep 17 00:00:00 2001
+From 2fdb706fb6d8ecdbf8673bd52a779d205f4cb05e Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Fri, 27 Feb 2026 11:54:51 -0600
 Subject: [PATCH] fix: add review & fix loop to swe-tdd workflow to prevent
@@ -4652,7 +4652,7 @@ index 31be415..cbb5614 100644
 -- 
 2.53.0
 
-From 718569c326a8f63c45cb5f94d1b19bebb394adae Mon Sep 17 00:00:00 2001
+From 24a95d8bd6f666ec7b423f04312a13162b861d4e Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Fri, 27 Feb 2026 12:18:24 -0600
 Subject: [PATCH] feat: add checkpoint commits and circle detection to workflow
@@ -5092,10 +5092,10 @@ index cbb5614..87466e8 100644
      type: agent
      name: 'Summary'
 diff --git a/packages/core/src/files/workflow.ts b/packages/core/src/files/workflow.ts
-index a83376a..72b2295 100644
+index ca80137..ffa7e88 100644
 --- a/packages/core/src/files/workflow.ts
 +++ b/packages/core/src/files/workflow.ts
-@@ -643,13 +643,27 @@ export class WorkflowManager {
+@@ -647,13 +647,27 @@ export class WorkflowManager {
    }
  
    /**
@@ -5227,7 +5227,7 @@ index 353c115..9c057c8 100644
 -- 
 2.53.0
 
-From 66122c86d1589714953d6538bbccde7ce72bc954 Mon Sep 17 00:00:00 2001
+From ebe27567fcce300b0f19626a742eb849178762dc Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Fri, 27 Feb 2026 12:33:57 -0600
 Subject: [PATCH] feat: add build step and scope review to changed code in
@@ -5409,7 +5409,7 @@ index 87466e8..4508128 100644
 -- 
 2.53.0
 
-From 7646338e6ba26d7f598c24758cc40b8076cdffd9 Mon Sep 17 00:00:00 2001
+From 14b69679cc76c343bc44a2084be2ac359621578d Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Fri, 27 Feb 2026 12:55:55 -0600
 Subject: [PATCH] refactor: rename squashCheckpointCommits to

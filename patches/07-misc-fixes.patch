@@ -1,4 +1,4 @@
-From 5e839cf090ebae6375a0295087df88c0096464fc Mon Sep 17 00:00:00 2001
+From 56048647d54bca6883284d8bd4202b3377bb2046 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Thu, 26 Feb 2026 19:16:05 -0600
 Subject: [PATCH] fix: clamp progress bar fill to prevent negative repeat count
@@ -28,7 +28,7 @@ index 41ed678..a3a6360 100644
 -- 
 2.53.0
 
-From 1338edb5336ed2a3e99593be9b49064d33dc6622 Mon Sep 17 00:00:00 2001
+From bbf0689d8a1c568858bb28874c76cc293db36b05 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Thu, 26 Feb 2026 19:43:33 -0600
 Subject: [PATCH] fix: use bash and source .profile in command runner for
@@ -184,7 +184,7 @@ index 07961f5..af520a4 100644
 -- 
 2.53.0
 
-From 82ab290484d580677c9d103f333ee095fad2310e Mon Sep 17 00:00:00 2001
+From b40bf1344f0cd653760100ab8d5c254345a888d1 Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Thu, 26 Feb 2026 20:16:11 -0600
 Subject: [PATCH] fix: return directory listing when ACP readTextFile is called
@@ -200,7 +200,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
  1 file changed, 45 insertions(+), 11 deletions(-)
 
 diff --git a/packages/agent/src/lib/acp-client.ts b/packages/agent/src/lib/acp-client.ts
-index 7db1ef7..b87380c 100644
+index 7b200a6..2800bd6 100644
 --- a/packages/agent/src/lib/acp-client.ts
 +++ b/packages/agent/src/lib/acp-client.ts
 @@ -22,7 +22,13 @@ import {
@@ -218,7 +218,7 @@ index 7db1ef7..b87380c 100644
  import { dirname } from 'node:path';
  import { generateRandomId, VERBOSE } from 'rover-core';
  
-@@ -251,6 +257,24 @@ export class ACPClient implements Client {
+@@ -276,6 +282,24 @@ export class ACPClient implements Client {
      throw RequestError.resourceNotFound(path);
    }
  
@@ -243,7 +243,7 @@ index 7db1ef7..b87380c 100644
    readTextFile?(params: ReadTextFileRequest): Promise<ReadTextFileResponse> {
      if (VERBOSE) {
        console.log(
-@@ -270,17 +294,27 @@ export class ACPClient implements Client {
+@@ -295,17 +319,27 @@ export class ACPClient implements Client {
          );
        }
      } catch (error) {

@@ -1,4 +1,4 @@
-From 56051af33ef0c2bf1c60ebbe66e8af863be959f6 Mon Sep 17 00:00:00 2001
+From 06af70679edd22cb159168daef917ad64707b7eb Mon Sep 17 00:00:00 2001
 From: Ben U <dataforxyz@gmail.com>
 Date: Thu, 26 Feb 2026 19:05:57 -0600
 Subject: [PATCH] fix: rover diff shows no changes when task has only untracked
@@ -114,7 +114,7 @@ index e69c423..1759d48 100644
  
            const diffOutput = diffResult.stdout?.toString();
 diff --git a/packages/core/src/git.ts b/packages/core/src/git.ts
-index 732030c..61c0aaa 100644
+index cadcbdc..c04ca92 100644
 --- a/packages/core/src/git.ts
 +++ b/packages/core/src/git.ts
 @@ -341,6 +341,7 @@ export class Git {
