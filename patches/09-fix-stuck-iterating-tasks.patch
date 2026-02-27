@@ -1,0 +1,211 @@
+From 071b9c4c3db053d895e2c3bf7e2556abf6613357 Mon Sep 17 00:00:00 2001
+From: Ben U <dataforxyz@gmail.com>
+Date: Fri, 27 Feb 2026 13:42:36 -0600
+Subject: [PATCH 17/17] fix: allow restart of stuck ITERATING tasks from
+ interrupted cache init
+
+When Docker image cache is invalidated between iterations, the two-phase
+createAndStart() can be interrupted during Phase 1, leaving tasks
+permanently stuck in ITERATING status with no recovery path.
+
+- Allow `restart` command to handle ITERATING tasks (same dead-container
+  check as IN_PROGRESS)
+- Reset task to FAILED on sandbox creation failure in iterate catch block
+- Add defensive initMode reset in docker/podman Phase 1 catch blocks
+- Add tests for ITERATING task restart (dead + running container cases)
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../src/commands/__tests__/restart.test.ts    | 80 ++++++++++++++++++-
+ packages/cli/src/commands/iterate.ts          |  8 ++
+ packages/cli/src/commands/restart.ts          | 10 +--
+ packages/cli/src/lib/sandbox/docker.ts        |  1 +
+ packages/cli/src/lib/sandbox/podman.ts        |  1 +
+ 5 files changed, 94 insertions(+), 6 deletions(-)
+
+diff --git a/packages/cli/src/commands/__tests__/restart.test.ts b/packages/cli/src/commands/__tests__/restart.test.ts
+index fea3a97..9c84e9c 100644
+--- a/packages/cli/src/commands/__tests__/restart.test.ts
++++ b/packages/cli/src/commands/__tests__/restart.test.ts
+@@ -366,6 +366,84 @@ describe('restart command', async () => {
+       );
+     });
+ 
++    it('should allow restarting ITERATING tasks when container is dead', async () => {
++      const { createSandbox } = await import('../../lib/sandbox/index.js');
++      const mockCreateSandbox = vi.mocked(createSandbox);
++
++      // Mock sandbox to report container as exited
++      mockCreateSandbox.mockResolvedValue({
++        createAndStart: vi.fn().mockResolvedValue('new-container-id'),
++        inspect: vi.fn().mockResolvedValue({ status: 'exited', exitCode: 1 }),
++      } as any);
++
++      const taskId = 793;
++      const taskDir = join(testDir, '.rover', 'tasks', taskId.toString());
++
++      const task = TaskDescriptionManager.create(taskDir, {
++        id: taskId,
++        title: 'Test Task',
++        description: 'A test task',
++        inputs: new Map(),
++        workflowName: 'swe',
++      });
++
++      // Set to ITERATING to simulate a stuck task from interrupted cache init
++      task.markInProgress();
++      task.markIterating();
++      expect(task.status).toBe('ITERATING');
++
++      // Restart should succeed because container is dead
++      await restartCommand(taskId.toString(), { json: true });
++
++      const reloadedTask = TaskDescriptionManager.load(taskDir, taskId);
++      expect(reloadedTask.status).toBe('IN_PROGRESS');
++      expect(reloadedTask.restartCount).toBe(1);
++    });
++
++    it('should reject restarting ITERATING tasks when container is still running', async () => {
++      const { exitWithError } = await import('../../utils/exit.js');
++      const mockExitWithError = vi.mocked(exitWithError);
++      const { createSandbox } = await import('../../lib/sandbox/index.js');
++      const mockCreateSandbox = vi.mocked(createSandbox);
++
++      // Mock sandbox to report container as running
++      mockCreateSandbox.mockResolvedValue({
++        createAndStart: vi.fn().mockResolvedValue('mock-container-id'),
++        inspect: vi.fn().mockResolvedValue({ status: 'running', exitCode: 0 }),
++      } as any);
++
++      const taskId = 794;
++      const taskDir = join(testDir, '.rover', 'tasks', taskId.toString());
++
++      const task = TaskDescriptionManager.create(taskDir, {
++        id: taskId,
++        title: 'Test Task',
++        description: 'A test task',
++        inputs: new Map(),
++        workflowName: 'swe',
++      });
++
++      // Set to ITERATING
++      task.markInProgress();
++      task.markIterating();
++      expect(task.status).toBe('ITERATING');
++
++      // Try to restart — should be rejected
++      await restartCommand(taskId.toString(), { json: true });
++
++      expect(mockExitWithError).toHaveBeenCalledWith(
++        expect.objectContaining({
++          error: expect.stringContaining('still running'),
++        }),
++        expect.objectContaining({
++          tips: expect.arrayContaining([
++            'The container for this task is still running',
++          ]),
++          telemetry: expect.anything(),
++        })
++      );
++    });
++
+     it('should reject restarting tasks in COMPLETED status', async () => {
+       const { exitWithError } = await import('../../utils/exit.js');
+       const mockExitWithError = vi.mocked(exitWithError);
+@@ -396,7 +474,7 @@ describe('restart command', async () => {
+         }),
+         expect.objectContaining({
+           tips: expect.arrayContaining([
+-            'Only NEW, FAILED, and stuck IN_PROGRESS tasks can be restarted',
++            'Only NEW, FAILED, and stuck IN_PROGRESS/ITERATING tasks can be restarted',
+           ]),
+           telemetry: expect.anything(),
+         })
+diff --git a/packages/cli/src/commands/iterate.ts b/packages/cli/src/commands/iterate.ts
+index b7f3bb9..12c98b6 100644
+--- a/packages/cli/src/commands/iterate.ts
++++ b/packages/cli/src/commands/iterate.ts
+@@ -548,6 +548,14 @@ const iterateCommand = async (
+         telemetry,
+       });
+     } catch (error) {
++      // If the task was marked ITERATING but sandbox creation failed,
++      // reset it to FAILED so it's immediately recoverable without needing `restart`
++      if (task && task.isIterating()) {
++        task.markFailed(
++          error instanceof Error ? error.message : 'Iteration failed to start'
++        );
++      }
++
+       if (error instanceof TaskNotFoundError) {
+         result.error = error.message;
+       } else if (error instanceof Error) {
+diff --git a/packages/cli/src/commands/restart.ts b/packages/cli/src/commands/restart.ts
+index 2e0ba9b..4d15fe9 100644
+--- a/packages/cli/src/commands/restart.ts
++++ b/packages/cli/src/commands/restart.ts
+@@ -80,8 +80,8 @@ const restartCommand = async (
+ 
+     // Check if task is in a restartable status
+     if (!task.isNew() && !task.isFailed()) {
+-      if (task.isInProgress()) {
+-        // Allow restarting IN_PROGRESS tasks if the container is dead
++      if (task.isInProgress() || task.isIterating()) {
++        // Allow restarting IN_PROGRESS/ITERATING tasks if the container is dead
+         try {
+           const sandbox = await createSandbox(task, undefined, {
+             projectPath: project.path,
+@@ -89,7 +89,7 @@ const restartCommand = async (
+           const state = await sandbox.inspect();
+           // Container is still running — reject the restart
+           if (state && state.status === 'running') {
+-            jsonOutput.error = `Task ${taskId} is IN_PROGRESS and its container is still running`;
++            jsonOutput.error = `Task ${taskId} is ${task.status} and its container is still running`;
+             await exitWithError(jsonOutput, {
+               tips: [
+                 'The container for this task is still running',
+@@ -109,7 +109,7 @@ const restartCommand = async (
+         jsonOutput.error = `Task ${taskId} is not in NEW or FAILED status (current: ${task.status})`;
+         await exitWithError(jsonOutput, {
+           tips: [
+-            'Only NEW, FAILED, and stuck IN_PROGRESS tasks can be restarted',
++            'Only NEW, FAILED, and stuck IN_PROGRESS/ITERATING tasks can be restarted',
+             'Use ' +
+               colors.cyan(`rover inspect ${taskId}`) +
+               colors.gray(' to find out the current task status'),
+@@ -293,7 +293,7 @@ export { restartCommand };
+ 
+ export default {
+   name: 'restart',
+-  description: 'Restart a new, failed, or stuck in-progress task',
++  description: 'Restart a new, failed, or stuck in-progress/iterating task',
+   requireProject: true,
+   action: restartCommand,
+ } satisfies CommandDefinition;
+diff --git a/packages/cli/src/lib/sandbox/docker.ts b/packages/cli/src/lib/sandbox/docker.ts
+index e609e92..0f3b56e 100644
+--- a/packages/cli/src/lib/sandbox/docker.ts
++++ b/packages/cli/src/lib/sandbox/docker.ts
+@@ -335,6 +335,7 @@ export class DockerSandbox extends Sandbox {
+           throw new Error('Init container did not exit successfully');
+         }
+       } catch (err) {
++        this.initMode = false;
+         this.processManager?.failLastItem();
+         this.processManager?.finish();
+         throw err;
+diff --git a/packages/cli/src/lib/sandbox/podman.ts b/packages/cli/src/lib/sandbox/podman.ts
+index 7be4f17..aacdf09 100644
+--- a/packages/cli/src/lib/sandbox/podman.ts
++++ b/packages/cli/src/lib/sandbox/podman.ts
+@@ -318,6 +318,7 @@ export class PodmanSandbox extends Sandbox {
+           throw new Error('Init container did not exit successfully');
+         }
+       } catch (err) {
++        this.initMode = false;
+         this.processManager?.failLastItem();
+         this.processManager?.finish();
+         throw err;
+-- 
+2.53.0
+
