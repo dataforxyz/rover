@@ -7,7 +7,7 @@ import {
   getVersion,
   ProjectConfigManager,
 } from 'rover-core';
-import { ContainerBackend } from './container-common.js';
+import { ContainerBackend, resolveInitScriptPath } from './container-common.js';
 
 /**
  * Build a process env with DOCKER_HOST set when the sandbox metadata
@@ -51,6 +51,8 @@ export interface SetupHashInputs {
   projects?: Array<{
     name: string;
     path: string;
+    repository?: string;
+    ref?: string;
     languages?: string[];
     packageManagers?: string[];
     taskManagers?: string[];
@@ -90,6 +92,8 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
       .map(p => ({
         name: p.name,
         path: p.path,
+        repository: p.repository || '',
+        ref: p.ref || '',
         languages: [...(p.languages || [])].sort(),
         packageManagers: [...(p.packageManagers || [])].sort(),
         taskManagers: [...(p.taskManagers || [])].sort(),
@@ -202,6 +206,12 @@ export function checkImageCache(
   agentImage: string,
   agent: string
 ): { hasCachedImage: boolean; cacheTag: string } {
+  const languages = projectConfig.allLanguages ?? projectConfig.languages ?? [];
+  const packageManagers =
+    projectConfig.allPackageManagers ?? projectConfig.packageManagers ?? [];
+  const taskManagers =
+    projectConfig.allTaskManagers ?? projectConfig.taskManagers ?? [];
+
   let initScriptContent = '';
   if (projectConfig.initScript) {
     try {
@@ -247,6 +257,8 @@ export function checkImageCache(
       return {
         name: p.name,
         path: p.path,
+        repository: p.repository,
+        ref: p.ref,
         languages: p.languages,
         packageManagers: p.packageManagers,
         taskManagers: p.taskManagers,
@@ -258,9 +270,9 @@ export function checkImageCache(
   const agentImageId = resolveImageId(backend, agentImage);
   const hash = computeSetupHash({
     agentImage: agentImageId,
-    languages: projectConfig.allLanguages,
-    packageManagers: projectConfig.allPackageManagers,
-    taskManagers: projectConfig.allTaskManagers,
+    languages,
+    packageManagers,
+    taskManagers,
     agent,
     roverVersion: getVersion(),
     initScriptContent,

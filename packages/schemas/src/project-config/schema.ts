@@ -132,6 +132,10 @@ export const SubProjectSchema = z.object({
   name: z.string(),
   /** Relative path from workspace root */
   path: z.string(),
+  /** Optional Git repository URL/path to clone into `path` */
+  repository: z.string().optional(),
+  /** Optional branch/tag/commit to checkout after clone */
+  ref: z.string().optional(),
   /** Programming languages used in this sub-project */
   languages: z.array(LanguageSchema).optional(),
   /** Package managers used in this sub-project */

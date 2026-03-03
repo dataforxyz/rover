@@ -199,6 +199,13 @@ export class SetupBuilder {
   }
 
   /**
+   * Safely single-quote a value for shell interpolation.
+   */
+  private shellEscape(value: string): string {
+    return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+  }
+
+  /**
    * Generate and save the setup script to the appropriate task directory
    */
   generateEntrypoint(
@@ -439,6 +446,58 @@ ${scriptBlocks.join('\n')}
       }
     }
 
+    // --- external project repositories ---
+    let projectRepositoriesSection = '';
+    const projectsWithRepositories = (this.projectConfig.projects || []).filter(
+      project => project.repository
+    );
+
+    if (projectsWithRepositories.length > 0) {
+      const syncBlocks = projectsWithRepositories.map(project => {
+        const targetPath = `/workspace/${project.path}`;
+        const escapedName = this.shellEscape(project.name);
+        const escapedPath = this.shellEscape(targetPath);
+        const escapedRepository = this.shellEscape(project.repository!);
+        const escapedRef = project.ref ? this.shellEscape(project.ref) : '';
+
+        const checkoutRef = project.ref
+          ? `
+echo "🔀 Checking out ${project.ref} for ${project.name}"
+if git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout ${escapedRef}
+elif git -C ${escapedPath} rev-parse --verify origin/${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout -B ${escapedRef} origin/${escapedRef}
+else
+  echo "❌ Could not resolve ref ${project.ref} in ${project.name}"
+  safe_exit 1
+fi`
+          : '';
+
+        return `echo "📥 Syncing repository ${project.name}"
+mkdir -p "$(dirname ${escapedPath})"
+if [ ! -d ${escapedPath}/.git ]; then
+  rm -rf ${escapedPath}
+  git clone ${escapedRepository} ${escapedPath}
+else
+  current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
+  if [ "$current_origin" != ${escapedRepository} ]; then
+    echo "❌ Existing repository at ${targetPath} points to a different origin"
+    safe_exit 1
+  fi
+fi
+git -C ${escapedPath} fetch --all --tags --prune || true
+${checkoutRef}
+echo "✅ Repository ${project.name} is ready"`;
+      });
+
+      projectRepositoriesSection = `
+echo -e "\\n======================================="
+echo "📥 Syncing external repositories"
+echo "======================================="
+${syncBlocks.join('\n')}
+`;
+    }
+
     // --- sudoers removal ---
     // Only needed on the first (non-cached) run. The committed image already
     // has this file removed, so the cached image only has the base-image
@@ -519,6 +578,7 @@ echo "======================================="
       agentInstallSection,
       credentialInstallSection,
       mcpConfigSection,
+      projectRepositoriesSection,
       initScriptExecution,
       sudoersRemoval,
       networkConfigSection,
@@ -574,6 +634,8 @@ echo "======================================="
       projects: projects.map(p => ({
         name: p.name,
         path: p.path,
+        repository: p.repository,
+        ref: p.ref,
         languages: p.languages || [],
         packageManagers: p.packageManagers || [],
       })),

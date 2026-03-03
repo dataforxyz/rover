@@ -211,6 +211,60 @@ describe('computeSetupHash', () => {
     expect(a).not.toBe(b);
   });
 
+  it('changes when project repository changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+          },
+        ],
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/backend.git',
+          },
+        ],
+      })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when project ref changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'develop',
+          },
+        ],
+      })
+    );
+    expect(a).not.toBe(b);
+  });
+
   it('changes when project initScriptContent changes', () => {
     const a = computeSetupHash(
       makeInputs({

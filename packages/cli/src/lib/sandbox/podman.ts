@@ -14,6 +14,7 @@ import {
   ContainerBackend,
   getWorktreeGitMounts,
   resolveAgentImage,
+  resolveInitScriptPath,
   warnIfCustomImage,
   tmpUserGroupFiles,
   copyUserGroupFiles,

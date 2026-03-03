@@ -6,6 +6,8 @@ describe('SubProjectSchema', () => {
     const result = SubProjectSchema.parse({
       name: 'backend',
       path: 'packages/backend',
+      repository: 'https://github.com/dataforxyz/backend.git',
+      ref: 'main',
       languages: ['typescript', 'python'],
       packageManagers: ['pnpm', 'pip'],
       taskManagers: ['make'],
@@ -14,6 +16,8 @@ describe('SubProjectSchema', () => {
 
     expect(result.name).toBe('backend');
     expect(result.path).toBe('packages/backend');
+    expect(result.repository).toBe('https://github.com/dataforxyz/backend.git');
+    expect(result.ref).toBe('main');
     expect(result.languages).toEqual(['typescript', 'python']);
     expect(result.packageManagers).toEqual(['pnpm', 'pip']);
     expect(result.taskManagers).toEqual(['make']);
@@ -95,6 +99,8 @@ describe('ProjectConfigSchema with projects', () => {
         {
           name: 'api',
           path: 'packages/api',
+          repository: 'https://github.com/dataforxyz/api.git',
+          ref: 'main',
           languages: ['typescript'],
           packageManagers: ['pnpm'],
         },

@@ -1233,6 +1233,40 @@ describe('ProjectConfigManager - Multi-Project Workspace Support', () => {
     expect(jsonData.projects[0].name).toBe('api');
   });
 
+  it('should preserve project repository metadata', () => {
+    writeFileSync(
+      'rover.json',
+      JSON.stringify(
+        {
+          version: '1.4',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'backend',
+              path: 'backend',
+              repository: 'https://github.com/dataforxyz/backend.git',
+              ref: 'main',
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
+
+    const config = ProjectConfigManager.load(testDir);
+    expect(config.projects?.[0]).toMatchObject({
+      name: 'backend',
+      path: 'backend',
+      repository: 'https://github.com/dataforxyz/backend.git',
+      ref: 'main',
+    });
+  });
+
   it('addProject should not add duplicate projects', () => {
     const config = ProjectConfigManager.create(testDir);
 

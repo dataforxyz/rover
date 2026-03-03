@@ -102,6 +102,32 @@ export function warnIfCustomImage(projectConfig?: ProjectConfigManager): void {
   }
 }
 
+/**
+ * Resolve the path of an init script, looking first under the project
+ * sub-directory (if any) then at the workspace root.
+ */
+export function resolveInitScriptPath(
+  projectRoot: string,
+  scriptPath: string,
+  projectPath?: string
+): string {
+  if (projectPath) {
+    const projectRelative = join(projectRoot, projectPath, scriptPath);
+    if (existsSync(projectRelative)) {
+      return projectRelative;
+    }
+  }
+
+  const rootRelative = join(projectRoot, scriptPath);
+  if (existsSync(rootRelative)) {
+    return rootRelative;
+  }
+
+  return projectPath
+    ? join(projectRoot, projectPath, scriptPath)
+    : rootRelative;
+}
+
 export type CurrentUser = string;
 export type CurrentGroup = string;
 
