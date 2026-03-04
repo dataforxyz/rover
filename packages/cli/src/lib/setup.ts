@@ -423,6 +423,7 @@ echo -e "\\n📦 Done installing MCP servers"`;
     if (!useCachedImage) {
       const allInitScripts = this.projectConfig.allInitScripts;
       if (allInitScripts.length > 0) {
+        const preflightChecks: string[] = [];
         const scriptBlocks: string[] = [];
         for (let i = 0; i < allInitScripts.length; i++) {
           const entry = allInitScripts[i];
@@ -430,12 +431,30 @@ echo -e "\\n📦 Done installing MCP servers"`;
             allInitScripts.length === 1 && !entry.path
               ? '/init-script.sh'
               : `/init-script-${i}.sh`;
+          const escapedMountPath = this.shellEscape(mountPath);
+          const workspaceScriptPath = entry.path
+            ? `/workspace/${entry.path}/${entry.script}`
+            : `/workspace/${entry.script}`;
+          const escapedWorkspaceScriptPath =
+            this.shellEscape(workspaceScriptPath);
+          const escapedDisplayWorkspaceScriptPath =
+            this.escapeForDoubleQuotedShell(workspaceScriptPath);
+          const escapedDisplayMountPath =
+            this.escapeForDoubleQuotedShell(mountPath);
           const escapedDisplayPath = entry.path
             ? this.escapeForDoubleQuotedShell(entry.path)
             : '';
+          const escapedDisplayScript = this.escapeForDoubleQuotedShell(
+            entry.script
+          );
           const label = entry.path ? ` (${escapedDisplayPath})` : '';
-          let block = `echo "🔧 Running initialization script${label}"
-chmod +x ${mountPath}`;
+          const location = entry.path
+            ? `${escapedDisplayPath}/${escapedDisplayScript}`
+            : escapedDisplayScript;
+          preflightChecks.push(`if [ ! -f ${escapedMountPath} ] && [ ! -f ${escapedWorkspaceScriptPath} ]; then
+  missing_init_scripts="${'$'}{missing_init_scripts}\n- ${location} (checked: ${escapedDisplayMountPath}, ${escapedDisplayWorkspaceScriptPath})"
+fi`);
+          let block = `echo "🔧 Running initialization script${label}"`;
           if (entry.path) {
             const escapedProjectPath = this.shellEscape(
               `/workspace/${entry.path}`
@@ -446,8 +465,17 @@ if [ $? -ne 0 ]; then
   safe_exit 1
 fi`;
           }
-          block += `\n/bin/sh ${mountPath}
-if [ $? -eq 0 ]; then
+          block += `\nif [ -f ${escapedMountPath} ]; then
+  chmod +x ${escapedMountPath}
+  /bin/sh ${escapedMountPath}
+elif [ -f ${escapedWorkspaceScriptPath} ]; then
+  chmod +x ${escapedWorkspaceScriptPath}
+  /bin/sh ${escapedWorkspaceScriptPath}
+else
+  echo "❌ Initialization script${label} not found at ${mountPath} or ${escapedDisplayWorkspaceScriptPath}"
+  safe_exit 1
+fi`;
+          block += `\nif [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else
   echo "❌ Initialization script${label} failed"
@@ -462,6 +490,17 @@ fi`;
 echo -e "\\n======================================="
 echo "🔧 Running initialization scripts"
 echo "======================================="
+
+echo "🔎 Validating initialization scripts"
+missing_init_scripts=""
+${preflightChecks.join('\n')}
+if [ -n "$missing_init_scripts" ]; then
+  echo "❌ Missing initialization scripts:"
+  printf "%b\\n" "$missing_init_scripts"
+  safe_exit 1
+fi
+echo "✅ Initialization scripts validated"
+
 ${scriptBlocks.join('\n')}
 `;
       }
@@ -491,10 +530,10 @@ ${scriptBlocks.join('\n')}
         const checkoutRef = project.ref
           ? `
 echo "🔀 Checking out ${escapedDisplayRef} for ${escapedDisplayName}"
-if git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
-  git -C ${escapedPath} checkout ${escapedRef}
-elif git -C ${escapedPath} rev-parse --verify origin/${escapedRef} >/dev/null 2>&1; then
+if git -C ${escapedPath} rev-parse --verify refs/remotes/origin/${escapedRef} >/dev/null 2>&1; then
   git -C ${escapedPath} checkout -B ${escapedRef} origin/${escapedRef}
+elif git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout ${escapedRef}
 else
   echo "❌ Could not resolve ref ${escapedDisplayRef} in ${escapedDisplayName}"
   safe_exit 1
@@ -513,7 +552,10 @@ else
     safe_exit 1
   fi
 fi
-git -C ${escapedPath} fetch --all --tags --prune || true
+if ! git -C ${escapedPath} fetch --all --tags --prune; then
+  echo "❌ Failed to fetch updates for ${escapedDisplayName}"
+  safe_exit 1
+fi
 ${checkoutRef}
 echo "✅ Repository ${escapedDisplayName} is ready"`;
       });

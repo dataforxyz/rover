@@ -77,6 +77,13 @@ describe('SetupBuilder multi-repo projects', () => {
       "git clone 'https://github.com/dataforxyz/frontend.git' '/workspace/frontend'"
     );
     expect(script).toContain('Checking out main for frontend');
+    expect(script).toContain(
+      "git -C '/workspace/frontend' checkout -B 'main' origin/'main'"
+    );
+    expect(script).toContain('Failed to fetch updates for frontend');
+    expect(script).not.toContain(
+      "git -C '/workspace/frontend' fetch --all --tags --prune || true"
+    );
   });
 
   it('includes repository metadata in workspace description', () => {
@@ -168,8 +175,62 @@ describe('SetupBuilder multi-repo projects', () => {
     const entrypointPath = builder.generateEntrypoint(false);
     const script = readFileSync(entrypointPath, 'utf8');
 
+    expect(script).toContain('echo "🔎 Validating initialization scripts"');
+    expect(script).toContain('echo "❌ Missing initialization scripts:"');
+    expect(script).toContain(
+      'checked: /init-script-0.sh, /workspace/apps/web ui/scripts/init.sh'
+    );
     expect(script).toContain("cd '/workspace/apps/web ui'");
     expect(script).toContain('Failed to enter project path apps/web ui');
+  });
+
+  it('falls back to workspace init script path when mount is unavailable', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [
+        { script: 'scripts/bootstrap.sh', path: 'services/api' },
+      ],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain('echo "✅ Initialization scripts validated"');
+    expect(script).toContain(
+      "elif [ -f '/workspace/services/api/scripts/bootstrap.sh' ]; then"
+    );
+    expect(script).toContain(
+      "chmod +x '/workspace/services/api/scripts/bootstrap.sh'"
+    );
+    expect(script).toContain(
+      "/bin/sh '/workspace/services/api/scripts/bootstrap.sh'"
+    );
   });
 
   it('escapes sub-project paths in init script log lines', () => {

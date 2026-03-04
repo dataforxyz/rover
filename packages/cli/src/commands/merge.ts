@@ -661,8 +661,9 @@ const mergeCommand = async (taskId: string, options: MergeOptions = {}) => {
             ]);
           }
 
-          const concurrency = parseInt(options.concurrency || '4', 10);
-          const contextLinesNum = parseInt(options.contextLines || '50', 10);
+          const concurrency = parseInt(options.concurrency || '4', 10) || 4;
+          const contextLinesNum =
+            parseInt(options.contextLines || '50', 10) || 50;
           const resolution = await resolveMergeConflicts(
             git,
             mergeConflicts,

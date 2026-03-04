@@ -176,7 +176,7 @@ export const WorkflowLoopStepSchema: z.ZodType<any> =
     type: z.literal('loop'),
     /** Sub-steps to repeat each iteration */
     steps: z.lazy(() => z.array(WorkflowStepSchema)),
-    /** Condition to check after each sub-step; loop exits when true */
+    /** Condition to check after each iteration; loop exits when true */
     until: z.string().refine(isValidCondition, {
       message:
         'Condition must match format: steps.<id>.outputs.<name> == <value> (clauses may be joined with ||)',

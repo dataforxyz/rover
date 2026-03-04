@@ -25,7 +25,7 @@ import type { McpServer } from '@agentclientprotocol/sdk';
 import { parseCollectOptions } from '../lib/options.js';
 import { ACPRunner } from '../lib/acp-runner.js';
 import { createAgent } from '../lib/agents/index.js';
-import { executeStep, shouldSkipStep } from '../lib/step-executor.js';
+import { executeStep } from '../lib/step-executor.js';
 import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -515,8 +515,12 @@ export const runCommand = async (
         totalDuration = runResult.totalDuration;
 
         // Display workflow completion summary
-        const successfulSteps = Array.from(runResult.stepsOutput.keys()).length;
-        const failedSteps = runResult.runSteps - successfulSteps;
+        const successfulSteps = runResult.stepResults.filter(
+          r => r.success
+        ).length;
+        const failedSteps = runResult.stepResults.filter(
+          r => !r.success
+        ).length;
         const skippedSteps = workflowManager.steps.length - runResult.runSteps;
 
         let status = colors.green('✓ Workflow Completed Successfully');

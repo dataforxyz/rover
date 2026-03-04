@@ -173,7 +173,10 @@ const restartCommand = async (
         task.setWorkspace(worktreePath, branchName);
 
         if (spinner) spinner.success('Workspace setup complete');
-      } catch (error) {}
+      } catch (error) {
+        if (spinner) spinner.error('Workspace setup failed');
+        throw error;
+      }
     }
 
     // Ensure iterations directory exists

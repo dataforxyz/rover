@@ -70,22 +70,23 @@ export async function executeStep(
 ): Promise<StepResult> {
   if (isAgentStep(step)) {
     if (config.acpRunner) {
+      const acpRunner = config.acpRunner;
       const managesSessionLifecycle = !config.reuseAcpSession;
       if (managesSessionLifecycle) {
-        await config.acpRunner.createSession();
+        await acpRunner.createSession();
       }
 
       // Sync current stepsOutput into the acpRunner so prompt placeholders resolve
       for (const [stepId, outputs] of config.stepsOutput.entries()) {
-        config.acpRunner.stepsOutput.set(stepId, outputs);
+        acpRunner.stepsOutput.set(stepId, outputs);
       }
 
       try {
-        const result = await config.acpRunner.runStep(step.id);
+        const result = await acpRunner.runStep(step.id);
         return result;
       } finally {
         if (managesSessionLifecycle) {
-          config.acpRunner.closeSession();
+          acpRunner.closeSession();
         }
       }
     }
@@ -144,7 +145,7 @@ async function executeLoopStep(
   );
 
   try {
-    if (managesSessionLifecycle) {
+    if (managesSessionLifecycle && config.acpRunner) {
       await config.acpRunner.createSession();
       hasLoopAcpSession = true;
     }

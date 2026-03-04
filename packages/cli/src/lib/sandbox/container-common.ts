@@ -303,15 +303,6 @@ export async function tmpUserGroupFiles(
 }
 
 /**
- * Normalize extra args from string or array format to a flat array of arguments.
- * Handles both:
- * - String format: "--network mynet --memory 512m" (splits by whitespace, respecting quotes)
- * - Array format: ["--network", "mynet", "--memory", "512m"]
- *
- * @param extraArgs - String or array of extra arguments
- * @returns Flat array of arguments
- */
-/**
  * Returns volume mount args needed for git worktree support inside containers.
  *
  * Git worktrees use a `.git` file (not directory) that references the parent
@@ -365,6 +356,15 @@ export function getWorktreeGitMounts(worktreePath: string): string[] {
   }
 }
 
+/**
+ * Normalize extra args from string or array format to a flat array of arguments.
+ * Handles both:
+ * - String format: "--network mynet --memory 512m" (splits by whitespace, respecting quotes)
+ * - Array format: ["--network", "mynet", "--memory", "512m"]
+ *
+ * @param extraArgs - String or array of extra arguments
+ * @returns Flat array of arguments
+ */
 export function normalizeExtraArgs(
   extraArgs: string | string[] | undefined
 ): string[] {

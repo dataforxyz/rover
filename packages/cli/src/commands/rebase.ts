@@ -18,13 +18,12 @@ import { TaskNotFoundError } from 'rover-schemas';
 import { getTelemetry } from '../lib/telemetry.js';
 import { showRoverChat } from '../utils/display.js';
 import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
-import type { CLIJsonOutput } from '../types.js';
+import type { CLIJsonOutput, CommandDefinition } from '../types.js';
 import {
   isJsonMode,
   setJsonMode,
   requireProjectContext,
 } from '../lib/context.js';
-import type { CommandDefinition } from '../types.js';
 import { parseAgentString } from '../utils/agent-parser.js';
 import { collapseTaskCommits } from '../lib/squash.js';
 import {
@@ -608,8 +607,9 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
             ]);
           }
 
-          const concurrency = parseInt(options.concurrency || '4', 10);
-          const contextLinesNum = parseInt(options.contextLines || '50', 10);
+          const concurrency = parseInt(options.concurrency || '4', 10) || 4;
+          const contextLinesNum =
+            parseInt(options.contextLines || '50', 10) || 50;
           const resolution = await resolveRebaseConflicts(
             git,
             rebaseConflicts,

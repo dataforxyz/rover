@@ -744,7 +744,7 @@ export class ACPRunner {
       fileOutputs.forEach(output => {
         instructions += `- **${output.name}**: ${output.description}\n`;
 
-        if (this.tool == 'gemini' || this.tool == 'qwen') {
+        if (this.tool === 'gemini' || this.tool === 'qwen') {
           // Gemini refuses to write files using relative paths, so we must
           // provide an absolute path in the prompt.
           const absolutePath = resolve(output.filename!);

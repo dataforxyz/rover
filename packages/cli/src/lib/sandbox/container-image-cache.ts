@@ -37,11 +37,6 @@ function resolveInitScriptPath(
   scriptPath: string,
   projectPath?: string
 ): string {
-  const rootRelative = join(projectRoot, scriptPath);
-  if (existsSync(rootRelative)) {
-    return rootRelative;
-  }
-
   if (projectPath) {
     const projectRelative = join(projectRoot, projectPath, scriptPath);
     if (existsSync(projectRelative)) {
@@ -49,7 +44,14 @@ function resolveInitScriptPath(
     }
   }
 
-  return rootRelative;
+  const rootRelative = join(projectRoot, scriptPath);
+  if (existsSync(rootRelative)) {
+    return rootRelative;
+  }
+
+  return projectPath
+    ? join(projectRoot, projectPath, scriptPath)
+    : rootRelative;
 }
 
 export interface SetupHashInputs {
