@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { isAbsolute } from 'node:path';
 
 // Current schema version
 export const CURRENT_PROJECT_SCHEMA_VERSION = '1.4';
@@ -125,13 +126,34 @@ export const HooksConfigSchema = z.object({
 });
 
 /**
+ * Validate that a sub-project path stays within workspace and is not absolute.
+ */
+function isValidSubProjectPath(path: string): boolean {
+  const trimmed = path.trim();
+  if (!trimmed) return false;
+  if (isAbsolute(trimmed)) return false;
+
+  // Normalize separators for validation and ensure no traversal segments.
+  const segments = trimmed.replaceAll('\\', '/').split('/').filter(Boolean);
+  if (segments.length === 0) return false;
+  if (segments.some(segment => segment === '.' || segment === '..')) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Sub-project definition for multi-project workspaces
  */
 export const SubProjectSchema = z.object({
   /** Sub-project name */
   name: z.string(),
   /** Relative path from workspace root */
-  path: z.string(),
+  path: z.string().refine(isValidSubProjectPath, {
+    message:
+      'Project path must be a non-empty relative path without "." or ".." segments',
+  }),
   /** Optional Git repository URL/path to clone into `path` */
   repository: z.string().optional(),
   /** Optional branch/tag/commit to checkout after clone */

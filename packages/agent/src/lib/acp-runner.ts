@@ -494,9 +494,12 @@ export class ACPRunner {
       );
     }
 
-    // Calculate current progress
-    const stepIndex = this.workflow.steps.findIndex(
-      (s: WorkflowStep) => s.id === stepId
+    // Calculate current progress.
+    // For sub-steps nested inside loops, findIndex returns -1 since they
+    // are not top-level steps.  Clamp to 0 to avoid negative progress.
+    const stepIndex = Math.max(
+      0,
+      this.workflow.steps.findIndex((s: WorkflowStep) => s.id === stepId)
     );
     const totalSteps = this.workflow.steps.length;
     const currentProgress = Math.floor((stepIndex / totalSteps) * 100);

@@ -67,6 +67,24 @@ describe('SubProjectSchema', () => {
       })
     ).toThrow();
   });
+
+  it('should reject absolute project paths', () => {
+    expect(() =>
+      SubProjectSchema.parse({
+        name: 'test',
+        path: '/etc',
+      })
+    ).toThrow();
+  });
+
+  it('should reject traversal project paths', () => {
+    expect(() =>
+      SubProjectSchema.parse({
+        name: 'test',
+        path: '../outside',
+      })
+    ).toThrow();
+  });
 });
 
 describe('ProjectConfigSchema with projects', () => {

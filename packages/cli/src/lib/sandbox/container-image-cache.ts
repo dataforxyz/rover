@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   launch,
@@ -31,6 +31,26 @@ function envFromSandboxMetadata(
  * successfully and the container is ready to be committed as a cached image.
  */
 const INIT_EXPECTED_EXIT_CODE = 0;
+
+function resolveInitScriptPath(
+  projectRoot: string,
+  scriptPath: string,
+  projectPath?: string
+): string {
+  const rootRelative = join(projectRoot, scriptPath);
+  if (existsSync(rootRelative)) {
+    return rootRelative;
+  }
+
+  if (projectPath) {
+    const projectRelative = join(projectRoot, projectPath, scriptPath);
+    if (existsSync(projectRelative)) {
+      return projectRelative;
+    }
+  }
+
+  return rootRelative;
+}
 
 export interface SetupHashInputs {
   agentImage: string;
@@ -215,7 +235,7 @@ export function checkImageCache(
   let initScriptContent = '';
   if (projectConfig.initScript) {
     try {
-      const initScriptAbsPath = join(
+      const initScriptAbsPath = resolveInitScriptPath(
         projectConfig.projectRoot,
         projectConfig.initScript
       );
@@ -248,7 +268,11 @@ export function checkImageCache(
       let projectInitContent = '';
       if (p.initScript) {
         try {
-          const absPath = join(projectConfig.projectRoot, p.initScript);
+          const absPath = resolveInitScriptPath(
+            projectConfig.projectRoot,
+            p.initScript,
+            p.path
+          );
           projectInitContent = readFileSync(absPath, 'utf-8');
         } catch {
           // treat as empty

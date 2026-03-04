@@ -29,6 +29,26 @@ import { isJsonMode } from '../context.js';
 import { isPathWithin } from '../../utils/path-utils.js';
 import colors from 'ansi-colors';
 
+function resolveInitScriptPath(
+  projectRoot: string,
+  scriptPath: string,
+  projectPath?: string
+): string {
+  const rootRelative = join(projectRoot, scriptPath);
+  if (existsSync(rootRelative)) {
+    return rootRelative;
+  }
+
+  if (projectPath) {
+    const projectRelative = join(projectRoot, projectPath, scriptPath);
+    if (existsSync(projectRelative)) {
+      return projectRelative;
+    }
+  }
+
+  return rootRelative;
+}
+
 export class PodmanSandbox extends Sandbox {
   backend = ContainerBackend.Podman;
 
@@ -195,7 +215,11 @@ export class PodmanSandbox extends Sandbox {
     const allInitScripts = projectConfig.allInitScripts;
     for (let i = 0; i < allInitScripts.length; i++) {
       const entry = allInitScripts[i];
-      const initScriptAbsPath = join(projectConfig.projectRoot, entry.script);
+      const initScriptAbsPath = resolveInitScriptPath(
+        projectConfig.projectRoot,
+        entry.script,
+        entry.path
+      );
       if (existsSync(initScriptAbsPath)) {
         const mountPath =
           allInitScripts.length === 1 && !entry.path
@@ -500,7 +524,11 @@ export class PodmanSandbox extends Sandbox {
     const allInitScripts = projectConfig.allInitScripts;
     for (let i = 0; i < allInitScripts.length; i++) {
       const entry = allInitScripts[i];
-      const initScriptAbsPath = join(projectConfig.projectRoot, entry.script);
+      const initScriptAbsPath = resolveInitScriptPath(
+        projectConfig.projectRoot,
+        entry.script,
+        entry.path
+      );
       if (existsSync(initScriptAbsPath)) {
         const mountPath =
           allInitScripts.length === 1 && !entry.path

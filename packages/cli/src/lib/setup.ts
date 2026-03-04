@@ -206,6 +206,17 @@ export class SetupBuilder {
   }
 
   /**
+   * Escape user-provided values interpolated inside double-quoted shell strings.
+   */
+  private escapeForDoubleQuotedShell(value: string): string {
+    return value
+      .replaceAll('\\', '\\\\')
+      .replaceAll('"', '\\"')
+      .replaceAll('$', '\\$')
+      .replaceAll('`', '\\`');
+  }
+
+  /**
    * Generate and save the setup script to the appropriate task directory
    */
   generateEntrypoint(
@@ -419,11 +430,21 @@ echo -e "\\n📦 Done installing MCP servers"`;
             allInitScripts.length === 1 && !entry.path
               ? '/init-script.sh'
               : `/init-script-${i}.sh`;
-          const label = entry.path ? ` (${entry.path})` : '';
+          const escapedDisplayPath = entry.path
+            ? this.escapeForDoubleQuotedShell(entry.path)
+            : '';
+          const label = entry.path ? ` (${escapedDisplayPath})` : '';
           let block = `echo "🔧 Running initialization script${label}"
 chmod +x ${mountPath}`;
           if (entry.path) {
-            block += `\ncd /workspace/${entry.path}`;
+            const escapedProjectPath = this.shellEscape(
+              `/workspace/${entry.path}`
+            );
+            block += `\ncd ${escapedProjectPath}
+if [ $? -ne 0 ]; then
+  echo "❌ Failed to enter project path ${escapedDisplayPath}"
+  safe_exit 1
+fi`;
           }
           block += `\n/bin/sh ${mountPath}
 if [ $? -eq 0 ]; then
@@ -433,7 +454,7 @@ else
   safe_exit 1
 fi`;
           if (entry.path) {
-            block += '\ncd /workspace';
+            block += '\ncd /workspace || safe_exit 1';
           }
           scriptBlocks.push(block);
         }
@@ -455,25 +476,32 @@ ${scriptBlocks.join('\n')}
     if (projectsWithRepositories.length > 0) {
       const syncBlocks = projectsWithRepositories.map(project => {
         const targetPath = `/workspace/${project.path}`;
-        const escapedName = this.shellEscape(project.name);
+        const escapedDisplayName = this.escapeForDoubleQuotedShell(
+          project.name
+        );
+        const escapedDisplayTargetPath =
+          this.escapeForDoubleQuotedShell(targetPath);
+        const escapedDisplayRef = project.ref
+          ? this.escapeForDoubleQuotedShell(project.ref)
+          : '';
         const escapedPath = this.shellEscape(targetPath);
         const escapedRepository = this.shellEscape(project.repository!);
         const escapedRef = project.ref ? this.shellEscape(project.ref) : '';
 
         const checkoutRef = project.ref
           ? `
-echo "🔀 Checking out ${project.ref} for ${project.name}"
+echo "🔀 Checking out ${escapedDisplayRef} for ${escapedDisplayName}"
 if git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
   git -C ${escapedPath} checkout ${escapedRef}
 elif git -C ${escapedPath} rev-parse --verify origin/${escapedRef} >/dev/null 2>&1; then
   git -C ${escapedPath} checkout -B ${escapedRef} origin/${escapedRef}
 else
-  echo "❌ Could not resolve ref ${project.ref} in ${project.name}"
+  echo "❌ Could not resolve ref ${escapedDisplayRef} in ${escapedDisplayName}"
   safe_exit 1
 fi`
           : '';
 
-        return `echo "📥 Syncing repository ${project.name}"
+        return `echo "📥 Syncing repository ${escapedDisplayName}"
 mkdir -p "$(dirname ${escapedPath})"
 if [ ! -d ${escapedPath}/.git ]; then
   rm -rf ${escapedPath}
@@ -481,13 +509,13 @@ if [ ! -d ${escapedPath}/.git ]; then
 else
   current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
   if [ "$current_origin" != ${escapedRepository} ]; then
-    echo "❌ Existing repository at ${targetPath} points to a different origin"
+    echo "❌ Existing repository at ${escapedDisplayTargetPath} points to a different origin"
     safe_exit 1
   fi
 fi
 git -C ${escapedPath} fetch --all --tags --prune || true
 ${checkoutRef}
-echo "✅ Repository ${project.name} is ready"`;
+echo "✅ Repository ${escapedDisplayName} is ready"`;
       });
 
       projectRepositoriesSection = `

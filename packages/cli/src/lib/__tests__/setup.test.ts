@@ -132,4 +132,145 @@ describe('SetupBuilder multi-repo projects', () => {
       packageManagers: ['pip'],
     });
   });
+
+  it('quotes sub-project paths when running init scripts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [{ script: 'scripts/init.sh', path: 'apps/web ui' }],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain("cd '/workspace/apps/web ui'");
+    expect(script).toContain('Failed to enter project path apps/web ui');
+  });
+
+  it('escapes sub-project paths in init script log lines', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [
+        { script: 'scripts/init.sh', path: 'apps/$(touch pwn)' },
+      ],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain("cd '/workspace/apps/$(touch pwn)'");
+    expect(script).toContain(
+      'echo "❌ Failed to enter project path apps/\\$(touch pwn)"'
+    );
+    expect(script).toContain(
+      'echo "🔧 Running initialization script (apps/\\$(touch pwn))"'
+    );
+  });
+
+  it('escapes repository metadata in sync log lines', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend $(touch pwn)',
+          path: 'apps/$(touch pwn)',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+          ref: 'main-$(touch pwn)',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain(
+      'echo "📥 Syncing repository frontend \\$(touch pwn)"'
+    );
+    expect(script).toContain(
+      'echo "🔀 Checking out main-\\$(touch pwn) for frontend \\$(touch pwn)"'
+    );
+    expect(script).toContain(
+      'echo "❌ Existing repository at /workspace/apps/\\$(touch pwn) points to a different origin"'
+    );
+    expect(script).toContain(
+      'echo "✅ Repository frontend \\$(touch pwn) is ready"'
+    );
+  });
 });

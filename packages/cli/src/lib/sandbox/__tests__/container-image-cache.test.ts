@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { launch, launchSync, getVersion } from 'rover-core';
 import {
   checkImageCache,
@@ -837,5 +840,66 @@ describe('checkImageCache', () => {
       mcps: [],
     });
     expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
+  it('hashes sub-project initScript relative to the project path when present', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-cache-init-'));
+    try {
+      mkdirSync(join(root, 'packages', 'api'), { recursive: true });
+      writeFileSync(
+        join(root, 'packages', 'api', 'init.sh'),
+        'echo sub-project-init\n',
+        'utf8'
+      );
+
+      mockedLaunchSync.mockReturnValueOnce({
+        stdout: 'sha256:aabbccdd11223344',
+        exitCode: 0,
+      } as any);
+      mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+      const result = checkImageCache(
+        ContainerBackend.Docker,
+        makeProjectConfig({
+          projectRoot: root,
+          projects: [
+            {
+              name: 'api',
+              path: 'packages/api',
+              initScript: 'init.sh',
+            },
+          ],
+        }),
+        'my-agent:latest',
+        'claude'
+      );
+
+      const expectedHash = computeSetupHash({
+        agentImage: 'sha256:aabbccdd11223344',
+        languages: ['typescript'],
+        packageManagers: ['pnpm'],
+        taskManagers: [],
+        agent: 'claude',
+        roverVersion: '1.0.0-test',
+        initScriptContent: '',
+        cacheFilesContent: '',
+        mcps: [],
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: '',
+            ref: '',
+            languages: [],
+            packageManagers: [],
+            taskManagers: [],
+            initScriptContent: 'echo sub-project-init\n',
+          },
+        ],
+      });
+      expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
