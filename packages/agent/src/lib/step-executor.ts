@@ -182,7 +182,16 @@ async function executeLoopStep(
           console.log(colors.gray(display));
         }
         if (stderr && !subResult.success) {
-          console.log(colors.yellow(stderr));
+          const errLines = stderr.split('\n');
+          const errDisplay =
+            errLines.length > 30
+              ? [
+                  ...errLines.slice(0, 5),
+                  `  ... (${errLines.length - 10} lines) ...`,
+                  ...errLines.slice(-5),
+                ].join('\n')
+              : stderr;
+          console.log(colors.yellow(errDisplay));
         }
       }
 
