@@ -36,6 +36,7 @@ export interface StepExecutorConfig {
   logger?: JsonlLogger;
   output?: string;
   acpRunner?: ACPRunner;
+  reuseAcpSession?: boolean;
 }
 
 export type StepResult =
@@ -69,19 +70,24 @@ export async function executeStep(
 ): Promise<StepResult> {
   if (isAgentStep(step)) {
     if (config.acpRunner) {
-      // Reuse the warm ACP connection for agent sub-steps inside loops
-      await config.acpRunner.createSession();
+      const acpRunner = config.acpRunner;
+      const managesSessionLifecycle = !config.reuseAcpSession;
+      if (managesSessionLifecycle) {
+        await acpRunner.createSession();
+      }
 
       // Sync current stepsOutput into the acpRunner so prompt placeholders resolve
       for (const [stepId, outputs] of config.stepsOutput.entries()) {
-        config.acpRunner.stepsOutput.set(stepId, outputs);
+        acpRunner.stepsOutput.set(stepId, outputs);
       }
 
       try {
-        const result = await config.acpRunner.runStep(step.id);
+        const result = await acpRunner.runStep(step.id);
         return result;
       } finally {
-        config.acpRunner.closeSession();
+        if (managesSessionLifecycle) {
+          acpRunner.closeSession();
+        }
       }
     }
 
@@ -114,7 +120,7 @@ export async function executeStep(
 
 /**
  * Execute a loop step: iterate sub-steps until condition is met or max iterations reached.
- * The until condition is checked after each sub-step completes (once outputs are stored).
+ * The until condition is checked after each full iteration of sub-steps completes.
  */
 async function executeLoopStep(
   loopStep: WorkflowLoopStep,
@@ -125,9 +131,12 @@ async function executeLoopStep(
   const stepMax = loopStep.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const maxIterations =
     workflowLoopLimit != null ? Math.min(stepMax, workflowLoopLimit) : stepMax;
+  const managesSessionLifecycle =
+    Boolean(config.acpRunner) && !config.reuseAcpSession;
   let conditionMet = false;
   let lastIteration = 0;
   let lastError: string | undefined;
+  let hasLoopAcpSession = false;
 
   console.log(
     colors.blue(
@@ -135,93 +144,107 @@ async function executeLoopStep(
     )
   );
 
-  for (let iteration = 1; iteration <= maxIterations; iteration++) {
-    lastIteration = iteration;
-    console.log(
-      colors.cyan(`\n  ↻ Loop iteration ${iteration}/${maxIterations}`)
-    );
-
-    for (const subStep of loopStep.steps) {
-      // Check `if` condition on sub-steps (mirrors top-level skip in run.ts)
-      if (shouldSkipStep(subStep, config.stepsOutput)) {
-        console.log(
-          colors.gray(`  ⏭ Skipping step "${subStep.name}" (condition not met)`)
-        );
-        config.stepsOutput.set(subStep.id, new Map());
-        continue;
-      }
-
-      const subResult = await executeStep(subStep, {
-        ...config,
-        // Preserve parent context for progress reporting; sub-steps use the
-        // loop's position within the overall workflow, not their own index.
-      });
-
-      // Store sub-step outputs
-      config.stepsOutput.set(subStep.id, subResult.outputs);
-
-      // Log command step results so output (e.g. test results) is visible
-      if (isCommandStep(subStep)) {
-        const exitCode = subResult.outputs.get('exit_code') ?? 'unknown';
-        const stdout = subResult.outputs.get('stdout') ?? '';
-        const stderr = subResult.outputs.get('stderr') ?? '';
-
-        console.log(
-          colors.gray(`  ▸ ${subStep.name} (exit code: ${exitCode})`)
-        );
-        if (stdout) {
-          const lines = stdout.split('\n');
-          const display =
-            lines.length > 30
-              ? [
-                  ...lines.slice(0, 5),
-                  `  ... (${lines.length - 10} lines) ...`,
-                  ...lines.slice(-5),
-                ].join('\n')
-              : stdout;
-          console.log(colors.gray(display));
-        }
-        if (stderr && !subResult.success) {
-          const errLines = stderr.split('\n');
-          const errDisplay =
-            errLines.length > 30
-              ? [
-                  ...errLines.slice(0, 5),
-                  `  ... (${errLines.length - 10} lines) ...`,
-                  ...errLines.slice(-5),
-                ].join('\n')
-              : stderr;
-          console.log(colors.yellow(errDisplay));
-        }
-      }
-
-      if (!subResult.success) {
-        lastError = subResult.error;
-        console.log(
-          colors.yellow(
-            `  ⚠ Sub-step "${subStep.id}" failed: ${subResult.error}`
-          )
-        );
-        // NOTE: Loop sub-steps intentionally continue past failures.
-        // The `until` condition (checked at the end of each iteration)
-        // determines when the loop exits.  This differs from top-level
-        // `continueOnError` handling because loops are designed for retry
-        // patterns (e.g. TDD: tests fail → fix agent runs → tests re-run).
-      }
+  try {
+    if (managesSessionLifecycle && config.acpRunner) {
+      await config.acpRunner.createSession();
+      hasLoopAcpSession = true;
     }
 
-    // Check the `until` condition after all sub-steps in this iteration
-    // have completed.  We intentionally do NOT check after each sub-step
-    // because the condition may reference steps that haven't run yet in
-    // the current iteration (e.g. `steps.checkpoint.outputs.exit_code != 0`
-    // would be true for an undefined step, causing premature exit).
-    // Individual sub-steps already have `if` guards to skip unnecessary work.
-    if (evaluateCondition(loopStep.until, config.stepsOutput)) {
-      conditionMet = true;
-      console.log(colors.green(`  ✓ Loop condition met, exiting loop`));
-    }
+    for (let iteration = 1; iteration <= maxIterations; iteration++) {
+      lastIteration = iteration;
+      console.log(
+        colors.cyan(`\n  ↻ Loop iteration ${iteration}/${maxIterations}`)
+      );
 
-    if (conditionMet) break;
+      for (const subStep of loopStep.steps) {
+        // Check `if` condition on sub-steps (mirrors top-level skip in run.ts)
+        if (shouldSkipStep(subStep, config.stepsOutput)) {
+          console.log(
+            colors.gray(
+              `  ⏭ Skipping step "${subStep.name}" (condition not met)`
+            )
+          );
+          config.stepsOutput.set(subStep.id, new Map());
+          continue;
+        }
+
+        const subResult = await executeStep(subStep, {
+          ...config,
+          // Preserve parent context for progress reporting; sub-steps use the
+          // loop's position within the overall workflow, not their own index.
+          reuseAcpSession: config.reuseAcpSession || hasLoopAcpSession,
+        });
+
+        // Store sub-step outputs
+        config.stepsOutput.set(subStep.id, subResult.outputs);
+
+        // Log command step results so output (e.g. test results) is visible
+        if (isCommandStep(subStep)) {
+          const exitCode = subResult.outputs.get('exit_code') ?? 'unknown';
+          const stdout = subResult.outputs.get('stdout') ?? '';
+          const stderr = subResult.outputs.get('stderr') ?? '';
+
+          console.log(
+            colors.gray(`  ▸ ${subStep.name} (exit code: ${exitCode})`)
+          );
+          if (stdout) {
+            const lines = stdout.split('\n');
+            const display =
+              lines.length > 30
+                ? [
+                    ...lines.slice(0, 5),
+                    `  ... (${lines.length - 10} lines) ...`,
+                    ...lines.slice(-5),
+                  ].join('\n')
+                : stdout;
+            console.log(colors.gray(display));
+          }
+          if (stderr && !subResult.success) {
+            const errLines = stderr.split('\n');
+            const errDisplay =
+              errLines.length > 30
+                ? [
+                    ...errLines.slice(0, 5),
+                    `  ... (${errLines.length - 10} lines) ...`,
+                    ...errLines.slice(-5),
+                  ].join('\n')
+                : stderr;
+            console.log(colors.yellow(errDisplay));
+          }
+        }
+
+        if (!subResult.success) {
+          lastError = subResult.error;
+          console.log(
+            colors.yellow(
+              `  ⚠ Sub-step "${subStep.id}" failed: ${subResult.error}`
+            )
+          );
+          // NOTE: Loop sub-steps intentionally continue past failures.
+          // The `until` condition (checked at the end of each iteration)
+          // determines when the loop exits.  This differs from top-level
+          // `continueOnError` handling because loops are designed for retry
+          // patterns (e.g. TDD: tests fail → fix agent runs → tests re-run).
+        }
+      }
+
+      // Check the `until` condition after all sub-steps in this iteration
+      // have completed.  We intentionally do NOT check after each sub-step
+      // because the condition may reference steps that haven't run yet in
+      // the current iteration (e.g. `steps.checkpoint.outputs.exit_code != 0`
+      // would be true for an undefined step, causing premature exit).
+      // Individual sub-steps already have `if` guards to skip unnecessary work.
+      if (evaluateCondition(loopStep.until, config.stepsOutput)) {
+        conditionMet = true;
+        console.log(colors.green(`  ✓ Loop condition met, exiting loop`));
+      }
+
+      if (conditionMet) break;
+    }
+  } finally {
+    if (hasLoopAcpSession) {
+      config.acpRunner?.closeSession();
+    }
   }
 
   const duration = (performance.now() - start) / 1000;

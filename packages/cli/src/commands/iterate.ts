@@ -439,9 +439,9 @@ const iterateCommand = async (
 
         // Read context content for AI expansion
         // Skip PRs to avoid huge context.
-        const expansionEntries = entries.filter(entry => {
-          !(entry.metadata?.type || '').includes('pr');
-        });
+        const expansionEntries = entries.filter(
+          entry => !(entry.metadata?.type || '').includes('pr')
+        );
         const storedContent =
           contextManager.readStoredContent(expansionEntries);
         if (storedContent) {
@@ -498,7 +498,7 @@ const iterateCommand = async (
       if (expandedTask == null) {
         // Fallback approach
         expandedTask = {
-          title: `${task.title} - Iteration refinement instructinos`,
+          title: `${task.title} - Iteration refinement instructions`,
           description: `${task.description}\n\nAdditional requirements:\n${finalInstructions}`,
         };
       }

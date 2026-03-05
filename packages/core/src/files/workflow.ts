@@ -579,8 +579,6 @@ export class WorkflowManager {
         }
       }
 
-      runSteps++;
-
       let result: StepResult;
 
       if (isLoopStep(step) && runner.runStep) {
@@ -599,6 +597,8 @@ export class WorkflowManager {
         // Unknown step type - skip
         continue;
       }
+
+      runSteps++;
 
       stepResults.push(result);
       totalDuration += result.duration;

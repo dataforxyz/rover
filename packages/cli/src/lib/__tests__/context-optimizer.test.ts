@@ -334,38 +334,43 @@ describe('context-optimizer', () => {
     it('should strip markdown fences when original has none', () => {
       const output = '```json\n{"key": "value"}\n```';
       const result = sanitizeAIOutput(output, 'some original content');
-      expect(result).toBe('{"key": "value"}');
+      expect(result).toBe('{"key": "value"}\n');
     });
 
     it('should preserve markdown fences when original has them', () => {
       const output = '```json\n{"key": "value"}\n```';
       const original = 'content with ``` fences';
       const result = sanitizeAIOutput(output, original);
-      expect(result).toBe('```json\n{"key": "value"}\n```');
+      expect(result).toBe('```json\n{"key": "value"}\n```\n');
     });
 
     it('should strip ---END--- when original has none', () => {
       const output = 'resolved content\n---END---';
       const result = sanitizeAIOutput(output, 'original content');
-      expect(result).toBe('resolved content');
+      expect(result).toBe('resolved content\n');
     });
 
     it('should preserve ---END--- when original has it', () => {
       const output = 'resolved content\n---END---';
       const result = sanitizeAIOutput(output, 'has ---END--- marker');
-      expect(result).toBe('resolved content\n---END---');
+      expect(result).toBe('resolved content\n---END---\n');
     });
 
     it('should strip ---FINAL_END--- variant', () => {
       const output = 'content\n---FINAL_END---';
       const result = sanitizeAIOutput(output, 'original');
-      expect(result).toBe('content');
+      expect(result).toBe('content\n');
     });
 
     it('should pass through clean content unchanged', () => {
       const output = 'just normal resolved code';
       const result = sanitizeAIOutput(output, 'original');
-      expect(result).toBe('just normal resolved code');
+      expect(result).toBe('just normal resolved code\n');
+    });
+
+    it('should return empty string for empty input', () => {
+      const result = sanitizeAIOutput('', 'original');
+      expect(result).toBe('');
     });
   });
 

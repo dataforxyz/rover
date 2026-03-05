@@ -62,8 +62,10 @@ export const WorkflowOutputSchema = z.object({
  */
 export const WorkflowAgentToolSchema = z.enum([
   'claude',
-  'gemini',
   'codex',
+  'copilot',
+  'cursor',
+  'gemini',
   'opencode',
   'qwen',
 ]);
@@ -174,7 +176,7 @@ export const WorkflowLoopStepSchema: z.ZodType<any> =
     type: z.literal('loop'),
     /** Sub-steps to repeat each iteration */
     steps: z.lazy(() => z.array(WorkflowStepSchema)),
-    /** Condition to check after each sub-step; loop exits when true */
+    /** Condition to check after each iteration; loop exits when true */
     until: z.string().refine(isValidCondition, {
       message:
         'Condition must match format: steps.<id>.outputs.<name> == <value> (clauses may be joined with ||)',
@@ -184,8 +186,9 @@ export const WorkflowLoopStepSchema: z.ZodType<any> =
   });
 
 /**
- * Union of all step types (discriminated by 'type' field)
- * Forward declared for recursive types
+ * Union of all step types.
+ * Uses z.union (not z.discriminatedUnion) because the recursive
+ * WorkflowLoopStepSchema is typed as z.ZodType<any>.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
 export const WorkflowStepSchema: z.ZodType<any> = z.union([

@@ -568,6 +568,62 @@ describe('executeStep', () => {
     expect(stepsOutput.get('inner_cmd')?.get('exit_code')).toBe('0');
   });
 
+  it('reuses a single ACP session across nested loops', async () => {
+    const mockAcpResult = {
+      id: 'fix_agent',
+      success: true,
+      duration: 1.0,
+      outputs: new Map([['result', 'fixed']]),
+    };
+
+    const mockAcpRunner = {
+      createSession: vi.fn().mockResolvedValue('session-nested'),
+      runStep: vi.fn().mockResolvedValue(mockAcpResult),
+      closeSession: vi.fn(),
+      stepsOutput: new Map<string, Map<string, string>>(),
+    } as unknown as ACPRunner;
+
+    const nestedLoop: WorkflowLoopStep = {
+      id: 'outer_loop',
+      name: 'Outer Loop',
+      type: 'loop',
+      until: 'steps.fix_agent.outputs.result == fixed',
+      maxIterations: 1,
+      steps: [
+        {
+          id: 'inner_loop',
+          name: 'Inner Loop',
+          type: 'loop',
+          until: 'steps.fix_agent.outputs.result == fixed',
+          maxIterations: 1,
+          steps: [
+            {
+              id: 'fix_agent',
+              name: 'Fix',
+              type: 'agent',
+              prompt: 'Fix it',
+              outputs: [],
+            } as WorkflowAgentStep,
+          ],
+        } as WorkflowLoopStep,
+      ],
+    };
+
+    const result = await executeStep(nestedLoop, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput: new Map(),
+      totalSteps: 1,
+      currentStepIndex: 0,
+      acpRunner: mockAcpRunner,
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockAcpRunner.createSession).toHaveBeenCalledOnce();
+    expect(mockAcpRunner.runStep).toHaveBeenCalledWith('fix_agent');
+    expect(mockAcpRunner.closeSession).toHaveBeenCalledOnce();
+  });
+
   it('shouldSkipStep returns true when if condition is false (callers skip before executeStep)', () => {
     const agentStep: WorkflowAgentStep = {
       id: 'conditional_agent',
