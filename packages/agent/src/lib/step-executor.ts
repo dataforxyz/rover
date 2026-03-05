@@ -160,6 +160,32 @@ async function executeLoopStep(
       // Store sub-step outputs
       config.stepsOutput.set(subStep.id, subResult.outputs);
 
+      // Log command step results so output (e.g. test results) is visible
+      if (isCommandStep(subStep)) {
+        const exitCode = subResult.outputs.get('exit_code') ?? 'unknown';
+        const stdout = subResult.outputs.get('stdout') ?? '';
+        const stderr = subResult.outputs.get('stderr') ?? '';
+
+        console.log(
+          colors.gray(`  ▸ ${subStep.name} (exit code: ${exitCode})`)
+        );
+        if (stdout) {
+          const lines = stdout.split('\n');
+          const display =
+            lines.length > 30
+              ? [
+                  ...lines.slice(0, 5),
+                  `  ... (${lines.length - 10} lines) ...`,
+                  ...lines.slice(-5),
+                ].join('\n')
+              : stdout;
+          console.log(colors.gray(display));
+        }
+        if (stderr && !subResult.success) {
+          console.log(colors.yellow(stderr));
+        }
+      }
+
       if (!subResult.success) {
         lastError = subResult.error;
         console.log(
