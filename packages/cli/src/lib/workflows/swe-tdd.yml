@@ -458,15 +458,15 @@ steps:
         type: agent
         name: 'Code Review'
         prompt: |
-          You are in review mode, performing a strict code review for this TDD task.
-          Review the git diff below — this is the actual diff of all changes made for this task. Use it as your primary source of truth, then read specific source files when you need more context.
+          You are a senior engineer performing a blocking code review. Your job is to find every issue — you are not a rubber-stamper. Your default stance is that issues exist. Approve only when you genuinely cannot find a single thing wrong.
+
+          Do not give the benefit of the doubt. If something looks off, flag it.
 
           ---
 
           Title: {{inputs.title}}
           Description:
           {{inputs.description}}
-          Task Complexity: {{steps.context.outputs.complexity}}
 
           Plan:
           ```
@@ -484,34 +484,29 @@ steps:
           exit_code: {{steps.run_tests_after_review.outputs.exit_code}}
           ---
 
-          ### Phase 1: Confirm if review is required
+          ### Review Instructions
 
-          Check the task complexity from above.
+          Use the git diff above as the primary input. It shows exactly what was changed.
+          Stay in scope: only review lines and files that were changed for this task. Do not flag issues in pre-existing code that the task did not touch.
 
-          - Simple task: skip the review entirely. Output: {"skipped": "true", "issues_found": "false"} and do NOT create any file. Stop here.
-          - Complex task: continue with the next phase.
+          Go through every hunk in the diff and check ALL of the following:
 
-          ### Phase 2: For complex tasks, perform the review
+          1. **Correctness**: logic errors, off-by-one errors, null/undefined access, race conditions, incorrect operator precedence, wrong comparisons, missing return statements
+          2. **Naming**: variable/function/class names that are vague, misleading, inconsistent with surrounding code, or violate project conventions
+          3. **Style**: formatting inconsistencies, unnecessary comments, missing comments where logic is non-obvious, inconsistent patterns within the changed code
+          4. **Tests**: missing edge cases, weak assertions (e.g. only checking truthiness when exact values matter), test names that don't describe the behavior being tested, missing negative/error path tests
+          5. **Error handling**: swallowed errors, missing validation at boundaries, unhelpful error messages, catch blocks that silently continue
+          6. **Dead code**: unused imports, unreachable branches, commented-out code, variables assigned but never read
+          7. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets, overly permissive permissions
+          8. **Plan adherence**: requirements from the plan that were missed, partially implemented, or implemented differently than specified
+          9. If previous test results show failures, check whether they were addressed
+          10. Read specific source files when you need more context around the changed lines
 
-          Use the git diff above as the primary input for your review. It shows exactly what was changed.
-          Be thorough — flag everything wrong in the changed code. But stay in scope: only review lines and files that were changed for this task. Do not flag issues in pre-existing code that the task did not touch.
+          ### Output
 
-          1. Review every hunk in the diff for correctness, quality, and adherence to existing patterns
-          2. Compare the changes against the Plan — verify task requirements are satisfied
-          3. Check that tests are comprehensive and meaningful
-          4. Check security concerns in the changed code
-          5. **Verify the code has no obvious errors**: unused variables, missing imports, type errors, syntax errors, dead code, and other regressions visible in the diff
-          6. Check naming, formatting, comments, and code style in the changed lines — flag anything that doesn't match the project's conventions
-          7. If previous test results are present above, check whether the failures were addressed
-          8. Read specific source files only when you need more context around the changed lines
-          9. **Stay in scope**: do not suggest changes to code outside the diff. Do not add features, refactor surrounding code, or improve files the task did not modify
-
-          ### Phase 3: Output
-
-          - If the implementation is satisfactory with no issues of any kind: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
-          - Do not fabricate content; if information is unavailable or irrelevant, skip it
-          - Only report issues you can confirm from the diff or by reading the actual source files
-          - If ANY issues are found in the changed code — including nits and style issues — output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
+          - Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files
+          - If the implementation is genuinely flawless with zero issues of any kind: output {"issues_found": "false"} and do NOT create any file.
+          - If ANY issues are found — including nits, naming, and style — output {"issues_found": "true"} and create `review.md` with the following template:
 
           <template>
           # Code Review
@@ -531,9 +526,6 @@ steps:
           (Repeat for every issue found in the changed code. Include everything: bugs, logic errors, compile errors, unused variables, missing imports, naming, style, nits, test gaps, security concerns, plan deviations. Do not flag issues in code the task did not change.)
           </template>
         outputs:
-          - name: skipped
-            description: 'Whether review was skipped (true/false)'
-            type: string
           - name: issues_found
             description: 'Whether issues were found (true/false)'
             type: string
