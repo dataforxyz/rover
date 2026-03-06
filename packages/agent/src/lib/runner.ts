@@ -105,7 +105,7 @@ export class Runner {
       console.log(colors.yellow(`${stepTool} is not available in the system`));
 
       // Try fallback to default tool if different
-      const fallbackTool = stepTool || this.workflow.defaults?.tool;
+      const fallbackTool = this.workflow.defaults?.tool;
       if (fallbackTool && fallbackTool !== stepTool) {
         try {
           const fallbackBinary = Runner.getToolBinary(fallbackTool);

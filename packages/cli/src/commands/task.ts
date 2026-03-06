@@ -114,7 +114,7 @@ const validations = (selectedAiAgent?: string): validationResult => {
       };
     }
   } else if (selectedAiAgent === 'qwen') {
-    // Check Gemini credentials if needed
+    // Check Qwen credentials if needed
     const qwenFile = join(homedir(), '.qwen', 'settings.json');
     const qwenCreds = join(homedir(), '.qwen', 'oauth_creds.json');
 
@@ -190,6 +190,7 @@ const updateTaskMetadata = (
 interface TaskOptions {
   workflow?: string;
   fromGithub?: string;
+  fromGitlab?: string;
   includeComments?: boolean;
   yes?: boolean;
   sourceBranch?: string;
@@ -444,9 +445,9 @@ const createTaskForAgent = async (
 
     // Read context content for AI expansion
     // Skip PRs to avoid huge context.
-    const expansionEntries = entries.filter(entry => {
-      !(entry.metadata?.type || '').includes('pr');
-    });
+    const expansionEntries = entries.filter(
+      entry => !(entry.metadata?.type || '').includes('pr')
+    );
     const storedContent = contextManager.readStoredContent(expansionEntries);
     if (storedContent) {
       contextContent = storedContent;
@@ -616,6 +617,7 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
     yes,
     json,
     fromGithub,
+    fromGitlab,
     includeComments,
     sourceBranch,
     targetBranch,
@@ -663,10 +665,37 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
     }
   }
 
-  // Validate --include-comments requires --from-github
-  if (includeComments && !fromGithub) {
+  // Deprecation: translate --from-gitlab to --context
+  if (fromGitlab) {
+    if (!json) {
+      console.warn(
+        colors.yellow(
+          'Warning: --from-gitlab is deprecated. Use --context gitlab:issue/<number> instead.'
+        )
+      );
+    }
+
+    // Translate to context URI
+    context = context ?? [];
+    context.push(`gitlab:issue/${fromGitlab}`);
+
+    // Translate --include-comments to --context-trust-all-authors
+    if (includeComments) {
+      if (!json) {
+        console.warn(
+          colors.yellow(
+            'Warning: --include-comments is deprecated. Use --context-trust-all-authors instead.'
+          )
+        );
+      }
+      contextTrustAllAuthors = contextTrustAllAuthors || includeComments;
+    }
+  }
+
+  // Validate --include-comments requires --from-github or --from-gitlab
+  if (includeComments && !fromGithub && !fromGitlab) {
     jsonOutput.error =
-      '--include-comments requires --from-github to be specified';
+      '--include-comments requires --from-github or --from-gitlab to be specified';
     await exitWithError(jsonOutput, {
       tips: [
         'Use ' +

@@ -12,15 +12,16 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   type ContentBlock,
+  type McpServer,
 } from '@agentclientprotocol/sdk';
 import colors from 'ansi-colors';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { isAgentStep } from 'rover-schemas';
-import type {
-  WorkflowAgentStep,
-  WorkflowOutput,
-  WorkflowStep,
+import {
+  isAgentStep,
+  type WorkflowAgentStep,
+  type WorkflowOutput,
+  type WorkflowStep,
 } from 'rover-schemas';
 import {
   WorkflowManager,
@@ -64,6 +65,8 @@ export interface ACPRunnerConfig {
   statusManager?: IterationStatusManager;
   outputDir?: string;
   logger?: JsonlLogger;
+  /** MCP servers to pass to each ACP session. */
+  mcpServers?: McpServer[];
 }
 
 export class ACPRunner {
@@ -75,6 +78,7 @@ export class ACPRunner {
   private statusManager?: IterationStatusManager;
   private outputDir?: string;
   private logger?: JsonlLogger;
+  private mcpServers: McpServer[];
 
   // ACP connection state
   private agent: Agent | null = null;
@@ -94,6 +98,7 @@ export class ACPRunner {
     this.statusManager = config.statusManager;
     this.outputDir = config.outputDir;
     this.logger = config.logger;
+    this.mcpServers = config.mcpServers ?? [];
 
     // Determine which tool to use
     // Priority: CLI flag > workflow defaults > fallback to claude
@@ -214,10 +219,7 @@ export class ACPRunner {
    * Create a new session
    * Maps to the ACP session/new method
    */
-  async createSession(
-    cwd?: string,
-    mcpServers: Array<unknown> = []
-  ): Promise<string> {
+  async createSession(cwd?: string): Promise<string> {
     if (!this.isConnectionInitialized || !this.connection) {
       throw new Error(
         'Connection not initialized. Call initializeConnection() first.'
@@ -234,7 +236,7 @@ export class ACPRunner {
       // Create a new session
       const sessionRequest = {
         cwd: cwd || process.cwd(),
-        mcpServers,
+        mcpServers: this.mcpServers,
       };
 
       if (VERBOSE) {
@@ -492,9 +494,12 @@ export class ACPRunner {
       );
     }
 
-    // Calculate current progress
-    const stepIndex = this.workflow.steps.findIndex(
-      (s: WorkflowStep) => s.id === stepId
+    // Calculate current progress.
+    // For sub-steps nested inside loops, findIndex returns -1 since they
+    // are not top-level steps.  Clamp to 0 to avoid negative progress.
+    const stepIndex = Math.max(
+      0,
+      this.workflow.steps.findIndex((s: WorkflowStep) => s.id === stepId)
     );
     const totalSteps = this.workflow.steps.length;
     const currentProgress = Math.floor((stepIndex / totalSteps) * 100);
@@ -513,8 +518,13 @@ export class ACPRunner {
         progress: currentProgress,
       });
 
-      // Set the model for this step if specified (step-level > CLI flag > workflow defaults)
-      const stepModel = this.workflow.getStepModel(stepId, this.defaultModel);
+      // Set the model only if explicitly specified at the step level or via
+      // CLI flag.  When neither is set we must NOT fall back to the workflow-
+      // level defaults because those belong to the workflow's default tool
+      // (e.g. "sonnet" for Claude) and would be invalid for a different agent
+      // (e.g. Qwen).  Omitting the model lets the agent use its own default.
+      const stepModel =
+        (isAgentStep(step) && step.model) || this.defaultModel || undefined;
       if (stepModel) {
         try {
           await this.setModel(stepModel);
@@ -734,7 +744,7 @@ export class ACPRunner {
       fileOutputs.forEach(output => {
         instructions += `- **${output.name}**: ${output.description}\n`;
 
-        if (this.tool == 'gemini' || this.tool == 'qwen') {
+        if (this.tool === 'gemini' || this.tool === 'qwen') {
           // Gemini refuses to write files using relative paths, so we must
           // provide an absolute path in the prompt.
           const absolutePath = resolve(output.filename!);

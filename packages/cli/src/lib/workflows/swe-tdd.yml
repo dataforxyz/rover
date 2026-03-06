@@ -648,9 +648,9 @@ steps:
           1. If the build failed, fix compile errors first — the code must build before tests can run
           2. Analyze the test/build failures carefully
           3. Identify which review fixes caused the regressions
-          3. Fix the code to make tests pass while keeping valid review improvements
-          4. Do NOT revert review fixes wholesale — preserve improvements that aren't causing failures
-          5. Make minimal, targeted fixes
+          4. Fix the code to make tests pass while keeping valid review improvements
+          5. Do NOT revert review fixes wholesale — preserve improvements that aren't causing failures
+          6. Make minimal, targeted fixes
         outputs:
           - name: fixes_description
             description: 'Description of regression fixes applied'

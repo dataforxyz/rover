@@ -134,6 +134,7 @@ const mcpCommand = async () => {
       const parsed = taskSchema.parse(args);
       return runCommand(taskCmd.action, [parsed.initPrompt], {
         fromGithub: parsed.fromGithub,
+        fromGitlab: parsed.fromGitlab,
         includeComments: parsed.includeComments,
         yes: true,
         sourceBranch: parsed.sourceBranch,

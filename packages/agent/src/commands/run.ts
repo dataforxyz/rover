@@ -4,6 +4,7 @@ import {
   WorkflowManager,
   IterationStatusManager,
   JsonlLogger,
+  ProjectConfigManager,
   showTitle,
   showProperties,
   showList,
@@ -16,19 +17,20 @@ import {
   AGENT_LOGS_DIR,
   isAgentStep,
   isLoopStep,
+  type MCP,
   type WorkflowAgentStep,
   type WorkflowStep,
 } from 'rover-schemas';
+import type { McpServer } from '@agentclientprotocol/sdk';
 import { parseCollectOptions } from '../lib/options.js';
-import { Runner } from '../lib/runner.js';
 import { ACPRunner } from '../lib/acp-runner.js';
 import { createAgent } from '../lib/agents/index.js';
-import { executeStep, shouldSkipStep } from '../lib/step-executor.js';
+import { executeStep } from '../lib/step-executor.js';
 import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Helper function to display step results consistently for both ACP and standard runners
+ * Helper function to display step results consistently
  */
 function displayStepResults(
   stepName: string,
@@ -102,6 +104,67 @@ function collectAgentLogs(logsDir: string, agentTool?: string): void {
     } catch {
       // Best-effort: don't fail the workflow for log collection errors
     }
+  }
+}
+
+/**
+ * Convert a rover.json MCP entry to an ACP McpServer object.
+ */
+function roverMcpToAcpServer(mcp: MCP): McpServer {
+  const headerEntries = (mcp.headers || []).map(h => {
+    const colonIdx = h.indexOf(':');
+    if (colonIdx === -1) return { name: h.trim(), value: '' };
+    return {
+      name: h.slice(0, colonIdx).trim(),
+      value: h.slice(colonIdx + 1).trim(),
+    };
+  });
+
+  const envEntries = (mcp.envs || []).map(e => {
+    const eqIdx = e.indexOf('=');
+    if (eqIdx === -1) return { name: e, value: '' };
+    return { name: e.slice(0, eqIdx), value: e.slice(eqIdx + 1) };
+  });
+
+  switch (mcp.transport) {
+    case 'http':
+      return {
+        type: 'http' as const,
+        name: mcp.name,
+        url: mcp.commandOrUrl,
+        headers: headerEntries,
+      };
+    case 'sse':
+      return {
+        type: 'sse' as const,
+        name: mcp.name,
+        url: mcp.commandOrUrl,
+        headers: headerEntries,
+      };
+    case 'stdio':
+    default: {
+      const parts = mcp.commandOrUrl.split(' ');
+      return {
+        name: mcp.name,
+        command: parts[0],
+        args: parts.slice(1),
+        env: envEntries,
+      };
+    }
+  }
+}
+
+/**
+ * Read MCP servers from rover.json at the given project path and convert them
+ * to the ACP McpServer[] format.  Returns an empty array when no config exists.
+ */
+function loadMcpServersFromProject(projectPath: string): McpServer[] {
+  try {
+    if (!ProjectConfigManager.exists(projectPath)) return [];
+    const config = ProjectConfigManager.load(projectPath);
+    return config.mcps.map(roverMcpToAcpServer);
+  } catch {
+    return [];
   }
 }
 
@@ -370,75 +433,48 @@ export const runCommand = async (
         }
       );
 
-      // Determine which tool to use
-      // Priority: workflow defaults > CLI flag > fallback to claude
-      // (per-step tool configuration takes precedence, handled in Runner/ACPRunner)
-      const tool =
-        options.agentTool || workflowManager.defaults?.tool || 'claude';
+      console.log(colors.cyan('\n🔗 ACP Mode enabled'));
 
-      // ACP usage decision: use ACP mode for agents that support it
-      const acpEnabledTools = [
-        'claude',
-        'gemini',
-        'copilot',
-        'opencode',
-        'qwen',
-      ];
-      const useACPMode = acpEnabledTools.includes(tool.toLowerCase());
+      const mcpServers = loadMcpServersFromProject(process.cwd());
 
-      // Build the agent step executor based on mode
-      let acpRunner: ACPRunner | undefined;
+      // Always include the built-in package-manager MCP
+      mcpServers.push({
+        type: 'http' as const,
+        name: 'package-manager',
+        url: 'http://127.0.0.1:8090/mcp',
+        headers: [],
+      });
 
-      if (useACPMode) {
-        console.log(colors.cyan('\n🔗 ACP Mode enabled'));
+      const acpRunner = new ACPRunner({
+        workflow: workflowManager,
+        inputs,
+        defaultTool: options.agentTool,
+        defaultModel: options.agentModel,
+        statusManager,
+        outputDir: options.output,
+        logger,
+        mcpServers,
+      });
 
-        acpRunner = new ACPRunner({
-          workflow: workflowManager,
-          inputs,
-          defaultTool: options.agentTool,
-          defaultModel: options.agentModel,
-          statusManager,
-          outputDir: options.output,
-          logger,
-        });
-
-        await acpRunner.initializeConnection();
-      }
+      await acpRunner.initializeConnection();
 
       const runner: WorkflowRunner = {
         runAgentStep: async (
           step: WorkflowAgentStep,
-          stepIndex: number,
+          _stepIndex: number,
           stepsOutput: Map<string, Map<string, string>>
         ): Promise<StepResult> => {
-          if (useACPMode && acpRunner) {
-            try {
-              await acpRunner.createSession();
+          try {
+            await acpRunner.createSession();
 
-              // Inject previous step outputs before running
-              for (const [prevStepId, prevOutputs] of stepsOutput.entries()) {
-                acpRunner.stepsOutput.set(prevStepId, prevOutputs);
-              }
-
-              return await acpRunner.runStep(step.id);
-            } finally {
-              acpRunner.closeSession();
+            // Inject previous step outputs before running
+            for (const [prevStepId, prevOutputs] of stepsOutput.entries()) {
+              acpRunner.stepsOutput.set(prevStepId, prevOutputs);
             }
-          } else {
-            const stepRunner = new Runner(
-              workflowManager,
-              step.id,
-              inputs,
-              stepsOutput,
-              options.agentTool,
-              options.agentModel,
-              statusManager,
-              totalSteps,
-              stepIndex,
-              logger
-            );
 
-            return await stepRunner.run(options.output);
+            return await acpRunner.runStep(step.id);
+          } finally {
+            acpRunner.closeSession();
           }
         },
 
@@ -479,8 +515,12 @@ export const runCommand = async (
         totalDuration = runResult.totalDuration;
 
         // Display workflow completion summary
-        const successfulSteps = Array.from(runResult.stepsOutput.keys()).length;
-        const failedSteps = runResult.runSteps - successfulSteps;
+        const successfulSteps = runResult.stepResults.filter(
+          r => r.success
+        ).length;
+        const failedSteps = runResult.stepResults.filter(
+          r => !r.success
+        ).length;
         const skippedSteps = workflowManager.steps.length - runResult.runSteps;
 
         let status = colors.green('✓ Workflow Completed Successfully');
@@ -532,7 +572,7 @@ export const runCommand = async (
         }
       } finally {
         // Always close the ACP runner after all steps are complete
-        acpRunner?.close();
+        acpRunner.close();
       }
     }
   } catch (err) {
