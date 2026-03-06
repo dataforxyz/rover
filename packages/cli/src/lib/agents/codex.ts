@@ -1,4 +1,4 @@
-import { launch } from 'rover-core';
+import { launch, launchSync } from 'rover-core';
 import {
   AIAgentTool,
   InvokeAIAgentError,
@@ -7,11 +7,11 @@ import {
 } from './index.js';
 import { PromptBuilder, IPromptTask } from '../prompts/index.js';
 import { parseJsonResponse } from '../../utils/json-parser.js';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileSync } from 'tmp';
 import type { WorkflowInput } from 'rover-schemas';
-import { acpInvoke } from './acp-invoke.js';
 
 // Environment variables reference:
 // - https://raw.githubusercontent.com/openai/codex/refs/heads/main/docs/config.md
@@ -46,6 +46,12 @@ class CodexAI implements AIAgentTool {
 
   async invoke(prompt: string, options: InvokeOptions = {}): Promise<string> {
     const { json = false, cwd, model } = options;
+    const answerTmpFile = fileSync();
+    const codexArgs = ['exec', '--output-last-message', answerTmpFile.name];
+
+    if (model) {
+      codexArgs.push('--model', model);
+    }
 
     if (json) {
       // Codex does not have any way to force the JSON output at CLI level.
@@ -56,14 +62,13 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     }
 
     try {
-      const result = await acpInvoke({
-        agentName: 'codex',
-        prompt,
+      const { stdout } = await launch(this.AGENT_BIN, codexArgs, {
+        input: prompt,
         cwd,
-        model,
       });
-
-      return result;
+      const content = readFileSync(answerTmpFile.name).toString();
+      answerTmpFile.removeCallback();
+      return content.trim() || '';
     } catch (error) {
       throw new InvokeAIAgentError(this.AGENT_BIN, error);
     }
@@ -151,12 +156,18 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     diffContext: string,
     conflictedContent: string
   ): Promise<string | null> {
-    const prompt = this.promptBuilder.resolveMergeConflictsPrompt(
-      filePath,
-      diffContext,
-      conflictedContent
-    );
-    return this.invoke(prompt, { model: this.model });
+    try {
+      const prompt = this.promptBuilder.resolveMergeConflictsPrompt(
+        filePath,
+        diffContext,
+        conflictedContent
+      );
+      const response = await this.invoke(prompt);
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   async resolveMergeConflictsRegions(
@@ -165,13 +176,19 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     conflictedContent: string,
     regionCount: number
   ): Promise<string | null> {
-    const prompt = this.promptBuilder.resolveMergeConflictsRegionsPrompt(
-      filePath,
-      diffContext,
-      conflictedContent,
-      regionCount
-    );
-    return this.invoke(prompt, { model: this.model });
+    try {
+      const prompt = this.promptBuilder.resolveMergeConflictsRegionsPrompt(
+        filePath,
+        diffContext,
+        conflictedContent,
+        regionCount
+      );
+      const response = await this.invoke(prompt, false);
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   async extractGithubInputs(

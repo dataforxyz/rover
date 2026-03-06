@@ -1,4 +1,4 @@
-import { launch } from 'rover-core';
+import { launch, launchSync } from 'rover-core';
 import {
   AIAgentTool,
   InvokeAIAgentError,
@@ -11,7 +11,6 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { WorkflowInput } from 'rover-schemas';
-import { acpInvoke } from './acp-invoke.js';
 
 // Environment variables reference:
 // - https://raw.githubusercontent.com/google-gemini/gemini-cli/refs/heads/main/docs/cli/configuration.md
@@ -50,6 +49,12 @@ class GeminiAI implements AIAgentTool {
 
   async invoke(prompt: string, options: InvokeOptions = {}): Promise<string> {
     const { json = false, cwd, model } = options;
+    // Do not add -p, it's deprecated
+    const geminiArgs: string[] = [];
+
+    if (model) {
+      geminiArgs.push('--model', model);
+    }
 
     if (json) {
       // Gemini does not have any way to force the JSON output at CLI level.
@@ -60,14 +65,11 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     }
 
     try {
-      const result = await acpInvoke({
-        agentName: 'gemini',
-        prompt,
+      const { stdout } = await launch(this.AGENT_BIN, geminiArgs, {
+        input: prompt,
         cwd,
-        model,
       });
-
-      return result;
+      return stdout?.toString().trim() || '';
     } catch (error) {
       throw new InvokeAIAgentError(this.AGENT_BIN, error);
     }
@@ -155,12 +157,18 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     diffContext: string,
     conflictedContent: string
   ): Promise<string | null> {
-    const prompt = this.promptBuilder.resolveMergeConflictsPrompt(
-      filePath,
-      diffContext,
-      conflictedContent
-    );
-    return this.invoke(prompt, { model: this.model });
+    try {
+      const prompt = this.promptBuilder.resolveMergeConflictsPrompt(
+        filePath,
+        diffContext,
+        conflictedContent
+      );
+      const response = await this.invoke(prompt);
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   async resolveMergeConflictsRegions(
@@ -169,13 +177,19 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     conflictedContent: string,
     regionCount: number
   ): Promise<string | null> {
-    const prompt = this.promptBuilder.resolveMergeConflictsRegionsPrompt(
-      filePath,
-      diffContext,
-      conflictedContent,
-      regionCount
-    );
-    return this.invoke(prompt, { model: this.model });
+    try {
+      const prompt = this.promptBuilder.resolveMergeConflictsRegionsPrompt(
+        filePath,
+        diffContext,
+        conflictedContent,
+        regionCount
+      );
+      const response = await this.invoke(prompt, false);
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   async extractGithubInputs(

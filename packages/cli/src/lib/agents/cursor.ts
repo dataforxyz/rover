@@ -1,4 +1,4 @@
-import { launch } from 'rover-core';
+import { launch, launchSync } from 'rover-core';
 import {
   AIAgentTool,
   findKeychainCredentials,
@@ -8,12 +8,11 @@ import {
 } from './index.js';
 import { PromptBuilder, IPromptTask } from '../prompts/index.js';
 import { parseJsonResponse } from '../../utils/json-parser.js';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { fileSync } from 'tmp';
 import type { WorkflowInput } from 'rover-schemas';
-import { acpInvoke } from './acp-invoke.js';
 
 // Environment variables reference:
 // - https://cursor.com/docs/cli/reference/parameters
@@ -45,22 +44,39 @@ class CursorAI implements AIAgentTool {
 
   async invoke(prompt: string, options: InvokeOptions = {}): Promise<string> {
     const { json = false, cwd, model } = options;
+    const cursorArgs = ['agent', '--print'];
+
+    if (model) {
+      cursorArgs.push('--model', model);
+    }
 
     if (json) {
+      cursorArgs.push('--output-format');
+      cursorArgs.push('json');
+
       prompt = `${prompt}
 
 You MUST output a valid JSON string as an output. Just output the JSON string and nothing else. If you had any error, still return a JSON string with an "error" property.`;
     }
 
     try {
-      const result = await acpInvoke({
-        agentName: 'cursor',
-        prompt,
+      const { stdout } = await launch(this.AGENT_BIN, cursorArgs, {
+        input: prompt,
         cwd,
-        model,
       });
 
-      return result;
+      const result = stdout?.toString().trim() || '';
+
+      if (json) {
+        try {
+          const parsed = JSON.parse(result);
+          return `${parsed.result}`;
+        } catch (_err) {
+          throw new InvokeAIAgentError(this.AGENT_BIN, 'Invalid JSON output');
+        }
+      } else {
+        return result;
+      }
     } catch (error) {
       throw new InvokeAIAgentError(this.AGENT_BIN, error);
     }
@@ -148,12 +164,18 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     diffContext: string,
     conflictedContent: string
   ): Promise<string | null> {
-    const prompt = this.promptBuilder.resolveMergeConflictsPrompt(
-      filePath,
-      diffContext,
-      conflictedContent
-    );
-    return this.invoke(prompt, { model: this.model });
+    try {
+      const prompt = this.promptBuilder.resolveMergeConflictsPrompt(
+        filePath,
+        diffContext,
+        conflictedContent
+      );
+      const response = await this.invoke(prompt);
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   async resolveMergeConflictsRegions(
@@ -162,13 +184,19 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     conflictedContent: string,
     regionCount: number
   ): Promise<string | null> {
-    const prompt = this.promptBuilder.resolveMergeConflictsRegionsPrompt(
-      filePath,
-      diffContext,
-      conflictedContent,
-      regionCount
-    );
-    return this.invoke(prompt, { model: this.model });
+    try {
+      const prompt = this.promptBuilder.resolveMergeConflictsRegionsPrompt(
+        filePath,
+        diffContext,
+        conflictedContent,
+        regionCount
+      );
+      const response = await this.invoke(prompt, false);
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   async extractGithubInputs(
