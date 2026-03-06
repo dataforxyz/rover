@@ -102,6 +102,32 @@ export function warnIfCustomImage(projectConfig?: ProjectConfigManager): void {
   }
 }
 
+/**
+ * Resolve the path of an init script, looking first under the project
+ * sub-directory (if any) then at the workspace root.
+ */
+export function resolveInitScriptPath(
+  projectRoot: string,
+  scriptPath: string,
+  projectPath?: string
+): string {
+  if (projectPath) {
+    const projectRelative = join(projectRoot, projectPath, scriptPath);
+    if (existsSync(projectRelative)) {
+      return projectRelative;
+    }
+  }
+
+  const rootRelative = join(projectRoot, scriptPath);
+  if (existsSync(rootRelative)) {
+    return rootRelative;
+  }
+
+  return projectPath
+    ? join(projectRoot, projectPath, scriptPath)
+    : rootRelative;
+}
+
 export type CurrentUser = string;
 export type CurrentGroup = string;
 
@@ -310,11 +336,14 @@ export function getWorktreeGitMounts(worktreePath: string): string[] {
 
     return [
       // Mount parent .git dir read-only (refs, config, hooks, etc.)
-      '-v', `${parentGitDir}:${parentGitDir}:Z,ro`,
+      '-v',
+      `${parentGitDir}:${parentGitDir}:Z,ro`,
       // Mount object store read-write (append-only, needed for creating commits)
-      '-v', `${join(parentGitDir, 'objects')}:${join(parentGitDir, 'objects')}:Z,rw`,
+      '-v',
+      `${join(parentGitDir, 'objects')}:${join(parentGitDir, 'objects')}:Z,rw`,
       // Mount worktree metadata subdir read-write (HEAD, index, etc.)
-      '-v', `${gitdirPath}:${gitdirPath}:Z,rw`,
+      '-v',
+      `${gitdirPath}:${gitdirPath}:Z,rw`,
     ];
   } catch {
     return [];
