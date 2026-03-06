@@ -15,7 +15,13 @@ import {
   type StepResult,
 } from 'rover-core';
 import colors from 'ansi-colors';
-import { copyFileSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import type {
   WorkflowAgentStep,
   WorkflowOutput,
