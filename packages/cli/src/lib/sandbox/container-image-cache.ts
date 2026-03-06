@@ -7,7 +7,7 @@ import {
   getVersion,
   ProjectConfigManager,
 } from 'rover-core';
-import { ContainerBackend } from './container-common.js';
+import { ContainerBackend, resolveInitScriptPath } from './container-common.js';
 
 /**
  * Build a process env with DOCKER_HOST set when the sandbox metadata
@@ -48,6 +48,16 @@ export interface SetupHashInputs {
     envs?: string[];
     headers?: string[];
   }>;
+  projects?: Array<{
+    name: string;
+    path: string;
+    repository?: string;
+    ref?: string;
+    languages?: string[];
+    packageManagers?: string[];
+    taskManagers?: string[];
+    initScriptContent?: string;
+  }>;
 }
 
 /**
@@ -56,7 +66,7 @@ export interface SetupHashInputs {
  * of the same values produces the same hash.
  */
 export function computeSetupHash(inputs: SetupHashInputs): string {
-  const normalized = {
+  const normalized: Record<string, unknown> = {
     agentImage: inputs.agentImage,
     languages: [...inputs.languages].sort(),
     packageManagers: [...inputs.packageManagers].sort(),
@@ -75,6 +85,21 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
         headers: [...(mcp.headers || [])].sort(),
       })),
   };
+
+  if (inputs.projects && inputs.projects.length > 0) {
+    normalized.projects = [...inputs.projects]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(p => ({
+        name: p.name,
+        path: p.path,
+        repository: p.repository || '',
+        ref: p.ref || '',
+        languages: [...(p.languages || [])].sort(),
+        packageManagers: [...(p.packageManagers || [])].sort(),
+        taskManagers: [...(p.taskManagers || [])].sort(),
+        initScriptContent: p.initScriptContent || '',
+      }));
+  }
 
   return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 }
@@ -181,6 +206,12 @@ export function checkImageCache(
   agentImage: string,
   agent: string
 ): { hasCachedImage: boolean; cacheTag: string } {
+  const languages = projectConfig.allLanguages ?? projectConfig.languages ?? [];
+  const packageManagers =
+    projectConfig.allPackageManagers ?? projectConfig.packageManagers ?? [];
+  const taskManagers =
+    projectConfig.allTaskManagers ?? projectConfig.taskManagers ?? [];
+
   let initScriptContent = '';
   if (projectConfig.initScript) {
     try {
@@ -210,17 +241,44 @@ export function checkImageCache(
     cacheFilesContent = parts.join('\0');
   }
 
+  // Read per-project init script contents for hashing
+  let projects: SetupHashInputs['projects'];
+  if (projectConfig.projects && projectConfig.projects.length > 0) {
+    projects = projectConfig.projects.map(p => {
+      let projectInitContent = '';
+      if (p.initScript) {
+        try {
+          const absPath = join(projectConfig.projectRoot, p.initScript);
+          projectInitContent = readFileSync(absPath, 'utf-8');
+        } catch {
+          // treat as empty
+        }
+      }
+      return {
+        name: p.name,
+        path: p.path,
+        repository: p.repository,
+        ref: p.ref,
+        languages: p.languages,
+        packageManagers: p.packageManagers,
+        taskManagers: p.taskManagers,
+        initScriptContent: projectInitContent,
+      };
+    });
+  }
+
   const agentImageId = resolveImageId(backend, agentImage);
   const hash = computeSetupHash({
     agentImage: agentImageId,
-    languages: projectConfig.languages,
-    packageManagers: projectConfig.packageManagers,
-    taskManagers: projectConfig.taskManagers,
+    languages,
+    packageManagers,
+    taskManagers,
     agent,
     roverVersion: getVersion(),
     initScriptContent,
     cacheFilesContent,
     mcps: projectConfig.mcps,
+    projects,
   });
 
   const cacheTag = getCacheImageTag(hash);
