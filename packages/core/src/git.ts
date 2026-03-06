@@ -455,6 +455,15 @@ export class Git {
   }
 
   /**
+   * Soft-reset the current branch to the given ref, keeping all changes staged.
+   */
+  resetSoft(ref: string, options: GitWorktreeOptions = {}): void {
+    launchSync('git', ['reset', '--soft', ref], {
+      cwd: options.worktreePath ?? this.cwd,
+    });
+  }
+
+  /**
    * Abort current rebase
    */
   abortRebase(options: GitWorktreeOptions = {}) {
