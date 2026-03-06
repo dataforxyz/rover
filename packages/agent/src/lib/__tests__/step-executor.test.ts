@@ -310,11 +310,10 @@ describe('executeStep', () => {
 
     expect(result.success).toBe(true);
     // fix_agent should have used acpRunner, not Runner.
-    // The loop runs 2 iterations (fail → fix → pass → fix → condition met),
-    // so acpRunner is invoked twice.
-    expect(mockAcpRunner.createSession).toHaveBeenCalledTimes(2);
+    // ACP session is created once at loop scope and reused across iterations.
+    expect(mockAcpRunner.createSession).toHaveBeenCalledOnce();
     expect(mockAcpRunner.runStep).toHaveBeenCalledWith('fix_agent');
-    expect(mockAcpRunner.closeSession).toHaveBeenCalledTimes(2);
+    expect(mockAcpRunner.closeSession).toHaveBeenCalledOnce();
     expect(Runner).not.toHaveBeenCalled();
   });
 
