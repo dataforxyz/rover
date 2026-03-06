@@ -473,20 +473,6 @@ export class Git {
   }
 
   /**
-   * Abort current rebase
-   */
-  abortRebase(options: GitWorktreeOptions = {}) {
-    try {
-      launchSync('git', ['rebase', '--abort'], {
-        cwd: options.worktreePath ?? this.cwd,
-        env: { ...process.env, GIT_EDITOR: 'true' },
-      });
-    } catch (_err) {
-      // Ignore abort errors
-    }
-  }
-
-  /**
    * Continue current rebase
    */
   continueRebase(options: GitWorktreeOptions = {}) {
