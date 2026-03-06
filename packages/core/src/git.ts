@@ -455,6 +455,15 @@ export class Git {
   }
 
   /**
+   * Soft-reset the current branch to the given ref, keeping all changes staged.
+   */
+  resetSoft(ref: string, options: GitWorktreeOptions = {}): void {
+    launchSync('git', ['reset', '--soft', ref], {
+      cwd: options.worktreePath ?? this.cwd,
+    });
+  }
+
+  /**
    * Abort current rebase
    */
   abortRebase(options: GitWorktreeOptions = {}) {
@@ -463,8 +472,12 @@ export class Git {
         cwd: options.worktreePath ?? this.cwd,
         env: { ...process.env, GIT_EDITOR: 'true' },
       });
-    } catch (_err) {
-      // Ignore abort errors
+      return { success: true };
+    } catch (err) {
+      const stderr = (err as any)?.stderr?.toString().trim() || '';
+      const message =
+        stderr || (err instanceof Error ? err.message : String(err));
+      return { success: false, error: message };
     }
   }
 
@@ -902,15 +915,6 @@ export class Git {
       hash,
       summary,
     }));
-  }
-
-  /**
-   * Soft-reset the current branch to the given ref, keeping all changes staged.
-   */
-  resetSoft(ref: string, options: GitWorktreeOptions = {}): void {
-    launchSync('git', ['reset', '--soft', ref], {
-      cwd: options.worktreePath ?? this.cwd,
-    });
   }
 
   /**
