@@ -315,7 +315,9 @@ echo -e "\\n📦 Installing Agent CLI and setting up credentials"
 # Pass the environment variables to ensure it loads the right credentials
 sudo -E rover-agent install $AGENT --user-dir $HOME
 # Set the right permissions after installing and moving credentials
-sudo chown -R $(id -u):$(id -g) $HOME
+for d in .claude .codex .copilot .cursor .gemini .qwen .config .local .claude.json; do
+  [ -e "$HOME/$d" ] && sudo chown -R $(id -u):$(id -g) "$HOME/$d"
+done
 
 if [ $? -eq 0 ]; then
     echo "✅ $AGENT was installed successfully."
@@ -333,7 +335,9 @@ echo -e "\\n📦 Done installing agent"`;
     const credentialInstallSection = `# Copy credentials (runs on every start, including cached images)
 echo -e "\\n📦 Copying agent credentials"
 sudo rover-agent-install $AGENT
-sudo chown -R $(id -u):$(id -g) $HOME
+for d in .claude .codex .copilot .cursor .gemini .qwen .config .local .claude.json; do
+  [ -e "$HOME/$d" ] && sudo chown -R $(id -u):$(id -g) "$HOME/$d"
+done
 echo "✅ Credentials copied successfully"`;
 
     // --- MCP config section ---
