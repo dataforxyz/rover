@@ -5,8 +5,12 @@ export class GoSandboxPackage extends SandboxPackage {
   name = 'go';
 
   installScript(): string {
-    // Install go
-    return `sudo apt-get install -y --no-install-recommends golang-go`;
+    return `
+GO_VERSION=\$(grep -m1 '^go ' /workspace/go.work /workspace/go.mod 2>/dev/null | head -1 | awk '{print $2}')
+GO_VERSION=\${GO_VERSION:-1.24.1}
+curl -fsSL "https://go.dev/dl/go\${GO_VERSION}.linux-amd64.tar.gz" | sudo tar -C /usr/local -xzf -
+sudo ln -sf /usr/local/go/bin/go /usr/bin/go
+sudo ln -sf /usr/local/go/bin/gofmt /usr/bin/gofmt`;
   }
 
   initScript(): string {
