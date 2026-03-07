@@ -61,7 +61,7 @@ export abstract class Sandbox {
   ): Promise<ReturnType<typeof launch>>;
 
   protected get sandboxName(): string {
-    return `rover-task-${this.task.id}-${this.task.iterations}`;
+    return `rover-task-${this.task.uuid.slice(0, 8)}-${this.task.id}-${this.task.iterations}`;
   }
 
   async createAndStart(): Promise<string> {

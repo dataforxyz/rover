@@ -254,6 +254,23 @@ export async function etcGroupWithUserInfo(
   return [originalGroup + '\n' + groupEntry + '\n', 'agent'];
 }
 
+export async function etcShadowWithUserInfo(
+  backend: ContainerBackend,
+  image: string,
+  userInfo: { uid: number; gid: number }
+): Promise<string> {
+  const originalShadow = await catFile(backend, image, '/etc/shadow');
+  const existingUids = await imageUids(backend, image);
+
+  if (existingUids.has(userInfo.uid)) {
+    return originalShadow;
+  }
+
+  const shadowEntry = 'agent:!:20000:0:99999:7:::';
+
+  return originalShadow + '\n' + shadowEntry + '\n';
+}
+
 /**
  * Generate the user and group files to mount on the image. It contains
  * the user and group id from the host user to ensure a correct permission
@@ -266,7 +283,7 @@ export async function tmpUserGroupFiles(
   containerBackend: ContainerBackend,
   agentImage: string,
   userInfo: UserInfo<string>
-): Promise<[string, string]> {
+): Promise<[string, string, string]> {
   const userCredentialsTempPath = mkdtempSync(join(tmpdir(), 'rover-'));
   const etcPasswd = join(userCredentialsTempPath, 'passwd');
   const [etcPasswdContents, _username] = await etcPasswdWithUserInfo(
@@ -284,7 +301,15 @@ export async function tmpUserGroupFiles(
   );
   writeFileSync(etcGroup, etcGroupContents);
 
-  return [etcPasswd, etcGroup];
+  const etcShadow = join(userCredentialsTempPath, 'shadow');
+  const etcShadowContents = await etcShadowWithUserInfo(
+    containerBackend,
+    agentImage,
+    userInfo
+  );
+  writeFileSync(etcShadow, etcShadowContents);
+
+  return [etcPasswd, etcGroup, etcShadow];
 }
 
 /**

@@ -133,7 +133,7 @@ export class PodmanSandbox extends Sandbox {
     // Warn if using a custom agent image
     warnIfCustomImage(projectConfig);
 
-    const [etcPasswd, etcGroup] = await tmpUserGroupFiles(
+    const [etcPasswd, etcGroup, etcShadow] = await tmpUserGroupFiles(
       ContainerBackend.Podman,
       effectiveImage,
       userInfo_
@@ -153,6 +153,8 @@ export class PodmanSandbox extends Sandbox {
       `${etcPasswd}:/etc/passwd:Z,ro`,
       '-v',
       `${etcGroup}:/etc/group:Z,ro`,
+      '-v',
+      `${etcShadow}:/etc/shadow:Z,ro`,
       '--user',
       `${userInfo_.uid}:${userInfo_.gid}`,
       '-v',
@@ -438,7 +440,7 @@ export class PodmanSandbox extends Sandbox {
     // Warn if using a custom agent image
     warnIfCustomImage(projectConfig);
 
-    const [etcPasswd, etcGroup] = await tmpUserGroupFiles(
+    const [etcPasswd, etcGroup, etcShadow] = await tmpUserGroupFiles(
       ContainerBackend.Podman,
       effectiveImage,
       userInfo_
@@ -461,6 +463,8 @@ export class PodmanSandbox extends Sandbox {
       `${etcPasswd}:/etc/passwd:Z,ro`,
       '-v',
       `${etcGroup}:/etc/group:Z,ro`,
+      '-v',
+      `${etcShadow}:/etc/shadow:Z,ro`,
       '--user',
       `${userInfo_.uid}:${userInfo_.gid}`,
       '-v',
@@ -612,7 +616,7 @@ export class PodmanSandbox extends Sandbox {
     }
 
     // Generate a unique container name for the interactive shell
-    const containerName = `rover-shell-${this.task.id}-${generateRandomId()}`;
+    const containerName = `rover-shell-${this.task.uuid.slice(0, 8)}-${this.task.id}-${generateRandomId()}`;
 
     // Get extra args from CLI options and project config, merge them
     const projectConfig = ProjectConfigManager.load(this.options?.projectPath!);
