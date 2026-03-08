@@ -58,7 +58,7 @@ function gitOutput(repoPath: string, args: string[]): string {
 function hashFileIntoDigest(
   hash: ReturnType<typeof createHash>,
   fullPath: string,
-  size: number,
+  size: number
 ): void {
   const STREAM_THRESHOLD = 1 * 1024 * 1024; // 1 MB
   if (size < STREAM_THRESHOLD) {
@@ -153,7 +153,9 @@ export function captureExternalRepositoryStates(
       readFileSync(descriptionPath, 'utf8')
     ) as WorkspaceDescription;
   } catch {
-    console.warn(`Warning: Failed to parse workspace description at ${descriptionPath}`);
+    console.warn(
+      `Warning: Failed to parse workspace description at ${descriptionPath}`
+    );
     return [];
   }
   const projects = Array.isArray(description.projects)
