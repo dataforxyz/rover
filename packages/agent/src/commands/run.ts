@@ -847,7 +847,6 @@ export const runCommand = async (
         // Exit as PAUSED only if checkpoint was saved, otherwise exit as
         // FAILED so the CLI layer doesn't schedule a resume with no checkpoint.
         const exitCode = saved ? EXIT_PAUSED : EXIT_FAILED;
-        logger?.close?.();
         process.exit(exitCode);
       };
       sigtermHandler = () => gracefulShutdown('SIGTERM');
@@ -1132,7 +1131,6 @@ export const runCommand = async (
     if (sigintHandler) process.off('SIGINT', sigintHandler);
   }
 
-  logger?.close?.();
   process.exit(
     output.success ? EXIT_SUCCESS : output.paused ? EXIT_PAUSED : EXIT_FAILED
   );

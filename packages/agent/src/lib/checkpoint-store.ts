@@ -151,7 +151,7 @@ export function loadCheckpoint(path: string): CheckpointData | null {
       ? data.externalRepositories
           .filter(
             (
-              entry
+              entry: unknown
             ): entry is {
               name: string;
               path: string;
@@ -169,14 +169,23 @@ export function loadCheckpoint(path: string): CheckpointData | null {
               typeof (entry as any).trackedDiffHash === 'string' &&
               typeof (entry as any).untrackedHash === 'string'
           )
-          .map(entry => ({
+          .map(
+            (entry: {
+              name: string;
+              path: string;
+              repository: string;
+              head: string;
+              trackedDiffHash: string;
+              untrackedHash: string;
+            }) => ({
             name: entry.name,
             path: entry.path,
             repository: entry.repository,
             head: entry.head,
             trackedDiffHash: entry.trackedDiffHash,
             untrackedHash: entry.untrackedHash,
-          }))
+            })
+          )
       : undefined;
 
     return {

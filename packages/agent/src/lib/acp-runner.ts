@@ -67,7 +67,7 @@ function flattenLeafStepIds(steps: WorkflowStep[]): string[] {
   const stepIds: string[] = [];
 
   for (const step of steps) {
-    if (isLoopStep(step)) {
+    if (step.type === 'loop') {
       stepIds.push(...flattenLeafStepIds(step.steps));
       continue;
     }
@@ -1066,17 +1066,6 @@ export class ACPRunner {
     if (this.sessionId) {
       if (VERBOSE) {
         console.log(colors.gray(`🔌 Closing session: ${this.sessionId}`));
-      }
-      // Notify the ACP agent so it can release server-side resources.
-      // Best-effort: if the connection is already broken we just proceed.
-      if (this.connection && this.isConnectionInitialized) {
-        try {
-          this.connection
-            .endSession({ sessionId: this.sessionId })
-            .catch(() => {});
-        } catch {
-          // Connection may already be closed
-        }
       }
       this.sessionId = null;
       this.isSessionCreated = false;
