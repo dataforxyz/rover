@@ -41,6 +41,15 @@ export function collapseTaskCommits(
   const head = git.getCommitHash('HEAD', { worktreePath });
   if (!head || head === baseCommit) return false;
 
+  // Safety check: ensure baseCommit is an ancestor of HEAD before resetting.
+  // If not (e.g. after a forced rebase), skip the collapse to avoid data loss.
+  if (!git.isAncestor(baseCommit, 'HEAD', { worktreePath })) {
+    console.warn(
+      `⚠ Skipping commit collapse: base commit ${baseCommit.slice(0, 8)} is not an ancestor of HEAD`
+    );
+    return false;
+  }
+
   git.resetSoft(baseCommit, { worktreePath });
   return true;
 }

@@ -722,7 +722,8 @@ export function activate(context: vscode.ExtensionContext) {
               increment: 30,
               message: 'Preparing a fresh task run...',
             });
-            statusBarItem!.text = '$(loading~spin) Preparing fresh task run...';
+            statusBarItem!.text =
+              '$(loading~spin) Preparing fresh task run...';
 
             const restartResult = await cli.restartTask(taskId);
 

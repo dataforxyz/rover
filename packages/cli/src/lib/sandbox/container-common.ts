@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -13,6 +14,8 @@ import { tmpdir, UserInfo } from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const DEFAULT_DEV_AGENT_IMAGE = 'ghcr.io/endorhq/rover/agent-dev:latest';
 
 /**
  * Dynamically resolves the default agent image based on CLI version.
@@ -33,14 +36,14 @@ export function getDefaultAgentImage(): string {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
     const version = packageJson.version;
 
-    // Use local image for dev versions, remote image for production
+    // Source checkouts should still use a pullable image by default.
     if (version.includes('-dev')) {
-      return 'rover-agent-local:latest';
+      return DEFAULT_DEV_AGENT_IMAGE;
     } else {
       return `ghcr.io/endorhq/rover/agent:v${version}`;
     }
   } catch (_err) {
-    return 'rover-agent-local:latest';
+    return DEFAULT_DEV_AGENT_IMAGE;
   }
 }
 
@@ -103,24 +106,25 @@ export function warnIfCustomImage(projectConfig?: ProjectConfigManager): void {
 }
 
 /**
- * Resolve the path of an init script, looking first under the project
- * sub-directory (if any) then at the workspace root.
+ * Resolve the path of an init script from the workspace root first.
+ * If the root-relative file is missing, fall back to the sub-project path
+ * to preserve compatibility with older configs.
  */
 export function resolveInitScriptPath(
   projectRoot: string,
   scriptPath: string,
   projectPath?: string
 ): string {
+  const rootRelative = join(projectRoot, scriptPath);
+  if (existsSync(rootRelative)) {
+    return rootRelative;
+  }
+
   if (projectPath) {
     const projectRelative = join(projectRoot, projectPath, scriptPath);
     if (existsSync(projectRelative)) {
       return projectRelative;
     }
-  }
-
-  const rootRelative = join(projectRoot, scriptPath);
-  if (existsSync(rootRelative)) {
-    return rootRelative;
   }
 
   return projectPath
@@ -147,11 +151,10 @@ export async function catFile(
         await launch(backend, [
           'run',
           '--entrypoint',
-          '/bin/sh',
+          '/bin/cat',
           '--rm',
           image,
-          '-c',
-          `/bin/cat ${file}`,
+          file,
         ])
       ).stdout
         ?.toString()
@@ -230,7 +233,12 @@ export async function etcPasswdWithUserInfo(
   }
 
   // Create entry for current user
-  const userEntry = `agent:x:${userInfo.uid}:${userInfo.gid}:agent:/home/agent:/bin/sh`;
+  // Use an empty password field so PAM/sudo does not require a shadow entry
+  // for dynamically injected host users (the mounted /etc/passwd has no
+  // matching /etc/shadow entry for this synthetic account).
+  // SECURITY: This is acceptable because the container is ephemeral, isolated,
+  // and not network-accessible — the empty password has no exploitable surface.
+  const userEntry = `agent::${userInfo.uid}:${userInfo.gid}:agent:/home/agent:/bin/sh`;
 
   return [originalPasswd + '\n' + userEntry + '\n', 'agent'];
 }
@@ -254,23 +262,6 @@ export async function etcGroupWithUserInfo(
   return [originalGroup + '\n' + groupEntry + '\n', 'agent'];
 }
 
-export async function etcShadowWithUserInfo(
-  backend: ContainerBackend,
-  image: string,
-  userInfo: { uid: number; gid: number }
-): Promise<string> {
-  const originalShadow = await catFile(backend, image, '/etc/shadow');
-  const existingUids = await imageUids(backend, image);
-
-  if (existingUids.has(userInfo.uid)) {
-    return originalShadow;
-  }
-
-  const shadowEntry = 'agent:!:20000:0:99999:7:::';
-
-  return originalShadow + '\n' + shadowEntry + '\n';
-}
-
 /**
  * Generate the user and group files to mount on the image. It contains
  * the user and group id from the host user to ensure a correct permission
@@ -279,11 +270,18 @@ export async function etcShadowWithUserInfo(
  * The Docker rootless mode does not support user namespaces, so the permissions
  * will still be different from the host user.
  */
+export interface TmpUserGroupResult {
+  etcPasswd: string;
+  etcGroup: string;
+  /** Remove the temporary directory. Call after the container has been created. */
+  cleanup: () => void;
+}
+
 export async function tmpUserGroupFiles(
   containerBackend: ContainerBackend,
   agentImage: string,
   userInfo: UserInfo<string>
-): Promise<[string, string, string]> {
+): Promise<TmpUserGroupResult> {
   const userCredentialsTempPath = mkdtempSync(join(tmpdir(), 'rover-'));
   const etcPasswd = join(userCredentialsTempPath, 'passwd');
   const [etcPasswdContents, _username] = await etcPasswdWithUserInfo(
@@ -301,15 +299,15 @@ export async function tmpUserGroupFiles(
   );
   writeFileSync(etcGroup, etcGroupContents);
 
-  const etcShadow = join(userCredentialsTempPath, 'shadow');
-  const etcShadowContents = await etcShadowWithUserInfo(
-    containerBackend,
-    agentImage,
-    userInfo
-  );
-  writeFileSync(etcShadow, etcShadowContents);
+  const cleanup = () => {
+    try {
+      rmSync(userCredentialsTempPath, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup
+    }
+  };
 
-  return [etcPasswd, etcGroup, etcShadow];
+  return { etcPasswd, etcGroup, cleanup };
 }
 
 /**
@@ -347,8 +345,13 @@ export function getWorktreeGitMounts(worktreePath: string): string[] {
       return [];
     }
 
+    const rawGitdirPath = match[1];
+    if (/^[A-Za-z]:[\\/]/.test(rawGitdirPath)) {
+      return [];
+    }
+
     // Resolve the gitdir path (e.g. /home/.../repo/.git/worktrees/13)
-    const gitdirPath = resolve(worktreePath, match[1]);
+    const gitdirPath = resolve(worktreePath, rawGitdirPath);
 
     // The parent .git directory is 2 levels up from the worktree metadata dir
     // e.g. /home/.../repo/.git/worktrees/13 -> /home/.../repo/.git
@@ -360,12 +363,9 @@ export function getWorktreeGitMounts(worktreePath: string): string[] {
     }
 
     return [
-      // Mount parent .git dir read-only (refs, config, hooks, etc.)
+      // Mount parent .git dir read-write so commits can update refs/reflogs.
       '-v',
-      `${parentGitDir}:${parentGitDir}:Z,ro`,
-      // Mount object store read-write (append-only, needed for creating commits)
-      '-v',
-      `${join(parentGitDir, 'objects')}:${join(parentGitDir, 'objects')}:Z,rw`,
+      `${parentGitDir}:${parentGitDir}:Z,rw`,
       // Mount worktree metadata subdir read-write (HEAD, index, etc.)
       '-v',
       `${gitdirPath}:${gitdirPath}:Z,rw`,
@@ -373,6 +373,24 @@ export function getWorktreeGitMounts(worktreePath: string): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Returns rover-agent CLI flags to pass a checkpoint file path.
+ * The checkpoint file lives inside the iteration directory (already
+ * mounted at /output), so we reference it via /output/checkpoint.json
+ * instead of adding a separate bind-mount. These args are appended
+ * after the image name in the container create command.
+ *
+ * The container path is always `/output/checkpoint.json` regardless of the
+ * host filename because the iteration directory is bind-mounted at `/output`
+ * and the agent always writes checkpoints as `checkpoint.json` within it.
+ */
+export function getCheckpointArgs(checkpointPath?: string): string[] {
+  if (checkpointPath && existsSync(checkpointPath)) {
+    return ['--checkpoint', '/output/checkpoint.json'];
+  }
+  return [];
 }
 
 export function normalizeExtraArgs(

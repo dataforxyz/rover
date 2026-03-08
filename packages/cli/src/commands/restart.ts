@@ -10,6 +10,7 @@ import {
   ProjectConfigManager,
   showTitle,
   showProperties,
+  launchSync,
   type ProjectManager,
 } from 'rover-core';
 import { TaskNotFoundError } from 'rover-schemas';
@@ -25,6 +26,7 @@ import {
 import yoctoSpinner from 'yocto-spinner';
 import { copyEnvironmentFiles } from '../utils/env-files.js';
 import type { CommandDefinition } from '../types.js';
+import { acquireResumeLock } from '../lib/resume-helper.js';
 
 /**
  * Restart a task that is in NEW or FAILED status.
@@ -48,18 +50,17 @@ const restartCommand = async (
 
   const telemetry = getTelemetry();
 
-  const json = options.json === true;
   let jsonOutput: TaskRestartOutput = {
     success: false,
   };
 
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  // Convert string taskId to number (strict: reject '123abc' etc.)
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Require project context
   let project;
@@ -87,8 +88,14 @@ const restartCommand = async (
             projectPath: project.path,
           });
           const state = await sandbox.inspect();
-          // Container is still running — reject the restart
-          if (state && state.status === 'running') {
+          // Container is still alive — reject the restart
+          const containerStatus = (state?.status ?? '').toLowerCase();
+          if (
+            containerStatus === 'running' ||
+            containerStatus === 'created' ||
+            containerStatus === 'restarting' ||
+            containerStatus === 'paused'
+          ) {
             jsonOutput.error = `Task ${taskId} is ${task.status} and its container is still running`;
             await exitWithError(jsonOutput, {
               tips: [
@@ -102,27 +109,59 @@ const restartCommand = async (
             return;
           }
           // Container is dead (exited or not found) — allow restart to proceed
-        } catch {
-          // If we can't inspect (e.g. no backend available), allow restart
+        } catch (error) {
+          const inspectError =
+            error instanceof Error ? error.message : String(error);
+          jsonOutput.error = `Could not verify whether task ${taskId} container is running: ${inspectError}`;
+          await exitWithError(jsonOutput, {
+            tips: [
+              'Rover could not inspect the existing task container, so restart was blocked to avoid duplicate runs',
+              'Use ' +
+                colors.cyan(`rover inspect ${taskId}`) +
+                colors.gray(' to check the current task status'),
+              'Use ' +
+                colors.cyan(`rover stop ${taskId}`) +
+                colors.gray(
+                  ' if you are certain the task is stuck, then run restart again'
+                ),
+            ],
+            telemetry,
+          });
+          return;
         }
       } else {
         jsonOutput.error = `Task ${taskId} is not in NEW or FAILED status (current: ${task.status})`;
-        await exitWithError(jsonOutput, {
-          tips: [
-            'Only NEW, FAILED, and stuck IN_PROGRESS/ITERATING tasks can be restarted',
+        const tips = [
+          'Only NEW, FAILED, and stuck IN_PROGRESS/ITERATING tasks can be restarted',
+          'Use ' +
+            colors.cyan(`rover inspect ${taskId}`) +
+            colors.gray(' to find out the current task status'),
+        ];
+        if (task.isPaused()) {
+          tips.unshift(
             'Use ' +
-              colors.cyan(`rover inspect ${taskId}`) +
-              colors.gray(' to find out the current task status'),
-          ],
-          telemetry,
-        });
+              colors.cyan(`rover resume ${taskId}`) +
+              colors.gray(' to resume a paused task from its last checkpoint')
+          );
+        }
+        await exitWithError(jsonOutput, { tips, telemetry });
         return;
       }
     }
 
-    // Restart the task (resets to NEW status and tracks restart attempt)
+    const previousStatus = task.status;
+    const previousError = task.error;
+    const restorePreRestartStatus = () => {
+      if (previousStatus === 'FAILED' && previousError) {
+        task.setStatus(previousStatus, { error: previousError });
+        return;
+      }
+      task.setStatus(previousStatus);
+    };
+
+    // Defer task.restart() until after lock acquisition to avoid a window
+    // where the task is IN_PROGRESS on disk without concurrency protection.
     const restartedAt = new Date().toISOString();
-    task.restart(restartedAt);
 
     // Load AI agent selection from user settings
     let selectedAiAgent = AI_AGENT.Claude; // default
@@ -141,44 +180,6 @@ const restartCommand = async (
       selectedAiAgent = AI_AGENT.Claude;
     }
 
-    // Setup git worktree and branch if not already set
-    let worktreePath = task.worktreePath;
-    let branchName = task.branchName;
-
-    if (!worktreePath || !branchName) {
-      worktreePath = project.getWorkspacePath(numericTaskId);
-      branchName = generateBranchName(numericTaskId);
-
-      const spinner = !json
-        ? yoctoSpinner({ text: 'Setting up workspace...' }).start()
-        : null;
-
-      try {
-        const git = new Git({ cwd: project.path });
-        git.createWorktree(worktreePath, branchName);
-
-        // Copy user .env development files
-        copyEnvironmentFiles(project.path, worktreePath);
-
-        // Configure sparse checkout to exclude files matching exclude patterns
-        const projectConfig = ProjectConfigManager.load(project.path);
-        if (
-          projectConfig.excludePatterns &&
-          projectConfig.excludePatterns.length > 0
-        ) {
-          git.setupSparseCheckout(worktreePath, projectConfig.excludePatterns);
-        }
-
-        // Update task with workspace information
-        task.setWorkspace(worktreePath, branchName);
-
-        if (spinner) spinner.success('Workspace setup complete');
-      } catch (error) {
-        if (spinner) spinner.error('Workspace setup failed');
-        throw error;
-      }
-    }
-
     // Ensure iterations directory exists
     const iterationPath = join(
       task.iterationsPath(),
@@ -186,69 +187,177 @@ const restartCommand = async (
     );
     mkdirSync(iterationPath, { recursive: true });
 
-    // Create initial iteration.json if it doesn't exist
-    const iterationJsonPath = join(iterationPath, 'iteration.json');
-    if (!existsSync(iterationJsonPath)) {
-      IterationManager.createInitial(
-        iterationPath,
-        task.id,
-        task.title,
-        task.description
-      );
+    // Acquire a restart lock to prevent concurrent restarts from racing.
+    // Uses the same .resume.lock file as the resume command for mutual exclusion.
+    // Must be acquired BEFORE any display output or status changes so the
+    // status is not left stuck if the lock is already held.
+    const releaseLock = acquireResumeLock(iterationPath);
+    if (!releaseLock) {
+      restorePreRestartStatus();
+      jsonOutput.error = `Task is already being resumed or restarted by another process.`;
+      await exitWithError(jsonOutput, { telemetry });
+      return;
     }
 
-    if (!isJsonMode()) {
-      showTitle('Restarting Task');
-      const props: Record<string, string> = {
-        ID: colors.cyan(task.id.toString()),
-        Title: task.title,
-        Status: colors.red(task.status),
-        Workspace: colors.cyan(worktreePath),
-        Branch: colors.cyan(branchName),
-      };
-      if (process.env.ROVER_AGENT_IMAGE) {
-        props['Agent Image'] = colors.cyan(process.env.ROVER_AGENT_IMAGE);
-      }
-      props['Reset to'] = colors.yellow('NEW');
-      showProperties(props);
-      console.log(colors.green('\n✓ Task reset successfully'));
-      console.log('');
-    }
-
-    // Mark task as in progress
-    task.markInProgress();
-
-    // Track restart event
-    telemetry?.eventRestartTask();
-
-    // Override agent image from environment variable if set
-    if (process.env.ROVER_AGENT_IMAGE) {
-      task.setAgentImage(process.env.ROVER_AGENT_IMAGE);
-    }
-
-    // Start sandbox container for task execution
+    // All code between lock acquisition and sandbox completion must be
+    // wrapped in try/finally to guarantee the lock is released even if
+    // an unexpected error occurs (e.g. disk full, permission error).
     try {
-      const sandbox = await createSandbox(task, undefined, {
-        projectPath: project.path,
-        iterationLogsPath: project.getTaskIterationLogsPath(
-          task.id,
-          task.iterations
-        ),
-      });
-      const containerId = await sandbox.createAndStart();
+      // Setup git worktree and branch if not already set.
+      // This must happen under the restart lock so concurrent restarts cannot
+      // recreate the same worktree/branch underneath each other.
+      let worktreePath = task.worktreePath;
+      let branchName = task.branchName;
 
-      // Update task metadata with new container ID
-      task.setContainerInfo(
-        containerId,
-        'running',
-        process.env.DOCKER_HOST
-          ? { dockerHost: process.env.DOCKER_HOST }
-          : undefined
-      );
-    } catch (error) {
-      // If sandbox execution fails, reset task back to NEW status
-      task.resetToNew();
-      throw error;
+      if (!worktreePath || !branchName) {
+        worktreePath = project.getWorkspacePath(numericTaskId);
+        branchName = generateBranchName(numericTaskId);
+
+        const spinner = !isJsonMode()
+          ? yoctoSpinner({ text: 'Setting up workspace...' }).start()
+          : null;
+
+        try {
+          const git = new Git({ cwd: project.path });
+          git.createWorktree(worktreePath, branchName);
+
+          // Copy user .env development files
+          copyEnvironmentFiles(project.path, worktreePath);
+
+          // Configure sparse checkout to exclude files matching exclude patterns
+          const projectConfig = ProjectConfigManager.load(project.path);
+          if (
+            projectConfig.excludePatterns &&
+            projectConfig.excludePatterns.length > 0
+          ) {
+            git.setupSparseCheckout(
+              worktreePath,
+              projectConfig.excludePatterns
+            );
+          }
+
+          // Update task with workspace information
+          task.setWorkspace(worktreePath, branchName);
+
+          if (spinner) spinner.success('Workspace setup complete');
+        } catch (error) {
+          if (spinner) spinner.error('Workspace setup failed');
+          // Clean up the partially-created worktree so the next restart
+          // attempt can recreate it cleanly.
+          if (worktreePath && existsSync(worktreePath)) {
+            try {
+              launchSync(
+                'git',
+                ['worktree', 'remove', '--force', worktreePath],
+                {
+                  cwd: project.path,
+                  reject: false,
+                }
+              );
+            } catch {
+              // Best-effort cleanup — the worktree may not have been
+              // fully registered with git yet.
+            }
+          }
+          // Restore the pre-restart status so the task remains in its
+          // original state (e.g. FAILED) and can be retried.
+          try {
+            restorePreRestartStatus();
+          } catch (rollbackError) {
+            console.error(
+              colors.yellow(
+                `⚠ Failed to rollback task status: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
+              )
+            );
+          }
+          jsonOutput.error = `Failed to set up workspace: ${error instanceof Error ? error.message : String(error)}`;
+          await exitWithError(jsonOutput, { telemetry });
+          return;
+        }
+      }
+
+      // Now that the lock is held, restart the task (sets status to
+      // IN_PROGRESS and tracks the restart attempt). This prevents a
+      // window where the task is IN_PROGRESS without concurrency
+      // protection from the lock.
+      task.restart(restartedAt);
+
+      // Create initial iteration.json if it doesn't exist
+      const iterationJsonPath = join(iterationPath, 'iteration.json');
+      if (!existsSync(iterationJsonPath)) {
+        IterationManager.createInitial(
+          iterationPath,
+          task.id,
+          task.title,
+          task.description
+        );
+      }
+
+      if (!isJsonMode()) {
+        showTitle('Restarting Task');
+        const props: Record<string, string> = {
+          ID: colors.cyan(task.id.toString()),
+          Title: task.title,
+          Status: colors.red(task.status),
+          Workspace: colors.cyan(worktreePath),
+          Branch: colors.cyan(branchName),
+        };
+        if (process.env.ROVER_AGENT_IMAGE) {
+          props['Agent Image'] = colors.cyan(process.env.ROVER_AGENT_IMAGE);
+        }
+        props['Reset to'] = colors.yellow('NEW');
+        showProperties(props);
+        console.log(colors.green('\n✓ Task reset successfully'));
+        console.log('');
+      }
+
+      // Mark task as in progress
+      task.markInProgress();
+
+      // Track restart event
+      telemetry?.eventRestartTask();
+
+      // Override agent image from environment variable if set
+      if (process.env.ROVER_AGENT_IMAGE) {
+        task.setAgentImage(process.env.ROVER_AGENT_IMAGE);
+      }
+
+      // Start sandbox container for task execution.
+      // The lock is held until container metadata is persisted so another
+      // process cannot acquire it before the container is fully registered.
+      try {
+        const sandbox = await createSandbox(task, undefined, {
+          projectPath: project.path,
+          iterationLogsPath: project.getTaskIterationLogsPath(
+            task.id,
+            task.iterations
+          ),
+        });
+        const containerId = await sandbox.createAndStart();
+
+        // Update task metadata with new container ID
+        task.setContainerInfo(
+          containerId,
+          'running',
+          process.env.DOCKER_HOST
+            ? { dockerHost: process.env.DOCKER_HOST }
+            : undefined
+        );
+      } catch (error) {
+        // If sandbox execution fails, restore the pre-restart task status.
+        try {
+          restorePreRestartStatus();
+        } catch (rollbackError) {
+          console.error(
+            colors.yellow(
+              `⚠ Failed to rollback task status: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
+            )
+          );
+        }
+        throw error;
+      }
+    } finally {
+      releaseLock();
     }
 
     // Output final JSON after all operations are complete
@@ -262,7 +371,7 @@ const restartCommand = async (
       restartedAt: restartedAt,
     };
 
-    await exitWithSuccess('Task restarted succesfully!', jsonOutput, {
+    await exitWithSuccess('Task restarted successfully!', jsonOutput, {
       tips: [
         'Use ' + colors.cyan('rover list') + ' to check the list of tasks',
         'Use ' +
@@ -287,7 +396,10 @@ const restartCommand = async (
       return;
     }
   } finally {
-    await telemetry?.shutdown();
+    await Promise.race([
+      telemetry?.shutdown(),
+      new Promise(resolve => setTimeout(resolve, 5000)),
+    ]);
   }
 };
 

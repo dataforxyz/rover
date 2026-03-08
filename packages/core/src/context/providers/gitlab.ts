@@ -126,7 +126,10 @@ export class GitLabProvider implements ContextProvider {
    * Check if the glab CLI is available and working.
    */
   static isGlabCliAvailable(): boolean {
-    const result = launchSync('glab', ['--version'], { reject: false });
+    const result = launchSync('glab', ['--version'], {
+      reject: false,
+      timeout: 30000,
+    });
     return result.exitCode === 0;
   }
 
@@ -174,24 +177,43 @@ export class GitLabProvider implements ContextProvider {
    * Resolve the project path from the URI or from the current working directory.
    */
   private resolveRepo(): ResolvedGitLabRepo {
-    // If project path in URI, use that
+    // If project path is explicit in the URI, prefer it but inherit the
+    // current checkout host when available so self-hosted instances keep
+    // targeting the right GitLab server.
     if (this.parsed.projectPath) {
-      return { projectPath: this.parsed.projectPath };
+      // Validate the URI-provided path to prevent injection via malicious URIs
+      this.validateProjectPath(this.parsed.projectPath);
+      const remote = this.tryResolveRepoFromRemote();
+      return {
+        host: remote?.host,
+        projectPath: this.parsed.projectPath,
+      };
     }
 
     // Otherwise, detect from cwd using Git remote
+    const remote = this.tryResolveRepoFromRemote();
+    if (remote) {
+      return remote;
+    }
+
+    throw new ContextFetchError(
+      this.uri,
+      `Could not determine GitLab project. No git remote found in ${this.cwd}. ` +
+        `Use explicit format: gitlab:namespace/repo/${this.parsed.type}/${this.parsed.number}`
+    );
+  }
+
+  private tryResolveRepoFromRemote(): ResolvedGitLabRepo | null {
     const git = new Git({ cwd: this.cwd });
     const remoteUrl = git.remoteUrl();
 
     if (!remoteUrl) {
-      throw new ContextFetchError(
-        this.uri,
-        `Could not determine GitLab project. No git remote found in ${this.cwd}. ` +
-          `Use explicit format: gitlab:namespace/repo/${this.parsed.type}/${this.parsed.number}`
-      );
+      return null;
     }
 
-    return this.parseGitLabRepoInfo(remoteUrl);
+    const repo = this.parseGitLabRepoInfo(remoteUrl);
+    this.validateProjectPath(repo.projectPath);
+    return repo;
   }
 
   /**
@@ -217,7 +239,7 @@ export class GitLabProvider implements ContextProvider {
     );
     if (scpMatch && !remoteUrl.includes('://')) {
       return {
-        host: scpMatch.groups?.host,
+        host: scpMatch.groups?.host ?? '',
         projectPath: scpMatch.groups?.projectPath ?? '',
       };
     }
@@ -241,6 +263,19 @@ export class GitLabProvider implements ContextProvider {
   }
 
   /**
+   * Validate that a project path contains only expected characters
+   * to prevent injection when passed to glab CLI commands.
+   */
+  private validateProjectPath(projectPath: string): void {
+    if (!/^[\w.@/-]+$/.test(projectPath)) {
+      throw new ContextFetchError(
+        this.uri,
+        `Project path contains unexpected characters: ${projectPath}`
+      );
+    }
+  }
+
+  /**
    * Build context entries for a GitLab issue.
    */
   private buildIssue(repo: ResolvedGitLabRepo): ContextEntry[] {
@@ -255,7 +290,7 @@ export class GitLabProvider implements ContextProvider {
         '-F',
         'json',
       ],
-      { reject: false }
+      { reject: false, timeout: 30000 }
     );
 
     if (result.exitCode !== 0) {
@@ -266,9 +301,15 @@ export class GitLabProvider implements ContextProvider {
       );
     }
 
-    const issue: GitLabIssueResponse = JSON.parse(
-      result.stdout?.toString() || '{}'
-    );
+    let issue: GitLabIssueResponse;
+    try {
+      issue = JSON.parse(result.stdout?.toString() || '{}');
+    } catch (parseError) {
+      throw new ContextFetchError(
+        this.uri,
+        `Failed to parse issue #${this.parsed.number} response: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+      );
+    }
 
     // Fetch comments via API
     const notes = this.fetchNotes(repo, 'issues', this.parsed.number);
@@ -339,7 +380,7 @@ export class GitLabProvider implements ContextProvider {
     // Filter and add comments
     const filteredComments = this.filterComments(
       notes.map(n => ({
-        author: n.author.username,
+        author: n.author?.username ?? 'unknown',
         body: n.body,
         createdAt: n.created_at,
       }))
@@ -379,7 +420,7 @@ export class GitLabProvider implements ContextProvider {
         '-F',
         'json',
       ],
-      { reject: false }
+      { reject: false, timeout: 30000 }
     );
 
     if (result.exitCode !== 0) {
@@ -390,7 +431,15 @@ export class GitLabProvider implements ContextProvider {
       );
     }
 
-    const mr: GitLabMRResponse = JSON.parse(result.stdout?.toString() || '{}');
+    let mr: GitLabMRResponse;
+    try {
+      mr = JSON.parse(result.stdout?.toString() || '{}');
+    } catch (parseError) {
+      throw new ContextFetchError(
+        this.uri,
+        `Failed to parse MR !${this.parsed.number} response: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+      );
+    }
 
     // Fetch diff separately
     const diffResult = launchSync(
@@ -403,7 +452,7 @@ export class GitLabProvider implements ContextProvider {
         this.getRepoRef(repo),
         '--color=never',
       ],
-      { reject: false }
+      { reject: false, timeout: 30000 }
     );
 
     const diff =
@@ -514,7 +563,7 @@ export class GitLabProvider implements ContextProvider {
     // Filter and add comments
     const filteredComments = this.filterComments(
       notes.map(n => ({
-        author: n.author.username,
+        author: n.author?.username ?? 'unknown',
         body: n.body,
         createdAt: n.created_at,
       }))
@@ -582,29 +631,50 @@ export class GitLabProvider implements ContextProvider {
     type: 'issues' | 'merge_requests',
     number: number
   ): GitLabNote[] {
-    const encodedPath = encodeURIComponent(repo.projectPath);
-    const result = launchSync(
-      'glab',
-      [
-        'api',
-        `projects/${encodedPath}/${type}/${number}/notes?sort=asc&per_page=100`,
-        '-R',
-        this.getRepoRef(repo),
-      ],
-      { reject: false }
-    );
+    const allNotes: GitLabNote[] = [];
+    let page = 1;
+    const perPage = 100;
+    const maxPages = 50; // Cap at 5000 notes to prevent runaway subprocess spawning
 
-    if (result.exitCode !== 0) {
-      return [];
+    // Paginate through all notes to avoid silently dropping comments
+    while (page <= maxPages) {
+      const result = launchSync(
+        'glab',
+        [
+          'api',
+          `projects/${encodeURIComponent(repo.projectPath)}/${type}/${number}/notes?sort=asc&per_page=${perPage}&page=${page}`,
+          '-R',
+          this.getRepoRef(repo),
+        ],
+        { reject: false, timeout: 30000 }
+      );
+
+      if (result.exitCode !== 0) {
+        console.warn(
+          `Warning: GitLab API request for ${type}/${number} notes (page ${page}) failed with exit code ${result.exitCode}`
+        );
+        break;
+      }
+
+      try {
+        const notes: GitLabNote[] = JSON.parse(
+          result.stdout?.toString() || '[]'
+        );
+        if (notes.length === 0) break;
+        allNotes.push(...notes);
+        if (notes.length < perPage) break;
+        page++;
+      } catch (parseError) {
+        console.warn(
+          `Warning: Failed to parse GitLab API response for ${type}/${number} notes (page ${page}):`,
+          parseError instanceof Error ? parseError.message : String(parseError)
+        );
+        break;
+      }
     }
 
-    try {
-      const notes: GitLabNote[] = JSON.parse(result.stdout?.toString() || '[]');
-      // Filter out system-generated notes (e.g., "assigned to @user", "changed the description")
-      return notes.filter(n => !n.system);
-    } catch {
-      return [];
-    }
+    // Filter out system-generated notes (e.g., "assigned to @user", "changed the description")
+    return allNotes.filter(n => !n.system);
   }
 
   /**
@@ -615,16 +685,15 @@ export class GitLabProvider implements ContextProvider {
     repo: ResolvedGitLabRepo,
     mrNumber: number
   ): Set<string> | null {
-    const encodedPath = encodeURIComponent(repo.projectPath);
     const result = launchSync(
       'glab',
       [
         'api',
-        `projects/${encodedPath}/merge_requests/${mrNumber}/approvals`,
+        `projects/${encodeURIComponent(repo.projectPath)}/merge_requests/${mrNumber}/approvals`,
         '-R',
         this.getRepoRef(repo),
       ],
-      { reject: false }
+      { reject: false, timeout: 30000 }
     );
 
     if (result.exitCode !== 0) {

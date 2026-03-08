@@ -19,6 +19,10 @@ export interface SandboxOptions {
   sandboxMetadata?: Record<string, unknown>;
   /** Path to mount as /logs inside the container for this iteration */
   iterationLogsPath?: string;
+  /** Path to checkpoint.json for resuming a paused workflow */
+  checkpointPath?: string;
+  /** Resume from an existing checkpoint without resetting workspace state */
+  resumeFromCheckpoint?: boolean;
 }
 
 export abstract class SandboxPackage {
@@ -47,7 +51,7 @@ export abstract class Sandbox {
 
   abstract isBackendAvailable(): Promise<boolean>;
   abstract openShellAtWorktree(): Promise<void>;
-  abstract inspect(): Promise<{ status: string } | null>;
+  abstract inspect(): Promise<{ status: string; exitCode?: number } | null>;
 
   protected abstract create(): Promise<string>;
   protected abstract start(): Promise<string>;
@@ -61,7 +65,7 @@ export abstract class Sandbox {
   ): Promise<ReturnType<typeof launch>>;
 
   protected get sandboxName(): string {
-    return `rover-task-${this.task.uuid.slice(0, 8)}-${this.task.id}-${this.task.iterations}`;
+    return `rover-task-${this.task.id}-${this.task.iterations}`;
   }
 
   async createAndStart(): Promise<string> {

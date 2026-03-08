@@ -29,22 +29,9 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { generateRandomId, VERBOSE } from 'rover-core';
-
-/**
- * Format an error into a human-readable string.
- * Handles Error instances, plain objects (e.g. JSON-RPC errors), and primitives.
- */
-function formatError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (error !== null && typeof error === 'object') {
-    return JSON.stringify(error, null, 2);
-  }
-  return String(error);
-}
+import { formatError } from './format-error.js';
 
 // Custom JSON replacer to handle BigInt values
 function jsonReplacer(_key: string, value: unknown): unknown {
@@ -63,13 +50,92 @@ interface TerminalState {
   exitPromise: Promise<void>;
 }
 
+interface LegacyUsageUpdate {
+  sessionUpdate: 'usage_update';
+  cost?: {
+    amount?: number;
+    currency?: string;
+  } | null;
+}
+
+// Module-scoped map is intentional: each agent process runs a single ACPRunner
+// so terminal state is naturally scoped to the process lifetime.
 const terminals = new Map<string, TerminalState>();
+
+/**
+ * Kill all tracked terminal processes and clear the map.
+ * Called by ACPRunner.close() to prevent resource leaks.
+ */
+export function clearAllTerminals(): void {
+  for (const state of terminals.values()) {
+    if (state.exitStatus === null) {
+      state.process.kill('SIGTERM');
+      // Force-kill after a short grace period if the process ignores SIGTERM,
+      // mirroring the pattern used in ACPRunner.close().
+      const killTimer = setTimeout(() => {
+        try {
+          state.process.kill('SIGKILL');
+        } catch {
+          // Process already exited
+        }
+      }, 5000);
+      killTimer.unref();
+    }
+  }
+  terminals.clear();
+}
+
+/**
+ * Look up a terminal by ID, logging and throwing if not found.
+ */
+function getTerminalOrThrow(
+  terminalId: string,
+  methodName: string
+): TerminalState {
+  const state = terminals.get(terminalId);
+  if (!state) {
+    console.log(
+      colors.red(`[ACP] ${methodName}: Terminal not found: ${terminalId}`)
+    );
+    throw new Error(`Terminal not found: ${terminalId}`);
+  }
+  return state;
+}
+
+function isLegacyUsageUpdate(update: unknown): update is LegacyUsageUpdate {
+  if (update == null || typeof update !== 'object') {
+    return false;
+  }
+
+  return (
+    'sessionUpdate' in update &&
+    (update as { sessionUpdate?: unknown }).sessionUpdate === 'usage_update'
+  );
+}
+
+function getTrackedUsageUpdate(update: Pick<LegacyUsageUpdate, 'cost'>): {
+  amount?: number;
+  currency?: string;
+} {
+  const tracked: { amount?: number; currency?: string } = {};
+  const amount = update.cost?.amount;
+  if (typeof amount === 'number' && Number.isFinite(amount)) {
+    tracked.amount = amount;
+  }
+
+  if (typeof update.cost?.currency === 'string' && update.cost.currency) {
+    tracked.currency = update.cost.currency;
+  }
+
+  return tracked;
+}
 
 export class ACPClient implements Client {
   private capturedMessages: string = '';
   private isCapturing: boolean = false;
 
-  // Cost tracking: cumulative cost reported by the agent via usage_update events
+  // Cost tracking is best-effort because older ACP runtimes may still send
+  // usage_update payloads that do not exactly match the current SDK typings.
   private cumulativeCostAmount: number = 0;
   private cumulativeCostCurrency: string = 'USD';
   private costAtCaptureStart: number = 0;
@@ -96,13 +162,22 @@ export class ACPClient implements Client {
   /**
    * Get the cost incurred during the last capture window (between
    * startCapturing and stopCapturing). Returns the delta in the
-   * cumulative cost reported by the agent via usage_update events.
+   * cumulative cost reported by the agent when available.
    */
   getLastPromptCost(): { amount: number; currency: string } {
     return {
       amount: this.cumulativeCostAmount - this.costAtCaptureStart,
       currency: this.cumulativeCostCurrency,
     };
+  }
+
+  /**
+   * Reset cumulative cost tracking. Called between ACP sessions so a
+   * new session starts with a fresh cost baseline.
+   */
+  resetCost(): void {
+    this.cumulativeCostAmount = 0;
+    this.costAtCaptureStart = 0;
   }
 
   requestPermission(
@@ -145,14 +220,35 @@ export class ACPClient implements Client {
   }
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
-    const update = params.update;
+    const rawUpdate = params.update as unknown;
 
     if (VERBOSE) {
+      const sessionUpdate =
+        rawUpdate &&
+        typeof rawUpdate === 'object' &&
+        'sessionUpdate' in rawUpdate
+          ? String((rawUpdate as { sessionUpdate?: unknown }).sessionUpdate)
+          : 'unknown';
       console.log(
-        colors.gray(`[ACP] sessionUpdate: ${update.sessionUpdate}`),
-        colors.cyan(JSON.stringify(update, jsonReplacer, 2).substring(0, 500))
+        colors.gray(`[ACP] sessionUpdate: ${sessionUpdate}`),
+        colors.cyan(
+          JSON.stringify(rawUpdate, jsonReplacer, 2).substring(0, 500)
+        )
       );
     }
+
+    if (isLegacyUsageUpdate(rawUpdate)) {
+      const tracked = getTrackedUsageUpdate(rawUpdate);
+      if (tracked.amount !== undefined) {
+        this.cumulativeCostAmount = tracked.amount;
+      }
+      if (tracked.currency !== undefined) {
+        this.cumulativeCostCurrency = tracked.currency;
+      }
+      return;
+    }
+
+    const update = params.update;
 
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
@@ -215,10 +311,14 @@ export class ACPClient implements Client {
         }
         break;
       case 'usage_update':
-        // Track cumulative cost reported by the agent
-        if (update.cost) {
-          this.cumulativeCostAmount = update.cost.amount;
-          this.cumulativeCostCurrency = update.cost.currency;
+        {
+          const tracked = getTrackedUsageUpdate(update);
+          if (tracked.amount !== undefined) {
+            this.cumulativeCostAmount = tracked.amount;
+          }
+          if (tracked.currency !== undefined) {
+            this.cumulativeCostCurrency = tracked.currency;
+          }
         }
         break;
       case 'available_commands_update':
@@ -250,11 +350,26 @@ export class ACPClient implements Client {
     }
 
     try {
+      // Defense-in-depth: only allow writes under the working directory or /tmp.
+      // The agent runs inside a container, but this prevents accidental writes
+      // to system paths if ever run outside one.
+      const resolvedPath = resolve(params.path);
+      const cwd = process.cwd();
+      const allowedPrefixes = [cwd + '/', '/tmp/', '/workspace/'];
+      if (
+        !allowedPrefixes.some(p => resolvedPath.startsWith(p)) &&
+        resolvedPath !== cwd
+      ) {
+        throw new Error(
+          `Write rejected: path "${params.path}" is outside the allowed directories (${cwd}, /tmp, /workspace)`
+        );
+      }
+
       // Create parent directories if they don't exist
-      const parentDir = dirname(params.path);
+      const parentDir = dirname(resolvedPath);
       mkdirSync(parentDir, { recursive: true });
 
-      writeFileSync(params.path, params.content);
+      writeFileSync(resolvedPath, params.content);
 
       if (VERBOSE) {
         console.log(
@@ -288,16 +403,28 @@ export class ACPClient implements Client {
    * pick the right file to read next.
    */
   private formatDirectoryListing(dirPath: string): string {
-    const entries = readdirSync(dirPath).sort();
-    const lines = entries.map(name => {
-      try {
-        const stat = statSync(`${dirPath}/${name}`);
-        return stat.isDirectory() ? `${name}/` : name;
-      } catch {
-        return name;
+    try {
+      const entries = readdirSync(dirPath).sort();
+      const lines = entries.map(name => {
+        try {
+          const stat = statSync(`${dirPath}/${name}`);
+          return stat.isDirectory() ? `${name}/` : name;
+        } catch {
+          return name;
+        }
+      });
+      return `Directory listing for ${dirPath}:\n\n${lines.join('\n')}`;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (VERBOSE) {
+        console.log(
+          colors.yellow(
+            `[ACP] formatDirectoryListing failed for ${dirPath}: ${msg}`
+          )
+        );
       }
-    });
-    return `Directory listing for ${dirPath}:\n\n${lines.join('\n')}`;
+      return `Error listing directory ${dirPath}: ${msg}`;
+    }
   }
 
   readTextFile?(params: ReadTextFileRequest): Promise<ReadTextFileResponse> {
@@ -305,6 +432,30 @@ export class ACPClient implements Client {
       console.log(
         colors.gray('[ACP] readTextFile called with:'),
         colors.cyan(JSON.stringify(params, jsonReplacer, 2))
+      );
+    }
+
+    // Defense-in-depth: block reads of sensitive system files.
+    // The agent runs inside a container so the risk is limited, but this
+    // prevents accidental exposure of credentials or system configuration.
+    const resolvedReadPath = resolve(params.path);
+    const blockedReadPrefixes = [
+      '/etc/shadow',
+      '/etc/gshadow',
+      '/etc/ssl/private/',
+      '/root/.ssh/',
+      '/home/',
+    ];
+    // Allow reads under home if they are within the cwd (workspace)
+    const cwd = process.cwd();
+    const isUnderCwd =
+      resolvedReadPath.startsWith(cwd + '/') || resolvedReadPath === cwd;
+    if (
+      !isUnderCwd &&
+      blockedReadPrefixes.some(p => resolvedReadPath.startsWith(p))
+    ) {
+      throw new Error(
+        `Read rejected: path "${params.path}" is a sensitive system file`
       );
     }
 
@@ -348,12 +499,11 @@ export class ACPClient implements Client {
       throw error;
     }
 
-    if (params.line) {
-      content = content.split('\n')[params.line - 1] || '';
-    }
-
-    if (params.limit) {
-      content = content.split('\n').slice(0, params.limit).join('\n');
+    if (params.line || params.limit) {
+      const lines = content.split('\n');
+      const startLine = params.line ? params.line - 1 : 0;
+      const endLine = params.limit ? startLine + params.limit : lines.length;
+      content = lines.slice(startLine, endLine).join('\n');
     }
 
     const response = { content };
@@ -393,22 +543,26 @@ export class ACPClient implements Client {
       }
     }
 
-    // Split command into executable and arguments if args not provided
-    let command: string;
+    // When args are explicitly provided, pass them directly to execa
+    // to avoid shell injection. When only a command string is given,
+    // use bash -c so shell features (pipes, redirections) still work.
+    let childProcess;
 
     if (params.args && params.args.length > 0) {
-      // Args explicitly provided, use command as-is
-      command = `${params.command} ${params.args}`;
+      childProcess = execa(params.command, params.args, {
+        cwd: params.cwd ?? undefined,
+        env: envObj,
+        reject: false,
+        all: true,
+      });
     } else {
-      command = params.command;
+      childProcess = execa('bash', ['-c', params.command], {
+        cwd: params.cwd ?? undefined,
+        env: envObj,
+        reject: false,
+        all: true,
+      });
     }
-
-    const childProcess = execa('bash', ['-c', command], {
-      cwd: params.cwd ?? undefined,
-      env: envObj,
-      reject: false,
-      all: true,
-    });
 
     const state: TerminalState = {
       process: childProcess,
@@ -422,32 +576,35 @@ export class ACPClient implements Client {
       exitPromise: Promise.resolve(),
     };
 
-    // Capture combined stdout/stderr
+    // Capture combined stdout/stderr. Track byte count separately to
+    // avoid re-encoding the entire output string on every chunk (O(n^2)).
+    let outputBytes = 0;
     if (childProcess.all) {
       childProcess.all.on('data', (chunk: Buffer) => {
         const text = chunk.toString();
         state.output += text;
+        outputBytes += chunk.length;
 
         // Apply byte limit with truncation from the beginning
         if (
           state.outputByteLimit !== null &&
-          Buffer.byteLength(state.output, 'utf-8') > state.outputByteLimit
+          outputBytes > state.outputByteLimit
         ) {
           state.truncated = true;
-          // Truncate from the beginning to stay within limit
-          while (
-            Buffer.byteLength(state.output, 'utf-8') > state.outputByteLimit
-          ) {
-            // Remove characters from the beginning until we're under the limit
-            // Find a character boundary to avoid breaking multi-byte characters
-            const idx = state.output.indexOf('\n');
-            if (idx !== -1 && idx < state.output.length / 2) {
-              // Remove up to the first newline for cleaner truncation
-              state.output = state.output.slice(idx + 1);
-            } else {
-              // Remove one character at a time
-              state.output = state.output.slice(1);
-            }
+          const buf = Buffer.from(state.output, 'utf-8');
+          let start = buf.length - state.outputByteLimit;
+          // Skip past any UTF-8 continuation bytes (0x80-0xBF) at the cut
+          // point to avoid slicing in the middle of a multi-byte character.
+          while (start < buf.length && (buf[start] & 0xc0) === 0x80) {
+            start++;
+          }
+          state.output = buf.subarray(start).toString('utf-8');
+          outputBytes = Buffer.byteLength(state.output, 'utf-8');
+          // Skip past the first partial line for a clean boundary
+          const firstNewline = state.output.indexOf('\n');
+          if (firstNewline !== -1 && firstNewline < state.output.length / 2) {
+            state.output = state.output.slice(firstNewline + 1);
+            outputBytes = Buffer.byteLength(state.output, 'utf-8');
           }
         }
       });
@@ -476,15 +633,7 @@ export class ACPClient implements Client {
       );
     }
 
-    const state = terminals.get(params.terminalId);
-    if (!state) {
-      console.log(
-        colors.red(
-          `[ACP] terminalOutput: Terminal not found: ${params.terminalId}`
-        )
-      );
-      throw new Error(`Terminal not found: ${params.terminalId}`);
-    }
+    const state = getTerminalOrThrow(params.terminalId, 'terminalOutput');
 
     const response = {
       output: state.output,
@@ -520,20 +669,11 @@ export class ACPClient implements Client {
       );
     }
 
-    const state = terminals.get(params.terminalId);
+    const state = getTerminalOrThrow(params.terminalId, 'releaseTerminal');
 
     if (VERBOSE) {
       console.log('Terminal output:');
-      console.log(colors.gray(state?.output || 'No output'));
-    }
-
-    if (!state) {
-      console.log(
-        colors.red(
-          `[ACP] releaseTerminal: Terminal not found: ${params.terminalId}`
-        )
-      );
-      throw new Error(`Terminal not found: ${params.terminalId}`);
+      console.log(colors.gray(state.output || 'No output'));
     }
 
     // Kill the process if still running
@@ -569,17 +709,11 @@ export class ACPClient implements Client {
       );
     }
 
-    const state = terminals.get(params.terminalId);
-    if (!state) {
-      console.log(
-        colors.red(
-          `[ACP] waitForTerminalExit: Terminal not found: ${params.terminalId}`
-        )
-      );
-      throw new Error(`Terminal not found: ${params.terminalId}`);
-    }
+    const state = getTerminalOrThrow(params.terminalId, 'waitForTerminalExit');
 
-    // Wait for the process to exit
+    // Wait for the process to exit, with a safety timeout to prevent
+    // indefinite hangs if the spawned process never terminates.
+    const WAIT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
     if (VERBOSE) {
       console.log(
         colors.gray(
@@ -587,7 +721,19 @@ export class ACPClient implements Client {
         )
       );
     }
-    await state.exitPromise;
+    const timeoutPromise = new Promise<'timeout'>(resolve =>
+      setTimeout(() => resolve('timeout'), WAIT_TIMEOUT_MS).unref()
+    );
+    const result = await Promise.race([state.exitPromise, timeoutPromise]);
+    if (result === 'timeout') {
+      console.log(
+        colors.yellow(
+          `[ACP] waitForTerminalExit: Timed out after ${WAIT_TIMEOUT_MS / 1000}s, killing ${params.terminalId}`
+        )
+      );
+      state.process.kill();
+      await state.exitPromise;
+    }
 
     const response = {
       exitCode: state.exitStatus?.exitCode ?? null,

@@ -190,7 +190,7 @@ export class ProjectConfigManager {
     }
 
     // For now, just ensure all required fields exist
-    const migrated: ProjectConfig = {
+    const migrated = {
       version: CURRENT_PROJECT_SCHEMA_VERSION,
       languages: data.languages || [],
       mcps: data.mcps || [],
@@ -207,7 +207,7 @@ export class ProjectConfigManager {
       ...(data.projects !== undefined ? { projects: data.projects } : {}),
     };
 
-    return migrated;
+    return ProjectConfigSchema.parse(migrated);
   }
 
   /**

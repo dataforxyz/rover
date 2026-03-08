@@ -1,10 +1,6 @@
 import { getAIAgentTool } from '../agents/index.js';
 import { join } from 'node:path';
-import {
-  getDataDir,
-  ProjectConfigManager,
-  TaskDescriptionManager,
-} from 'rover-core';
+import { ProjectConfigManager, TaskDescriptionManager } from 'rover-core';
 import { Sandbox, SandboxOptions } from './types.js';
 import { SetupBuilder } from '../setup.js';
 import { generateRandomId, launch, ProcessManager, VERBOSE } from 'rover-core';
@@ -12,6 +8,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import {
   ContainerBackend,
+  getCheckpointArgs,
   getWorktreeGitMounts,
   resolveAgentImage,
   resolveInitScriptPath,
@@ -23,10 +20,11 @@ import {
   checkImageCache,
   waitForInitAndCommit,
 } from './container-image-cache.js';
+import { isContainerMissingInspectError } from './inspect-errors.js';
 import { mergeNetworkConfig } from '../network-config.js';
 import { isJsonMode } from '../context.js';
-import { isPathWithin } from '../../utils/path-utils.js';
 import colors from 'ansi-colors';
+import { validateSandboxWorktreePath } from './worktree-path.js';
 
 export class DockerSandbox extends Sandbox {
   backend = ContainerBackend.Docker;
@@ -34,6 +32,12 @@ export class DockerSandbox extends Sandbox {
   private cacheTag?: string;
   private shouldCommitCache = false;
   private initMode = false;
+  private _tmpCleanups: Array<() => void> = [];
+
+  private runTmpCleanups(): void {
+    for (const cleanup of this._tmpCleanups) cleanup();
+    this._tmpCleanups = [];
+  }
 
   constructor(
     task: TaskDescriptionManager,
@@ -64,19 +68,12 @@ export class DockerSandbox extends Sandbox {
     }
 
     // Load project configuration
-    const projectConfig = ProjectConfigManager.load(this.options?.projectPath!);
+    const projectConfig = ProjectConfigManager.load(
+      this.options?.projectPath ?? process.cwd()
+    );
     const worktreePath = this.task.worktreePath;
 
-    // Validate worktree path is within project root or data directory (security check)
-    const worktreeKnownLocation =
-      isPathWithin(worktreePath, projectConfig.projectRoot) ||
-      isPathWithin(worktreePath, getDataDir());
-
-    if (worktreePath.length === 0 || !worktreeKnownLocation) {
-      throw new Error(
-        `Invalid worktree path for this project (${worktreePath})`
-      );
-    }
+    validateSandboxWorktreePath(worktreePath, projectConfig);
 
     // Resolve the agent image from env var, stored task image, config, or default
     const agentImage = resolveAgentImage(projectConfig, this.task.agentImage);
@@ -104,7 +101,8 @@ export class DockerSandbox extends Sandbox {
     const setupBuilder = new SetupBuilder(
       this.task,
       this.task.agent!,
-      projectConfig
+      projectConfig,
+      { resumeFromCheckpoint: this.options?.resumeFromCheckpoint }
     );
     const entrypointScriptPath = setupBuilder.generateEntrypoint(
       true,
@@ -131,32 +129,26 @@ export class DockerSandbox extends Sandbox {
 
     const dockerArgs = ['create', '--name', this.sandboxName];
 
-    const userInfo_ = userInfo();
-
-    // If we cannot retrieve the UID in the current environment,
-    // set it to 1000, so that the Rover agent container will be
-    // using this unprivileged UID. This happens typically on
-    // environments such as Windows.
-    if (userInfo_.uid === -1) {
-      userInfo_.uid = 1000;
-    }
-
-    // If we cannot retrieve the GID in the current environment,
-    // set it to 1000, so that the Rover agent container will be
-    // using this unprivileged GID. This happens typically on
-    // environments such as Windows.
-    if (userInfo_.gid === -1) {
-      userInfo_.gid = 1000;
-    }
+    const rawUserInfo = userInfo();
+    const userInfo_ = {
+      ...rawUserInfo,
+      uid: rawUserInfo.uid === -1 ? 1000 : rawUserInfo.uid,
+      gid: rawUserInfo.gid === -1 ? 1000 : rawUserInfo.gid,
+    };
 
     // Warn if using a custom agent image
     warnIfCustomImage(projectConfig);
 
-    const [etcPasswd, etcGroup, etcShadow] = await tmpUserGroupFiles(
+    const {
+      etcPasswd,
+      etcGroup,
+      cleanup: cleanupTmpFiles,
+    } = await tmpUserGroupFiles(
       ContainerBackend.Docker,
       effectiveImage,
       userInfo_
     );
+    this._tmpCleanups.push(cleanupTmpFiles);
 
     // Add NET_ADMIN capability if network filtering is configured
     const effectiveNetworkConfig = mergeNetworkConfig(
@@ -172,8 +164,6 @@ export class DockerSandbox extends Sandbox {
       `${etcPasswd}:/etc/passwd:Z,ro`,
       '-v',
       `${etcGroup}:/etc/group:Z,ro`,
-      '-v',
-      `${etcShadow}:/etc/shadow:Z,ro`,
       '--user',
       `${userInfo_.uid}:${userInfo_.gid}`,
       '-v',
@@ -212,7 +202,11 @@ export class DockerSandbox extends Sandbox {
     const allInitScripts = projectConfig.allInitScripts;
     for (let i = 0; i < allInitScripts.length; i++) {
       const entry = allInitScripts[i];
-      const initScriptAbsPath = join(projectConfig.projectRoot, entry.script);
+      const initScriptAbsPath = resolveInitScriptPath(
+        projectConfig.projectRoot,
+        entry.script,
+        entry.path
+      );
       if (existsSync(initScriptAbsPath)) {
         const mountPath =
           allInitScripts.length === 1 && !entry.path
@@ -277,6 +271,9 @@ export class DockerSandbox extends Sandbox {
         dockerArgs.push('--context-dir', '/context');
       }
 
+      // Mount checkpoint if resuming from a paused workflow
+      dockerArgs.push(...getCheckpointArgs(this.options?.checkpointPath));
+
       // Pass model if specified
       if (this.task.agentModel) {
         dockerArgs.push('--agent-model', this.task.agentModel);
@@ -307,7 +304,9 @@ export class DockerSandbox extends Sandbox {
    * whether to run a two-phase init before calling create().
    */
   private checkCacheState(): void {
-    const projectConfig = ProjectConfigManager.load(this.options?.projectPath!);
+    const projectConfig = ProjectConfigManager.load(
+      this.options?.projectPath ?? process.cwd()
+    );
     const agentImage = resolveAgentImage(projectConfig, this.task.agentImage);
 
     const { hasCachedImage, cacheTag } = checkImageCache(
@@ -341,7 +340,7 @@ export class DockerSandbox extends Sandbox {
           ContainerBackend.Docker,
           this.sandboxName,
           this.cacheTag,
-          this.options?.projectPath!,
+          this.options?.projectPath ?? process.cwd(),
           this.task.agent,
           this.options?.sandboxMetadata
         );
@@ -352,6 +351,7 @@ export class DockerSandbox extends Sandbox {
           throw new Error('Init container did not exit successfully');
         }
       } catch (err) {
+        this.runTmpCleanups();
         this.initMode = false;
         this.processManager?.failLastItem();
         this.processManager?.finish();
@@ -378,6 +378,7 @@ export class DockerSandbox extends Sandbox {
       await this.start();
       this.processManager?.completeLastItem();
     } catch (err) {
+      this.runTmpCleanups();
       this.processManager?.failLastItem();
       this.processManager?.finish();
       throw err;
@@ -397,19 +398,12 @@ export class DockerSandbox extends Sandbox {
     }
 
     // Load project configuration
-    const projectConfig = ProjectConfigManager.load(this.options?.projectPath!);
+    const projectConfig = ProjectConfigManager.load(
+      this.options?.projectPath ?? process.cwd()
+    );
     const worktreePath = this.task.worktreePath;
 
-    // Validate worktree path is within project root or data directory (security check)
-    const worktreeKnownLocation =
-      isPathWithin(worktreePath, projectConfig.projectRoot) ||
-      isPathWithin(worktreePath, getDataDir());
-
-    if (worktreePath.length === 0 || !worktreeKnownLocation) {
-      throw new Error(
-        `Invalid worktree path for this project (${worktreePath})`
-      );
-    }
+    validateSandboxWorktreePath(worktreePath, projectConfig);
 
     // Resolve the agent image from env var, stored task image, config, or default
     const agentImage = resolveAgentImage(projectConfig, this.task.agentImage);
@@ -434,7 +428,8 @@ export class DockerSandbox extends Sandbox {
     const setupBuilder = new SetupBuilder(
       this.task,
       this.task.agent!,
-      projectConfig
+      projectConfig,
+      { resumeFromCheckpoint: this.options?.resumeFromCheckpoint }
     );
     const entrypointScriptPath = setupBuilder.generateEntrypoint(
       false,
@@ -452,32 +447,28 @@ export class DockerSandbox extends Sandbox {
     const interactiveName = `${this.sandboxName}-i`;
     const dockerArgs = ['run', '--name', interactiveName, '-it', '--rm'];
 
-    const userInfo_ = userInfo();
-
-    // If we cannot retrieve the UID in the current environment,
-    // set it to 1000, so that the Rover agent container will be
-    // using this unprivileged UID. This happens typically on
-    // environments such as Windows.
-    if (userInfo_.uid === -1) {
-      userInfo_.uid = 1000;
-    }
-
-    // If we cannot retrieve the GID in the current environment,
-    // set it to 1000, so that the Rover agent container will be
-    // using this unprivileged GID. This happens typically on
-    // environments such as Windows.
-    if (userInfo_.gid === -1) {
-      userInfo_.gid = 1000;
-    }
+    const rawUserInfoInteractive = userInfo();
+    const userInfo_ = {
+      ...rawUserInfoInteractive,
+      uid:
+        rawUserInfoInteractive.uid === -1 ? 1000 : rawUserInfoInteractive.uid,
+      gid:
+        rawUserInfoInteractive.gid === -1 ? 1000 : rawUserInfoInteractive.gid,
+    };
 
     // Warn if using a custom agent image
     warnIfCustomImage(projectConfig);
 
-    const [etcPasswd, etcGroup, etcShadow] = await tmpUserGroupFiles(
+    const {
+      etcPasswd,
+      etcGroup,
+      cleanup: cleanupTmpFiles,
+    } = await tmpUserGroupFiles(
       ContainerBackend.Docker,
       effectiveImage,
       userInfo_
     );
+    this._tmpCleanups.push(cleanupTmpFiles);
 
     // Add NET_ADMIN capability if network filtering is configured
     const effectiveNetworkConfigInteractive = mergeNetworkConfig(
@@ -496,8 +487,6 @@ export class DockerSandbox extends Sandbox {
       `${etcPasswd}:/etc/passwd:Z,ro`,
       '-v',
       `${etcGroup}:/etc/group:Z,ro`,
-      '-v',
-      `${etcShadow}:/etc/shadow:Z,ro`,
       '--user',
       `${userInfo_.uid}:${userInfo_.gid}`,
       '-v',
@@ -521,7 +510,11 @@ export class DockerSandbox extends Sandbox {
     const allInitScripts = projectConfig.allInitScripts;
     for (let i = 0; i < allInitScripts.length; i++) {
       const entry = allInitScripts[i];
-      const initScriptAbsPath = join(projectConfig.projectRoot, entry.script);
+      const initScriptAbsPath = resolveInitScriptPath(
+        projectConfig.projectRoot,
+        entry.script,
+        entry.path
+      );
       if (existsSync(initScriptAbsPath)) {
         const mountPath =
           allInitScripts.length === 1 && !entry.path
@@ -596,30 +589,44 @@ export class DockerSandbox extends Sandbox {
     return process.env;
   }
 
-  async inspect(): Promise<{ status: string } | null> {
+  async inspect(): Promise<{ status: string; exitCode?: number } | null> {
     try {
       const result = await launch(
         'docker',
-        ['inspect', '--format', '{{.State.Status}}', this.sandboxName],
+        [
+          'inspect',
+          '--format',
+          '{{.State.Status}}|{{.State.ExitCode}}',
+          this.sandboxName,
+        ],
         { env: this.getDockerEnv() }
       );
-      const status = result.stdout?.toString().trim();
-      return status ? { status } : null;
-    } catch {
-      return null;
+      const output = result.stdout?.toString().trim();
+      if (!output) return null;
+      const [status, exitCodeStr] = output.split('|');
+      const exitCode = exitCodeStr ? parseInt(exitCodeStr, 10) : undefined;
+      return status
+        ? { status, exitCode: Number.isNaN(exitCode) ? undefined : exitCode }
+        : null;
+    } catch (error) {
+      if (isContainerMissingInspectError(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
   protected async remove(): Promise<string> {
-    return (
+    const result =
       (
         await launch('docker', ['rm', '-f', this.sandboxName], {
           env: this.getDockerEnv(),
         })
       ).stdout
         ?.toString()
-        .trim() || this.sandboxName
-    );
+        .trim() || this.sandboxName;
+    this.runTmpCleanups();
+    return result;
   }
 
   protected async stop(): Promise<string> {
@@ -645,17 +652,21 @@ export class DockerSandbox extends Sandbox {
   }
 
   protected async *followLogs(): AsyncIterable<string> {
-    const process = launch('docker', ['logs', '--follow', this.sandboxName], {
+    const child = launch('docker', ['logs', '--follow', this.sandboxName], {
       env: this.getDockerEnv(),
     });
 
-    if (!process.stdout) {
+    if (!child.stdout) {
       return;
     }
 
-    // Stream stdout line by line
-    for await (const chunk of process.stdout) {
-      yield chunk.toString();
+    // Stream stdout line by line, killing the child process on consumer exit
+    try {
+      for await (const chunk of child.stdout) {
+        yield chunk.toString();
+      }
+    } finally {
+      child.kill();
     }
   }
 
@@ -666,10 +677,12 @@ export class DockerSandbox extends Sandbox {
     }
 
     // Generate a unique container name for the interactive shell
-    const containerName = `rover-shell-${this.task.uuid.slice(0, 8)}-${this.task.id}-${generateRandomId()}`;
+    const containerName = `rover-shell-${this.task.id}-${generateRandomId()}`;
 
     // Get extra args from CLI options and project config, merge them
-    const projectConfig = ProjectConfigManager.load(this.options?.projectPath!);
+    const projectConfig = ProjectConfigManager.load(
+      this.options?.projectPath ?? process.cwd()
+    );
     const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);
     const cliExtraArgs = normalizeExtraArgs(this.options?.extraArgs);
     const extraArgs = [...configExtraArgs, ...cliExtraArgs];

@@ -422,7 +422,9 @@ export class RoverCLI {
       name: `Rover: ${sanitizedId}`,
       cwd: this.workspaceRoot.fsPath,
     });
-    terminal.sendText([this.roverPath, 'shell', sanitizedId].join(' '));
+    terminal.sendText(
+      [this.roverPath, 'shell', sanitizedId].join(' ')
+    );
     terminal.show();
   }
 

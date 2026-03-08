@@ -80,10 +80,15 @@ const styles = css`
     color: var(--vscode-testing-iconFailed);
   }
 
+  .status-badge.paused {
+    color: var(--vscode-charts-yellow);
+  }
+
   .status-badge.running,
   .status-badge.initializing,
   .status-badge.iterating,
-  .status-badge.installing {
+  .status-badge.installing,
+  .status-badge.in_progress {
     color: var(--vscode-testing-iconQueued);
   }
 

@@ -150,8 +150,11 @@ export function sanitizeAIOutput(
 ): string {
   let s = output;
 
-  // Strip wrapping markdown fences only if original didn't have them
-  const fenceMatch = s.match(/^```[\w-]*\n?([\s\S]*?)\n?```\s*$/);
+  // Strip wrapping markdown fences only if original didn't have them.
+  // Greedy `[\s\S]*` is correct here: the `$` anchor forces the match to
+  // end at the very last closing fence, so intermediate fences in the
+  // content are preserved as part of the captured group.
+  const fenceMatch = s.match(/^```[\w-]*\n([\s\S]*)\n```\s*$/);
   if (fenceMatch && !originalContent.includes('```')) {
     s = fenceMatch[1];
   }
@@ -170,7 +173,7 @@ export function sanitizeAIOutput(
 
 /** Returns true if content still has conflict markers */
 export function hasConflictMarkers(content: string): boolean {
-  return /^<{7} |^={7}$|^>{7} /m.test(content);
+  return /^<{7}( |$)|^={7}$|^>{7}( |$)/m.test(content);
 }
 
 /**

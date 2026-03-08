@@ -11,6 +11,13 @@ if [[ -z "$\{HOME\}" ]]; then
   export HOME=/home/$(id -u)
 fi
 
+# Ensure the runtime HOME exists even when starting from a cached image where
+# the container user is remapped to the host UID.
+sudo mkdir -p "$HOME"
+sudo mkdir -p "$HOME/.config"
+sudo mkdir -p "$HOME/.local/bin"
+sudo chown -R "$(id -u):$(id -g)" "$HOME"
+
 # Some tools might be installed under /root/local/.bin conditionally
 # depending on the chosen agent and requirements, make this directory
 # available in the $PATH.
@@ -64,6 +71,10 @@ safe_exit() {
     exit $exit_code
 }
 
+# Trap signals as early as possible so that any subsequent command failure
+# or signal is handled by safe_exit (shred secrets, recover permissions).
+trap 'safe_exit $?' EXIT HUP INT QUIT TERM
+
 # Function to check command availability
 check_command() {
     local cmd="$1"
@@ -99,6 +110,8 @@ RUST_LOG=info package-manager-mcp-server $PACKAGE_MANAGER_MCP_PORT &
 
 PACKAGE_MANAGER_MCP_INIT_PAYLOAD='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{"tools":{},"resources":{},"prompts":{}},"clientInfo":{"name":"test-client","version":"1.0.0"}}}'
 
+MCP_WAIT_ATTEMPTS=0
+MCP_MAX_ATTEMPTS=60
 while true; do
   PACKAGE_MANAGER_MCP_RESPONSE=$(curl -s --connect-timeout 1 --max-time 1 \
     -X POST \
@@ -108,6 +121,11 @@ while true; do
     http://127.0.0.1:$PACKAGE_MANAGER_MCP_PORT/mcp 2>/dev/null)
 
   if [[ $? -ne 0 ]]; then
+    MCP_WAIT_ATTEMPTS=$((MCP_WAIT_ATTEMPTS + 1))
+    if [[ $MCP_WAIT_ATTEMPTS -ge $MCP_MAX_ATTEMPTS ]]; then
+      echo "❌ Package manager MCP failed to start after $\{MCP_MAX_ATTEMPTS\}s"
+      safe_exit 1
+    fi
     echo "Waiting for package manager MCP to be ready at $PACKAGE_MANAGER_MCP_PORT..."
     sleep 1
     continue
@@ -117,6 +135,11 @@ while true; do
     break
   fi
 
+  MCP_WAIT_ATTEMPTS=$((MCP_WAIT_ATTEMPTS + 1))
+  if [[ $MCP_WAIT_ATTEMPTS -ge $MCP_MAX_ATTEMPTS ]]; then
+    echo "❌ Package manager MCP failed to start after $\{MCP_MAX_ATTEMPTS\}s"
+    safe_exit 1
+  fi
   sleep 1
 done
 
@@ -132,7 +155,4 @@ echo "✅ Package manager MCP is ready"
 {sudoersRemoval}
 {initScriptExecution}
 {workflowExecutionSection}
-# Capture the CMD exit and ensure we recover the result!
-trap 'safe_exit $?' EXIT HUP INT QUIT TERM
-
 "$@"

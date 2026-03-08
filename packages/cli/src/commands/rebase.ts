@@ -1,7 +1,6 @@
 import colors from 'ansi-colors';
 import enquirer from 'enquirer';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import yoctoSpinner from 'yocto-spinner';
 import {
   getAIAgentTool,
@@ -26,145 +25,20 @@ import {
 } from '../lib/context.js';
 import type { CommandDefinition } from '../types.js';
 import { parseAgentString } from '../utils/agent-parser.js';
-import { collapseTaskCommits, resolveTaskCollapseRef } from '../lib/squash.js';
+import { collapseTaskCommits } from '../lib/squash.js';
 import {
-  truncateConflictContext,
-  getBlameContext,
-  parseResolvedRegions,
-  reconstructFile,
-  sanitizeAIOutput,
-  hasConflictMarkers,
-} from '../lib/context-optimizer.js';
-import { resolveRebaseConflictSequence } from '../lib/rebase-conflict-sequence.js';
+  getTaskIterationSummaries,
+  generateCommitMessage,
+  resolveConflicts,
+} from '../lib/merge-rebase-utils.js';
 
 const { prompt } = enquirer;
 
 /**
- * Get summaries from all iterations of a task
+ * AI-powered rebase conflict resolver.
+ * Delegates to the shared resolveConflicts utility with rebase-specific defaults.
  */
-const getTaskIterationSummaries = (iterationsPath: string): string[] => {
-  try {
-    if (!existsSync(iterationsPath)) {
-      return [];
-    }
-
-    const iterations = readdirSync(iterationsPath, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
-      .map(dirent => parseInt(dirent.name, 10))
-      .filter(num => !Number.isNaN(num))
-      .sort((a, b) => a - b);
-
-    const summaries: string[] = [];
-
-    for (const iteration of iterations) {
-      const iterationPath = join(iterationsPath, iteration.toString());
-      const summaryPath = join(iterationPath, 'summary.md');
-
-      if (existsSync(summaryPath)) {
-        try {
-          const summary = readFileSync(summaryPath, 'utf8').trim();
-          if (summary) {
-            summaries.push(`Iteration ${iteration}: ${summary}`);
-          }
-        } catch (error) {
-          if (!isJsonMode()) {
-            console.warn(
-              colors.yellow(
-                `Warning: Could not read summary for iteration ${iteration}`
-              )
-            );
-          }
-        }
-      }
-    }
-
-    return summaries;
-  } catch (error) {
-    if (!isJsonMode()) {
-      console.warn(
-        colors.yellow('Warning: Could not retrieve iteration summaries')
-      );
-    }
-    return [];
-  }
-};
-
-/**
- * Generate AI-powered commit message
- */
-const generateCommitMessage = async (
-  taskTitle: string,
-  taskDescription: string,
-  recentCommits: string[],
-  summaries: string[],
-  aiAgent: AIAgentTool
-): Promise<string | null> => {
-  try {
-    const commitMessage = await aiAgent.generateCommitMessage(
-      taskTitle,
-      taskDescription,
-      recentCommits,
-      summaries
-    );
-
-    if (commitMessage == null || commitMessage.length === 0) {
-      if (!isJsonMode()) {
-        console.warn(
-          colors.yellow('Warning: Could not generate AI commit message')
-        );
-      }
-    }
-
-    return commitMessage;
-  } catch (error) {
-    if (!isJsonMode()) {
-      console.warn(
-        colors.yellow('Warning: Could not generate AI commit message')
-      );
-    }
-    return null;
-  }
-};
-
-const promptToContinueRebase = async (
-  git: Git,
-  worktreePath: string
-): Promise<boolean> => {
-  if (isJsonMode()) {
-    return true;
-  }
-
-  showRoverChat([
-    'The rebase conflicts are fixed. You can check the file content to confirm it.',
-  ]);
-
-  let applyChanges = false;
-
-  try {
-    const { confirmResolution } = await prompt<{
-      confirmResolution: boolean;
-    }>({
-      type: 'confirm',
-      name: 'confirmResolution',
-      message: 'Do you want to continue with the rebase?',
-      initial: false,
-    });
-    applyChanges = confirmResolution;
-  } catch (_error) {
-    // Ignore the error as it's a regular CTRL+C
-  }
-
-  if (!applyChanges) {
-    git.abortRebase({ worktreePath });
-  }
-
-  return applyChanges;
-};
-
-/**
- * AI-powered rebase conflict resolver
- */
-const resolveRebaseConflicts = async (
+export const resolveRebaseConflicts = async (
   git: Git,
   conflictedFiles: string[],
   aiAgent: AIAgentTool,
@@ -173,195 +47,17 @@ const resolveRebaseConflicts = async (
   contextLines: number = 50,
   sendFullFile: boolean = false
 ): Promise<{ success: boolean; failureReason?: string }> => {
-  let spinner: ReturnType<typeof yoctoSpinner> | undefined;
-
-  if (!isJsonMode()) {
-    spinner = yoctoSpinner({
-      text: `Resolving conflicts in ${conflictedFiles.length} file(s)...`,
-    }).start();
-  }
-
-  try {
-    const currentBranchName = git.getCurrentBranch({ worktreePath });
-    // Fallback diff context for --send-full-file mode
-    const fallbackDiffContext = sendFullFile
-      ? git
-          .getRecentCommits({
-            branch:
-              currentBranchName === 'unknown' ? 'HEAD' : currentBranchName,
-            worktreePath,
-          })
-          .join('\n')
-      : '';
-
-    const failures: string[] = [];
-    let resolvedCount = 0;
-    const executing: Promise<void>[] = [];
-    let gitAddQueue = Promise.resolve();
-
-    const stageResolvedFile = async (filePath: string): Promise<boolean> => {
-      let addSucceeded = false;
-
-      await (gitAddQueue = gitAddQueue.then(() => {
-        addSucceeded = git.add(filePath, { worktreePath });
-
-        if (!addSucceeded) {
-          failures.push(`Error adding ${filePath} to the git commit`);
-          return;
-        }
-
-        resolvedCount++;
-        if (spinner) {
-          spinner.text = `Resolved ${resolvedCount}/${conflictedFiles.length} file(s)...`;
-        }
-      }));
-
-      return addSucceeded;
-    };
-
-    for (const filePath of conflictedFiles) {
-      const task = (async () => {
-        const fullPath = join(worktreePath, filePath);
-        if (!existsSync(fullPath)) {
-          failures.push(`File ${filePath} not found`);
-          return;
-        }
-
-        const rawContent = readFileSync(fullPath, 'utf8');
-
-        let conflictedContent: string;
-        let diffContext: string;
-        const truncated = sendFullFile
-          ? null
-          : truncateConflictContext(rawContent, contextLines);
-
-        if (sendFullFile) {
-          conflictedContent = rawContent;
-          diffContext = fallbackDiffContext;
-        } else {
-          conflictedContent = truncated!.content;
-          diffContext = getBlameContext(
-            git,
-            filePath,
-            truncated!.conflictRegions,
-            { ours: 'HEAD', theirs: 'REBASE_HEAD' },
-            worktreePath
-          );
-          if (!diffContext) {
-            diffContext =
-              fallbackDiffContext ||
-              git
-                .getRecentCommits({
-                  branch:
-                    currentBranchName === 'unknown'
-                      ? 'HEAD'
-                      : currentBranchName,
-                  worktreePath,
-                })
-                .join('\n');
-          }
-        }
-
-        try {
-          let finalContent: string | null = null;
-
-          if (sendFullFile) {
-            // Full-file mode: AI returns entire resolved file
-            finalContent = await aiAgent.resolveMergeConflicts(
-              filePath,
-              diffContext,
-              conflictedContent
-            );
-            if (finalContent) {
-              finalContent = sanitizeAIOutput(finalContent, rawContent);
-            }
-          } else {
-            // Region-based mode: AI returns only resolved conflict regions
-            const regionCount = truncated!.conflictRegions.length;
-
-            try {
-              let regionOutput = await aiAgent.resolveMergeConflictsRegions(
-                filePath,
-                diffContext,
-                conflictedContent,
-                regionCount
-              );
-
-              if (regionOutput) {
-                regionOutput = sanitizeAIOutput(
-                  regionOutput,
-                  conflictedContent
-                );
-                const resolvedRegions = parseResolvedRegions(
-                  regionOutput,
-                  regionCount
-                );
-                finalContent = reconstructFile(
-                  rawContent,
-                  truncated!.conflictRegions,
-                  resolvedRegions
-                );
-              }
-            } catch {
-              // Region parsing failed — fallback to full-file resolution
-              finalContent = await aiAgent.resolveMergeConflicts(
-                filePath,
-                diffContext,
-                rawContent
-              );
-              if (finalContent) {
-                finalContent = sanitizeAIOutput(finalContent, rawContent);
-              }
-            }
-          }
-
-          if (!finalContent) {
-            failures.push(`AI returned empty resolution for ${filePath}`);
-            return;
-          }
-
-          if (hasConflictMarkers(finalContent)) {
-            failures.push(
-              `AI output for ${filePath} still contains conflict markers`
-            );
-            return;
-          }
-
-          writeFileSync(fullPath, finalContent);
-
-          if (!(await stageResolvedFile(filePath))) {
-            return;
-          }
-        } catch (error) {
-          failures.push(`Error resolving ${filePath}: ${error}`);
-        }
-      })();
-
-      const wrapped = task.then(() => {
-        executing.splice(executing.indexOf(wrapped), 1);
-      });
-      executing.push(wrapped);
-
-      if (executing.length >= concurrency) {
-        await Promise.race(executing);
-      }
-    }
-
-    await Promise.all(executing);
-
-    if (failures.length > 0) {
-      const reason = failures.join('; ');
-      spinner?.error(`Failed to resolve ${failures.length} file(s)`);
-      return { success: false, failureReason: reason };
-    }
-
-    spinner?.success('All conflicts resolved by AI');
-    return { success: true };
-  } catch (error) {
-    const reason = `Failed to resolve rebase conflicts: ${error}`;
-    spinner?.error(reason);
-    return { success: false, failureReason: reason };
-  }
+  return resolveConflicts({
+    git,
+    conflictedFiles,
+    aiAgent,
+    rootPath: worktreePath,
+    theirsRef: 'REBASE_HEAD',
+    worktreePath,
+    concurrency,
+    contextLines,
+    sendFullFile,
+  });
 };
 
 interface RebaseOptions {
@@ -398,7 +94,10 @@ interface TaskRebaseOutput extends CLIJsonOutput {
  * @param options.force - Skip confirmation prompt
  * @param options.json - Output results in JSON format
  */
-const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
+export const rebaseCommand = async (
+  taskId: string,
+  options: RebaseOptions = {}
+) => {
   if (options.json !== undefined) {
     setJsonMode(options.json);
   }
@@ -408,12 +107,12 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
     success: false,
   };
 
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = Number(taskId);
 
   let project;
   try {
@@ -502,7 +201,32 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
       console.log(colors.gray('└── Status: ') + task.status);
     }
 
-    // Check if worktree exists
+    // Reject tasks in active or paused states
+    if (task.isInProgress() || task.isIterating()) {
+      jsonOutput.error = `Task ${taskId} is ${task.status} — cannot rebase while the agent is running`;
+      await exitWithError(jsonOutput, {
+        tips: [
+          'Wait for the task to complete, or stop it first with ' +
+            colors.cyan(`rover stop ${taskId}`),
+        ],
+        telemetry,
+      });
+      return;
+    }
+
+    if (task.isPaused()) {
+      jsonOutput.error = `Task ${taskId} is paused — cannot rebase while paused`;
+      await exitWithError(jsonOutput, {
+        tips: [
+          'Use ' +
+            colors.cyan(`rover resume ${taskId}`) +
+            ' to resume the task first',
+        ],
+        telemetry,
+      });
+      return;
+    }
+
     if (!task.worktreePath || !existsSync(task.worktreePath)) {
       jsonOutput.error = 'No worktree found for this task';
       await exitWithError(jsonOutput, { telemetry });
@@ -513,30 +237,15 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
     const currentBranch = git.getCurrentBranch();
     jsonOutput.currentBranch = currentBranch;
 
-    // Collapse all task commits into staged changes before evaluating state
-    const collapseRef = resolveTaskCollapseRef(
-      git,
-      task.worktreePath,
-      task.baseCommit,
-      `origin/${task.branchName}`
-    );
-    const squashed = collapseRef
-      ? collapseTaskCommits(git, collapseRef, task.worktreePath)
-      : false;
-
-    // Check if worktree has changes to commit
-    const hasWorktreeChanges =
-      squashed ||
-      git.hasUncommittedChanges({
-        worktreePath: task.worktreePath,
-      });
-
-    jsonOutput.hasWorktreeChanges = hasWorktreeChanges;
+    // Check if worktree has uncommitted changes (before squashing)
+    const hasUncommittedChanges = git.hasUncommittedChanges({
+      worktreePath: task.worktreePath,
+    });
 
     if (!isJsonMode()) {
       console.log('');
       console.log(colors.cyan('The rebase process will'));
-      if (hasWorktreeChanges) {
+      if (hasUncommittedChanges) {
         console.log(colors.cyan('├── Commit changes in the task worktree'));
       }
       console.log(
@@ -574,6 +283,17 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
     if (!isJsonMode()) {
       console.log('');
     }
+
+    // Collapse task commits AFTER user confirmation (this is destructive)
+    const squashed = collapseTaskCommits(
+      git,
+      task.baseCommit,
+      task.worktreePath
+    );
+
+    const hasWorktreeChanges = squashed || hasUncommittedChanges;
+
+    jsonOutput.hasWorktreeChanges = hasWorktreeChanges;
 
     const spinner = !options.json
       ? yoctoSpinner({ text: 'Preparing rebase...' }).start()
@@ -644,44 +364,103 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
         if (rebaseConflicts.length > 0) {
           if (spinner) spinner.error('Rebase conflicts detected');
 
-          const concurrency = parseInt(options.concurrency || '4', 10);
-          const contextLinesNum = parseInt(options.contextLines || '50', 10);
-          const resolution = await resolveRebaseConflictSequence(
+          if (!isJsonMode()) {
+            console.log(
+              colors.yellow(
+                `\n⚠ Rebase conflicts detected in ${rebaseConflicts.length} file(s):`
+              )
+            );
+            rebaseConflicts.forEach((file, index) => {
+              const isLast = index === rebaseConflicts.length - 1;
+              const connector = isLast ? '└──' : '├──';
+              console.log(colors.gray(connector), file);
+            });
+          }
+
+          if (!isJsonMode()) {
+            showRoverChat([
+              'I noticed some rebase conflicts. I will try to solve them',
+            ]);
+          }
+
+          const concurrency = Math.max(
+            1,
+            Math.min(parseInt(options.concurrency || '4', 10) || 4, 16)
+          );
+          const contextLinesNum = Math.max(
+            0,
+            Math.min(parseInt(options.contextLines || '50', 10) || 50, 500)
+          );
+          const resolution = await resolveRebaseConflicts(
             git,
+            rebaseConflicts,
             aiAgent,
             task.worktreePath,
-            rebaseConflicts,
-            {
-              concurrency,
-              contextLines: contextLinesNum,
-              sendFullFile: options.sendFullFile === true,
-              resolveConflicts: resolveRebaseConflicts,
-              confirmContinue: promptToContinueRebase,
-            },
-            jsonOutput
+            concurrency,
+            contextLinesNum,
+            options.sendFullFile === true
           );
 
           if (resolution.success) {
-            jsonOutput.rebased = true;
+            jsonOutput.conflictsResolved = true;
 
             if (!isJsonMode()) {
-              console.log(
-                colors.green(
-                  '\n✓ Rebase conflicts resolved and rebase completed'
-                )
-              );
-            }
-          } else {
-            if (
-              resolution.error === 'User rejected AI resolution. Rebase aborted'
-            ) {
-              await exitWithWarn(resolution.error, jsonOutput, {
-                telemetry,
-              });
-              return;
+              showRoverChat([
+                'The rebase conflicts are fixed. You can check the file content to confirm it.',
+              ]);
+
+              let applyChanges = false;
+
+              try {
+                const { confirmResolution } = await prompt<{
+                  confirmResolution: boolean;
+                }>({
+                  type: 'confirm',
+                  name: 'confirmResolution',
+                  message: 'Do you want to continue with the rebase?',
+                  initial: false,
+                });
+                applyChanges = confirmResolution;
+              } catch (error) {
+                // Ignore the error as it's a regular CTRL+C
+              }
+
+              if (!applyChanges) {
+                git.abortRebase({ worktreePath: task.worktreePath });
+                await exitWithWarn(
+                  'User rejected AI resolution. Rebase aborted',
+                  jsonOutput,
+                  { telemetry }
+                );
+                return;
+              }
             }
 
-            jsonOutput.error = resolution.error;
+            // Continue the rebase with resolved conflicts
+            try {
+              git.continueRebase({ worktreePath: task.worktreePath });
+
+              jsonOutput.rebased = true;
+
+              if (!isJsonMode()) {
+                console.log(
+                  colors.green(
+                    '\n✓ Rebase conflicts resolved and rebase completed'
+                  )
+                );
+              }
+            } catch (continueError) {
+              git.abortRebase({ worktreePath: task.worktreePath });
+
+              jsonOutput.error = `Error completing rebase after conflict resolution: ${continueError}`;
+              await exitWithError(jsonOutput, { telemetry });
+              return;
+            }
+          } else {
+            jsonOutput.error =
+              resolution.failureReason ||
+              'AI failed to resolve rebase conflicts';
+            git.abortRebase({ worktreePath: task.worktreePath });
 
             if (!isJsonMode()) {
               console.log(
@@ -711,7 +490,8 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
             return;
           }
         } else {
-          // Other rebase error, not conflicts
+          // Other rebase error, not conflicts — abort to restore worktree
+          git.abortRebase({ worktreePath: task.worktreePath });
           if (spinner) spinner.error('Rebase failed');
           jsonOutput.error =
             rebaseResult.error || 'Rebase failed with an unknown error';
@@ -725,7 +505,13 @@ const rebaseCommand = async (taskId: string, options: RebaseOptions = {}) => {
         const newBaseCommit = git.getCommitHash(currentBranch, {
           worktreePath: task.worktreePath,
         });
-        if (newBaseCommit) {
+        if (!newBaseCommit) {
+          console.log(
+            colors.yellow(
+              '⚠ Could not determine new base commit after rebase. Future diffs may include upstream changes.'
+            )
+          );
+        } else {
           task.setBaseCommit(newBaseCommit);
         }
 

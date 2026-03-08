@@ -24,6 +24,7 @@ import {
 } from '../lib/agents/index.js';
 import { parseAgentString } from '../utils/agent-parser.js';
 import { isJsonMode, requireProjectContext } from '../lib/context.js';
+import { isResumeLockActive } from '../utils/resume-lock.js';
 import type { IPromptTask } from '../lib/prompts/index.js';
 import { createSandbox } from '../lib/sandbox/index.js';
 import { getTelemetry } from '../lib/telemetry.js';
@@ -109,9 +110,8 @@ const iterateCommand = async (
     instructions: instructions || '',
   };
 
-  // Convert string taskId to number or fail
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  // Convert string taskId to number (strict: reject '123abc' etc.)
+  if (!/^\d+$/.test(taskId)) {
     result.error = `Invalid task ID '${taskId}' - must be a number`;
     if (isJsonMode()) {
       console.log(JSON.stringify(result, null, 2));
@@ -120,6 +120,7 @@ const iterateCommand = async (
     }
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   result.taskId = numericTaskId;
 
@@ -129,7 +130,7 @@ const iterateCommand = async (
     project = await requireProjectContext();
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
-    exitWithError(result, { telemetry });
+    await exitWithError(result, { telemetry });
     return;
   }
 
@@ -148,7 +149,7 @@ const iterateCommand = async (
       result.error = `Error loading task: ${error}`;
     }
 
-    exitWithError(result, { telemetry });
+    await exitWithError(result, { telemetry });
     return;
   }
 
@@ -168,11 +169,27 @@ const iterateCommand = async (
     return;
   }
 
-  // Ensure the task is not currently running
+  // Ensure the task is not currently running or paused
   if (task.isInProgress() || task.isIterating()) {
     result.error =
       'Cannot iterate over a running task. Please wait it to finish first.';
-    exitWithError(result, { telemetry });
+    await exitWithError(result, { telemetry });
+    return;
+  }
+
+  if (task.isPaused()) {
+    result.error =
+      'Cannot iterate over a paused task. Use "rover resume" to resume it first.';
+    await exitWithError(result, { telemetry });
+    return;
+  }
+
+  // Check if another process is actively working on this task
+  const iterationPath = join(task.iterationsPath(), task.iterations.toString());
+  if (isResumeLockActive(iterationPath)) {
+    result.error =
+      'Task is already being resumed or restarted by another process.';
+    await exitWithError(result, { telemetry });
     return;
   }
 
@@ -269,7 +286,7 @@ const iterateCommand = async (
           });
           finalInstructions = input;
         } catch (_err) {
-          await exitWithWarn('Task deletion cancelled', result, {
+          await exitWithWarn('Task iteration cancelled', result, {
             telemetry,
           });
           return;
@@ -361,6 +378,15 @@ const iterateCommand = async (
       mkdirSync(iterationPath, { recursive: true });
       result.iterationPath = iterationPath;
 
+      // Validate mutual exclusivity of --context-trust-authors and --context-trust-all-authors
+      // Must happen before any state mutations to avoid corrupting the task.
+      if (options.contextTrustAuthors && options.contextTrustAllAuthors) {
+        result.error =
+          '--context-trust-authors and --context-trust-all-authors are mutually exclusive';
+        await exitWithError(result, { telemetry });
+        return;
+      }
+
       // Update task with new iteration info
       task.incrementIteration();
       task.markIterating();
@@ -376,14 +402,6 @@ const iterateCommand = async (
       );
 
       processManager?.completeLastItem();
-
-      // Validate mutual exclusivity of --context-trust-authors and --context-trust-all-authors
-      if (options.contextTrustAuthors && options.contextTrustAllAuthors) {
-        result.error =
-          '--context-trust-authors and --context-trust-all-authors are mutually exclusive';
-        exitWithError(result, { telemetry });
-        return;
-      }
 
       // Fetch context and collect artifacts from previous iterations
       processManager?.addItem('Fetching context sources');

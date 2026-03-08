@@ -21,7 +21,6 @@ import { showRoverChat, TIP_TITLES } from '../utils/display.js';
 import { statusColor } from '../utils/task-status.js';
 import { executeHooks } from '../lib/hooks.js';
 import type { CommandDefinition } from '../types.js';
-import { collapseTaskCommits, resolveTaskCollapseRef } from '../lib/squash.js';
 
 const { prompt } = enquirer;
 
@@ -113,13 +112,13 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
     pushed: false,
   };
 
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  // Convert string taskId to number (strict: reject '123abc' etc.)
+  if (!/^\d+$/.test(taskId)) {
     result.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(result, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Store the task ID!
   result.taskId = numericTaskId;
@@ -136,10 +135,8 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
 
   const git = new Git({ cwd: project.path });
 
-  let projectConfig;
-
   // Load config
-  projectConfig = ProjectConfigManager.load(project.path);
+  const projectConfig = ProjectConfigManager.load(project.path);
 
   try {
     // Load task using ProjectManager
@@ -150,6 +147,24 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
 
     result.taskTitle = task.title;
     result.branchName = task.branchName;
+
+    // Reject push for tasks that are still actively running or paused to prevent
+    // collapsing in-flight work from a running container.
+    if (task.isInProgress() || task.isIterating() || task.isPaused()) {
+      result.error = `Task ${taskId} is ${task.status} — wait for it to finish or stop it before pushing`;
+      await exitWithError(result, {
+        tips: [
+          'Use ' +
+            colors.cyan(`rover logs -f ${taskId}`) +
+            colors.gray(' to watch the task logs'),
+          'Use ' +
+            colors.cyan(`rover inspect ${taskId}`) +
+            colors.gray(' to check the current task status'),
+        ],
+        telemetry,
+      });
+      return;
+    }
 
     if (!task.worktreePath || !existsSync(task.worktreePath)) {
       result.error = 'Task workspace not found';
@@ -171,24 +186,11 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       });
     }
 
-    // Collapse only commits that have not been pushed yet. Once the remote task
-    // branch exists, keep its published history intact so subsequent pushes stay
-    // fast-forward.
-    const collapseRef = resolveTaskCollapseRef(
-      git,
-      task.worktreePath,
-      task.baseCommit,
-      `origin/${task.branchName}`
-    );
-    const squashed = collapseRef
-      ? collapseTaskCommits(git, collapseRef, task.worktreePath)
-      : false;
-
     // Check for changes
     const fileChanges = git.uncommittedChanges({
       worktreePath: task.worktreePath,
     });
-    const hasChanges = squashed || fileChanges.length > 0;
+    const hasChanges = fileChanges.length > 0;
     result.hasChanges = hasChanges;
 
     if (!hasChanges) {
@@ -253,8 +255,8 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         });
         result.committed = true;
         commitSpinner?.success('Changes committed');
-      } catch (error: any) {
-        result.error = `Failed to commit changes: ${error.message}`;
+      } catch (error: unknown) {
+        result.error = `Failed to commit changes: ${error instanceof Error ? error.message : String(error)}`;
         commitSpinner?.error('Failed to commit changes');
         await exitWithError(result, { telemetry });
         return;
@@ -278,9 +280,11 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       if (pushSpinner) {
         pushSpinner.success(`Branch pushed successfully`);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Check if it's because the remote branch doesn't exist
-      if (error.message.includes('has no upstream branch')) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('has no upstream branch')) {
         if (pushSpinner) {
           pushSpinner.text =
             'Branch does not exist in remote. Setting upstream branch';
@@ -297,100 +301,19 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
           if (!isJsonMode()) {
             console.log(colors.green(`✓ Branch pushed successfully`));
           }
-        } catch (retryError: any) {
+        } catch (retryError: unknown) {
           pushSpinner?.error('Failed to push branch');
-          result.error = `Failed to push branch: ${retryError.message}`;
+          result.error = `Failed to push branch: ${retryError instanceof Error ? retryError.message : String(retryError)}`;
           await exitWithError(result, { telemetry });
           return;
         }
       } else {
         pushSpinner?.error('Failed to push branch');
-        result.error = `Failed to push branch: ${error.message}`;
+        result.error = `Failed to push branch: ${errorMessage}`;
         await exitWithError(result, { telemetry });
         return;
       }
     }
-
-    // TODO: Skip PR feature for now until we improve the process
-    // Check if this is a GitHub repo
-    // if (options.pr === true) {
-    //     try {
-    //         const remoteUrl = git.remoteUrl();
-    //         const repoInfo = getGitHubRepoInfo(remoteUrl);
-
-    //         if (repoInfo) {
-    //             const ghCli = await checkGitHubCLI();
-    //             // Check if gh CLI is available
-    //             if (!ghCli) {
-    //                 result.pullRequest = {
-    //                     created: false
-    //                 };
-    //                 if (!isJsonMode()) {
-    //                     console.log(colors.yellow('\n⚠ GitHub CLI (gh) not found'));
-    //                     console.log(colors.gray('  Install it from: https://cli.github.com'));
-    //                     console.log(colors.gray('  Then you can create a PR with: ') +
-    //                         colors.cyan(`gh pr create --title "${task.title}" --body "..."`));
-    //                 }
-    //             } else {
-    //                 const prSpinner = !options.json ? yoctoSpinner({ text: 'Creating pull request...' }).start() : null;
-    //                 try {
-    //                     // Create PR with task details
-    //                     // TODO: Improve it by creating a custom body based on the task changes.
-    //                     const prBody = `## Task ${numericTaskId}\n\n${task.description}\n\n---\n*Created by Rover CLI*`;
-    //                     const { stdout } = spawnSync(
-    //                         'gh', ['pr', 'create', '--title', task.title, '--body', prBody, '--head', task.branchName]);
-
-    //                     result.pullRequest = {
-    //                         created: true,
-    //                         url: stdout.toString().trim().split('\n').pop()
-    //                     };
-
-    //                     prSpinner?.success('Pull request created');
-
-    //                     if (!isJsonMode()) {
-    //                         console.log(colors.green('\n✓ Pull Request created: ') + colors.cyan(result.pullRequest.url || 'Not available'));
-    //                     }
-    //                 } catch (error: any) {
-    //                     prSpinner?.error('Failed to create pull request');
-
-    //                     // Check if PR already exists
-    //                     if (error.message.includes('already exists')) {
-    //                         result.pullRequest = {
-    //                             created: false,
-    //                             exists: true
-    //                         };
-
-    //                         // Try to get existing PR URL
-    //                         try {
-    //                             const { stdout } = spawnSync('gh', ['pr', 'view', task.branchName, '--json', 'url', '-q', '.url']);
-    //                             result.pullRequest.url = stdout.toString().trim();
-    //                         } catch {
-    //                             // Couldn't get PR URL
-    //                         }
-
-    //                         if (!isJsonMode()) {
-    //                             console.log(colors.yellow('⚠ A pull request already exists for this branch'));
-    //                             if (result.pullRequest.url) {
-    //                                 console.log(colors.gray('  Existing PR: ') + colors.cyan(result.pullRequest.url));
-    //                             }
-    //                         }
-    //                     } else {
-    //                         result.pullRequest = {
-    //                             created: false
-    //                         };
-    //                         if (!isJsonMode()) {
-    //                             console.error(colors.red('Error:'), error.message);
-    //                             console.log(colors.gray('\n  You can manually create a PR at:'));
-    //                             console.log(colors.cyan(`  https://github.com/${repoInfo.owner}/${repoInfo.repo}/pull/new/${task.branchName}`));
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     } catch (error) {
-    //         // Not a GitHub repo or couldn't determine, skip PR creation
-    //     }
-    // }
 
     let repoInfo: RepoInfo | null = null;
 
@@ -423,14 +346,14 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         tips.push(
           'You can open a new PR on ' +
             colors.cyan(
-              `https://${repoInfo.host}/${repoInfo.projectPath}/pull/new/${task.branchName}`
+              `https://${repoInfo.host}/${repoInfo.projectPath}/pull/new/${encodeURIComponent(task.branchName)}`
             )
         );
       } else {
         tips.push(
           'You can open a new merge request on ' +
             colors.cyan(
-              `https://${repoInfo.host}/${repoInfo.projectPath}/-/merge_requests/new?merge_request[source_branch]=${task.branchName}`
+              `https://${repoInfo.host}/${repoInfo.projectPath}/-/merge_requests/new?merge_request[source_branch]=${encodeURIComponent(task.branchName)}`
             )
         );
       }
@@ -443,7 +366,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       },
       telemetry,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof TaskNotFoundError) {
       result.error = `The task with ID ${numericTaskId} was not found`;
       await exitWithError(result, { telemetry });

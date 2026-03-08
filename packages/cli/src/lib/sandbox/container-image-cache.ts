@@ -6,6 +6,7 @@ import {
   launchSync,
   getVersion,
   ProjectConfigManager,
+  VERBOSE,
 } from 'rover-core';
 import { ContainerBackend, resolveInitScriptPath } from './container-common.js';
 
@@ -62,8 +63,8 @@ export interface SetupHashInputs {
 
 /**
  * Compute a SHA-256 hash of the setup inputs that determine the container
- * image state. Arrays are sorted for determinism so that different ordering
- * of the same values produces the same hash.
+ * image state. Order-insensitive arrays are sorted for determinism, while
+ * order-sensitive inputs keep their declared order.
  */
 export function computeSetupHash(inputs: SetupHashInputs): string {
   const normalized: Record<string, unknown> = {
@@ -87,18 +88,16 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
   };
 
   if (inputs.projects && inputs.projects.length > 0) {
-    normalized.projects = [...inputs.projects]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map(p => ({
-        name: p.name,
-        path: p.path,
-        repository: p.repository || '',
-        ref: p.ref || '',
-        languages: [...(p.languages || [])].sort(),
-        packageManagers: [...(p.packageManagers || [])].sort(),
-        taskManagers: [...(p.taskManagers || [])].sort(),
-        initScriptContent: p.initScriptContent || '',
-      }));
+    normalized.projects = inputs.projects.map(p => ({
+      name: p.name,
+      path: p.path,
+      repository: p.repository || '',
+      ref: p.ref || '',
+      languages: [...(p.languages || [])].sort(),
+      packageManagers: [...(p.packageManagers || [])].sort(),
+      taskManagers: [...(p.taskManagers || [])].sort(),
+      initScriptContent: p.initScriptContent || '',
+    }));
   }
 
   return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
@@ -248,7 +247,11 @@ export function checkImageCache(
       let projectInitContent = '';
       if (p.initScript) {
         try {
-          const absPath = join(projectConfig.projectRoot, p.initScript);
+          const absPath = resolveInitScriptPath(
+            projectConfig.projectRoot,
+            p.initScript,
+            p.path
+          );
           projectInitContent = readFileSync(absPath, 'utf-8');
         } catch {
           // treat as empty
@@ -358,7 +361,12 @@ export async function listCacheImages(
     }
 
     return images;
-  } catch {
+  } catch (err) {
+    if (VERBOSE) {
+      console.warn(
+        `Warning: Failed to list cache images: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
     return [];
   }
 }
