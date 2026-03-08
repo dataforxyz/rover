@@ -215,6 +215,29 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     return this.invoke(prompt, { model: this.model });
   }
 
+  async resolveMergeConflictsRegions(
+    filePath: string,
+    diffContext: string,
+    conflictedContent: string,
+    regionCount: number
+  ): Promise<string | null> {
+    try {
+      const prompt = this.promptBuilder.resolveMergeConflictsRegionsPrompt(
+        filePath,
+        diffContext,
+        conflictedContent,
+        regionCount
+      );
+      const response = await this.invoke(prompt, {
+        model: this.model,
+      });
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
+  }
+
   async extractGithubInputs(
     issueDescription: string,
     inputs: WorkflowInput[]
