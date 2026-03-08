@@ -8,6 +8,7 @@ import {
   CURRENT_WORKFLOW_SCHEMA_VERSION,
   WorkflowSchema,
   WorkflowLoadError,
+  WorkflowSaveError,
   WorkflowValidationError,
   isAgentStep,
   isLoopStep,
@@ -24,6 +25,7 @@ import {
   ZodError,
 } from 'rover-schemas';
 import { launchSync } from '../os.js';
+import { evaluateCondition } from '../condition.js';
 import colors from 'ansi-colors';
 
 // Default step timeout in seconds
@@ -67,6 +69,7 @@ export type OnStepComplete = (
     totalSteps: number;
     runSteps: number;
     totalDuration: number;
+    stepsOutput: Map<string, Map<string, string>>;
   }
 ) => void;
 
@@ -95,9 +98,9 @@ export class WorkflowManager {
       // Validate data with Zod schema
       this.data = WorkflowSchema.parse(data);
       this.filePath = filePath;
-      // Store original steps and initialize working steps array
-      this.originalSteps = [...this.data.steps];
-      this._steps = [...this.data.steps];
+      // Store original steps (deep clone) and initialize working steps array
+      this.originalSteps = structuredClone(this.data.steps);
+      this._steps = structuredClone(this.originalSteps);
     } catch (error) {
       if (error instanceof ZodError) {
         const errorMessages = error.issues
@@ -221,12 +224,12 @@ export class WorkflowManager {
       writeFileSync(this.filePath, yamlContent, 'utf8');
     } catch (error) {
       if (error instanceof Error) {
-        throw new WorkflowLoadError(
+        throw new WorkflowSaveError(
           `Failed to save workflow config: ${error.message}`,
           error
         );
       }
-      throw new WorkflowLoadError(`Failed to save workflow config: ${error}`);
+      throw new WorkflowSaveError(`Failed to save workflow config: ${error}`);
     }
   }
 
@@ -412,7 +415,7 @@ export class WorkflowManager {
    * Clear all injected steps (reset to original YAML steps)
    */
   clearInjectedSteps(): void {
-    this._steps = [...this.originalSteps];
+    this._steps = structuredClone(this.originalSteps);
   }
 
   /**
@@ -448,12 +451,31 @@ export class WorkflowManager {
     return this._steps;
   }
 
+  set steps(value: readonly WorkflowStep[]) {
+    this._steps = structuredClone([...value]);
+  }
+
   get defaults(): WorkflowDefaults | undefined {
     return this.data.defaults;
   }
 
   get config(): WorkflowConfig | undefined {
     return this.data.config;
+  }
+
+  /**
+   * Count executable steps recursively, expanding loop sub-steps.
+   */
+  static countSteps(steps: WorkflowStep[]): number {
+    let count = 0;
+    for (const step of steps) {
+      if (isLoopStep(step)) {
+        count += WorkflowManager.countSteps(step.steps);
+      } else {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**
@@ -490,13 +512,15 @@ export class WorkflowManager {
     let stdout = '';
     let stderr = '';
     let success = false;
-    let exitCode = -1;
     let error: string | undefined;
 
-    const result = launchSync(step.command, step.args, { reject: false });
+    const timeout = this.getStepTimeout(step.id) * 1000; // convert seconds to ms
+    const result = launchSync(step.command, step.args, {
+      reject: false,
+      timeout,
+    });
     stdout = String(result.stdout ?? '');
     stderr = String(result.stderr ?? '');
-    exitCode = result.exitCode ?? -1;
 
     if (!result.failed) {
       success = true;
@@ -526,6 +550,7 @@ export class WorkflowManager {
     }
 
     const duration = (Date.now() - startTime) / 1000;
+    const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
     const outputs = new Map<string, string>();
     outputs.set('exit_code', String(exitCode));
     outputs.set('success', String(success));
@@ -559,26 +584,27 @@ export class WorkflowManager {
   ): Promise<WorkflowRunResult> {
     const stepsOutput: Map<string, Map<string, string>> = new Map();
     const stepResults: StepResult[] = [];
-    const totalSteps = this._steps.length;
+    const totalSteps = WorkflowManager.countSteps(this._steps);
     let runSteps = 0;
     let totalDuration = 0;
     let workflowSuccess = true;
     let workflowError: string | undefined;
+    let flattenedStepIndex = 0;
 
     for (let stepIndex = 0; stepIndex < this._steps.length; stepIndex++) {
       const step = this._steps[stepIndex];
+      const currentStepIndex = flattenedStepIndex;
+      const stepWidth = WorkflowManager.countSteps([step]);
 
       // Check `if` condition before running step
       if (step.if) {
-        const conditionResult = this.evaluateSimpleCondition(
-          step.if,
-          stepsOutput
-        );
+        const conditionResult = evaluateCondition(step.if, stepsOutput);
         if (!conditionResult) {
           console.log(
             colors.gray(`  ⏭ Skipping step "${step.name}" (condition not met)`)
           );
           stepsOutput.set(step.id, new Map());
+          flattenedStepIndex += stepWidth;
           continue;
         }
       }
@@ -587,22 +613,21 @@ export class WorkflowManager {
 
       if (isLoopStep(step) && runner.runStep) {
         // Loop steps are handled by the agent package's step executor
-        result = await runner.runStep(step, stepIndex, stepsOutput);
-      } else if (isLoopStep(step)) {
-        workflowSuccess = false;
-        workflowError = `Workflow step '${step.name}' requires a generic step executor (runner.runStep)`;
-        break;
+        result = await runner.runStep(step, currentStepIndex, stepsOutput);
       } else if (isCommandStep(step)) {
         if (runner.runStep) {
           // Prefer the agent package's command runner (supports placeholders, shell-escaping)
-          result = await runner.runStep(step, stepIndex, stepsOutput);
+          result = await runner.runStep(step, currentStepIndex, stepsOutput);
         } else {
           result = this.executeCommandStep(step);
         }
       } else if (isAgentStep(step)) {
-        result = await runner.runAgentStep(step, stepIndex, stepsOutput);
+        result = await runner.runAgentStep(step, currentStepIndex, stepsOutput);
       } else {
-        // Unknown step type - skip
+        // Unknown step type - skip with warning
+        console.warn(
+          `Warning: Skipping step "${step.name}" with unknown type "${(step as any).type}"`
+        );
         continue;
       }
 
@@ -611,16 +636,18 @@ export class WorkflowManager {
       stepResults.push(result);
       totalDuration += result.duration;
 
+      // Store step outputs before the callback so onStepComplete consumers
+      // can see the current step's results in the stepsOutput map.
+      stepsOutput.set(step.id, result.outputs);
+
       onStepComplete?.(step, result, {
-        stepIndex,
+        stepIndex: currentStepIndex,
         totalSteps,
         runSteps,
         totalDuration,
+        stepsOutput,
       });
-
-      // Always store step outputs so subsequent steps and loop
-      // conditions can reference them (even from failed steps).
-      stepsOutput.set(step.id, result.outputs);
+      flattenedStepIndex += stepWidth;
 
       if (!result.success) {
         const continueOnError = this.data.config?.continueOnError || false;
@@ -655,63 +682,6 @@ export class WorkflowManager {
   }
 
   /**
-   * Evaluate a condition string for step `if` fields.
-   * Supports OR (`||`) to join multiple clauses.
-   * Each clause: steps.<id>.outputs.<name> == <value>
-   *              steps.<id>.outputs.<name> != <value>
-   */
-  private evaluateSimpleCondition(
-    condition: string,
-    stepsOutput: Map<string, Map<string, string>>
-  ): boolean {
-    const parts = condition.split(/\s*\|\|\s*/);
-    return parts.some(part =>
-      this.evaluateSingleCondition(part.trim(), stepsOutput)
-    );
-  }
-
-  /**
-   * Evaluate a single condition clause (no OR).
-   */
-  private evaluateSingleCondition(
-    condition: string,
-    stepsOutput: Map<string, Map<string, string>>
-  ): boolean {
-    const trimmed = condition.trim();
-    const match = trimmed.match(
-      /^steps\.([\w-]+)\.outputs\.([\w-]+)\s*(==|!=)\s*(.+)$/
-    );
-    if (!match) return false;
-
-    const [, stepId, outputName, operator, rawValue] = match;
-    const expectedValue = rawValue.trim();
-    const stepOutputs = stepsOutput.get(stepId);
-    if (!stepOutputs) {
-      return false;
-    }
-
-    const actualValue = stepOutputs.get(outputName);
-    if (actualValue === undefined) {
-      return false;
-    }
-
-    // Normalize booleans for comparison
-    const normalize = (v: string) => {
-      const l = v.toLowerCase();
-      if (l === 'true' || l === 'yes') return 'true';
-      if (l === 'false' || l === 'no') return 'false';
-      return v;
-    };
-
-    const normActual = normalize(actualValue);
-    const normExpected = normalize(expectedValue);
-
-    return operator === '=='
-      ? normActual === normExpected
-      : normActual !== normExpected;
-  }
-
-  /**
    * Validate provided inputs against workflow requirements
    * @param providedInputs - Map of input name to value
    * @returns Object with validation result and any errors/warnings
@@ -730,6 +700,30 @@ export class WorkflowManager {
 
       if (input.required && !providedValue && !input.default) {
         errors.push(`Required input "${input.name}" is missing`);
+      }
+    }
+
+    // Validate that provided values match declared types
+    for (const input of this.inputs) {
+      const value = providedInputs.get(input.name);
+      if (value === undefined) continue;
+
+      if (
+        input.type === 'number' &&
+        (value.trim() === '' || isNaN(Number(value)))
+      ) {
+        errors.push(
+          `Input "${input.name}" expects a number but got "${value}"`
+        );
+      } else if (
+        input.type === 'boolean' &&
+        !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(
+          value.toLowerCase()
+        )
+      ) {
+        errors.push(
+          `Input "${input.name}" expects a boolean but got "${value}"`
+        );
       }
     }
 

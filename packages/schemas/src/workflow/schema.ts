@@ -88,7 +88,7 @@ export const WorkflowConfigSchema = z.object({
   timeout: z.number().optional(),
   /** Whether to continue on step failures */
   continueOnError: z.boolean().optional(),
-  /** Maximum iterations any loop step may run (ceiling for per-loop maxIterations) */
+  /** Maximum iterations any loop step may run (ceiling for per-loop maxIterations). Runtime default: 3. */
   loopLimit: z.number().int().positive().optional(),
 });
 
@@ -96,8 +96,11 @@ export const WorkflowConfigSchema = z.object({
  * Regex for validating a single condition expression.
  * Format: steps.<id>.outputs.<name> == <value>
  *         steps.<id>.outputs.<name> != <value>
+ *
+ * Exported and imported by packages/core/src/condition.ts so both schema
+ * validation and runtime evaluation share the same canonical pattern.
  */
-const SINGLE_CONDITION_REGEX =
+export const SINGLE_CONDITION_REGEX =
   /^steps\.[\w-]+\.outputs\.[\w-]+\s*(==|!=)\s*.+$/;
 
 /**
@@ -105,7 +108,23 @@ const SINGLE_CONDITION_REGEX =
  * Each clause must individually match the single-condition format.
  */
 function isValidCondition(condition: string): boolean {
-  const parts = condition.split(/\s*\|\|\s*/);
+  // Keep schema validation aligned with the runtime evaluator, which rejects
+  // logical AND between clauses and only supports OR.
+  if (/\s*&&\s*(?=steps\.)/.test(condition)) {
+    return false;
+  }
+
+  // Split on `||` only when followed by `steps.` (matching runtime evaluator)
+  // to avoid splitting values that contain `||`.
+  const parts: string[] = [];
+  const regex = /\s*\|\|\s*(?=steps\.)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(condition)) !== null) {
+    parts.push(condition.slice(lastIndex, match.index));
+    lastIndex = match.index + match[0].length;
+  }
+  parts.push(condition.slice(lastIndex));
   return parts.every(part => SINGLE_CONDITION_REGEX.test(part.trim()));
 }
 
@@ -166,6 +185,49 @@ export const WorkflowCommandStepSchema = WorkflowBaseStepSchema.extend({
 });
 
 /**
+ * Conditional step schema (recursive).
+ * Legacy schema retained for type compatibility and internal helpers.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
+export const WorkflowConditionalStepSchema: z.ZodType<any> =
+  WorkflowBaseStepSchema.extend({
+    /** Step type - 'conditional' */
+    type: z.literal('conditional'),
+    /** Condition expression to evaluate */
+    condition: z.string(),
+    /** Steps to execute if condition is true */
+    then: z.lazy(() => z.array(WorkflowStepSchema)).optional(),
+    /** Steps to execute if condition is false */
+    else: z.lazy(() => z.array(WorkflowStepSchema)).optional(),
+  });
+
+/**
+ * Parallel step schema (recursive).
+ * Legacy schema retained for type compatibility and internal helpers.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
+export const WorkflowParallelStepSchema: z.ZodType<any> =
+  WorkflowBaseStepSchema.extend({
+    /** Step type - 'parallel' */
+    type: z.literal('parallel'),
+    /** Steps to execute in parallel */
+    steps: z.lazy(() => z.array(WorkflowStepSchema)),
+  });
+
+/**
+ * Sequential step schema (recursive).
+ * Legacy schema retained for type compatibility and internal helpers.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
+export const WorkflowSequentialStepSchema: z.ZodType<any> =
+  WorkflowBaseStepSchema.extend({
+    /** Step type - 'sequential' */
+    type: z.literal('sequential'),
+    /** Ordered list of steps to execute */
+    steps: z.lazy(() => z.array(WorkflowStepSchema)),
+  });
+
+/**
  * Loop step schema (recursive)
  * Repeats sub-steps until a condition is met or max iterations reached
  */
@@ -186,16 +248,44 @@ export const WorkflowLoopStepSchema: z.ZodType<any> =
   });
 
 /**
- * Union of all step types.
+ * Union of executable step types.
  * Uses z.union (not z.discriminatedUnion) because the recursive
- * WorkflowLoopStepSchema is typed as z.ZodType<any>.
+ * schemas are typed as z.ZodType<any>.
+ *
+ * A superRefine is added to produce a clear error when the step type
+ * is present but does not match any known type, since z.union only
+ * returns a combined error from all branches.
  */
+const VALID_STEP_TYPES = ['agent', 'command', 'loop'] as const;
+const LEGACY_STEP_TYPES = ['conditional', 'parallel', 'sequential'] as const;
+
 // biome-ignore lint/suspicious/noExplicitAny: Required for recursive Zod schema type inference
-export const WorkflowStepSchema: z.ZodType<any> = z.union([
-  WorkflowAgentStepSchema,
-  WorkflowCommandStepSchema,
-  WorkflowLoopStepSchema,
-]);
+export const WorkflowStepSchema: z.ZodType<any> = z
+  .union([
+    WorkflowAgentStepSchema,
+    WorkflowCommandStepSchema,
+    WorkflowLoopStepSchema,
+  ])
+  .superRefine((val, ctx) => {
+    if (
+      val &&
+      typeof val === 'object' &&
+      'type' in val &&
+      typeof val.type === 'string'
+    ) {
+      if ((LEGACY_STEP_TYPES as readonly string[]).includes(val.type)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Step type "${val.type}" is no longer supported. Please migrate to 'agent', 'command', or 'loop' steps. See documentation for migration guidance.`,
+        });
+      } else if (!(VALID_STEP_TYPES as readonly string[]).includes(val.type)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unknown step type "${val.type}". Valid types are: ${VALID_STEP_TYPES.join(', ')}`,
+        });
+      }
+    }
+  });
 
 /**
  * Recursively collect all step IDs, including those nested inside loop steps.
