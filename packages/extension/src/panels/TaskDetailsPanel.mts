@@ -206,8 +206,13 @@ export class TaskDetailsPanel {
       if (workspaceRoot) {
         const resolvedPath = path.resolve(filePath);
         const resolvedRoot = path.resolve(workspaceRoot);
-        if (!resolvedPath.startsWith(resolvedRoot + path.sep) && resolvedPath !== resolvedRoot) {
-          vscode.window.showErrorMessage('Cannot open files outside the workspace');
+        if (
+          !resolvedPath.startsWith(resolvedRoot + path.sep) &&
+          resolvedPath !== resolvedRoot
+        ) {
+          vscode.window.showErrorMessage(
+            'Cannot open files outside the workspace'
+          );
           return;
         }
       }
@@ -353,7 +358,8 @@ export class TaskDetailsPanel {
 
 function getNonce(): string {
   let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const possible =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   for (let i = 0; i < 32; i++) {
     text += possible.charAt(Math.floor(Math.random() * possible.length));
   }
