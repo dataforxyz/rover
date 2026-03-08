@@ -372,6 +372,12 @@ describe('context-optimizer', () => {
       const result = sanitizeAIOutput('', 'original');
       expect(result).toBe('');
     });
+
+    it('should preserve leading and trailing whitespace in clean content', () => {
+      const output = '\nresolved content\n';
+      const result = sanitizeAIOutput(output, 'original');
+      expect(result).toBe('\nresolved content\n');
+    });
   });
 
   describe('hasConflictMarkers', () => {

@@ -141,7 +141,7 @@ const resolveMergeConflicts = async (
   contextLines: number = 50,
   sendFullFile: boolean = false
 ): Promise<{ success: boolean; failureReason?: string }> => {
-  let spinner;
+  let spinner: ReturnType<typeof yoctoSpinner> | undefined;
 
   if (!isJsonMode()) {
     spinner = yoctoSpinner({
@@ -162,6 +162,27 @@ const resolveMergeConflicts = async (
     const failures: string[] = [];
     let resolvedCount = 0;
     const executing: Promise<void>[] = [];
+    let gitAddQueue = Promise.resolve();
+
+    const stageResolvedFile = async (filePath: string): Promise<boolean> => {
+      let addSucceeded = false;
+
+      await (gitAddQueue = gitAddQueue.then(() => {
+        addSucceeded = git.add(filePath);
+
+        if (!addSucceeded) {
+          failures.push(`Error adding ${filePath} to the git commit`);
+          return;
+        }
+
+        resolvedCount++;
+        if (spinner) {
+          spinner.text = `Resolved ${resolvedCount}/${conflictedFiles.length} file(s)...`;
+        }
+      }));
+
+      return addSucceeded;
+    };
 
     for (const filePath of conflictedFiles) {
       const task = (async () => {
@@ -265,14 +286,8 @@ const resolveMergeConflicts = async (
 
           writeFileSync(filePath, finalContent);
 
-          if (!git.add(filePath)) {
-            failures.push(`Error adding ${filePath} to the git commit`);
+          if (!(await stageResolvedFile(filePath))) {
             return;
-          }
-
-          resolvedCount++;
-          if (spinner) {
-            spinner.text = `Resolved ${resolvedCount}/${conflictedFiles.length} file(s)...`;
           }
         } catch (error) {
           failures.push(`Error resolving ${filePath}: ${error}`);

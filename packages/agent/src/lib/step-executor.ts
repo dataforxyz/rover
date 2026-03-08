@@ -36,7 +36,7 @@ export interface StepExecutorConfig {
   logger?: JsonlLogger;
   output?: string;
   acpRunner?: ACPRunner;
-  reuseAcpSession?: boolean;
+  acpSessionActive?: boolean;
 }
 
 export type StepResult =
@@ -70,24 +70,20 @@ export async function executeStep(
 ): Promise<StepResult> {
   if (isAgentStep(step)) {
     if (config.acpRunner) {
-      const acpRunner = config.acpRunner;
-      const managesSessionLifecycle = !config.reuseAcpSession;
-      if (managesSessionLifecycle) {
-        await acpRunner.createSession();
-      }
-
       // Sync current stepsOutput into the acpRunner so prompt placeholders resolve
       for (const [stepId, outputs] of config.stepsOutput.entries()) {
-        acpRunner.stepsOutput.set(stepId, outputs);
+        config.acpRunner.stepsOutput.set(stepId, outputs);
       }
 
+      if (config.acpSessionActive) {
+        return config.acpRunner.runStep(step.id);
+      }
+
+      await config.acpRunner.createSession();
       try {
-        const result = await acpRunner.runStep(step.id);
-        return result;
+        return await config.acpRunner.runStep(step.id);
       } finally {
-        if (managesSessionLifecycle) {
-          acpRunner.closeSession();
-        }
+        config.acpRunner.closeSession();
       }
     }
 
@@ -131,12 +127,10 @@ async function executeLoopStep(
   const stepMax = loopStep.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const maxIterations =
     workflowLoopLimit != null ? Math.min(stepMax, workflowLoopLimit) : stepMax;
-  const managesSessionLifecycle =
-    Boolean(config.acpRunner) && !config.reuseAcpSession;
   let conditionMet = false;
   let lastIteration = 0;
   let lastError: string | undefined;
-  let hasLoopAcpSession = false;
+  const ownsAcpSession = Boolean(config.acpRunner && !config.acpSessionActive);
 
   console.log(
     colors.blue(
@@ -145,9 +139,8 @@ async function executeLoopStep(
   );
 
   try {
-    if (managesSessionLifecycle && config.acpRunner) {
-      await config.acpRunner.createSession();
-      hasLoopAcpSession = true;
+    if (ownsAcpSession) {
+      await config.acpRunner!.createSession();
     }
 
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
@@ -170,9 +163,9 @@ async function executeLoopStep(
 
         const subResult = await executeStep(subStep, {
           ...config,
+          acpSessionActive: Boolean(config.acpRunner),
           // Preserve parent context for progress reporting; sub-steps use the
           // loop's position within the overall workflow, not their own index.
-          reuseAcpSession: config.reuseAcpSession || hasLoopAcpSession,
         });
 
         // Store sub-step outputs
@@ -242,8 +235,8 @@ async function executeLoopStep(
       if (conditionMet) break;
     }
   } finally {
-    if (hasLoopAcpSession) {
-      config.acpRunner?.closeSession();
+    if (ownsAcpSession) {
+      config.acpRunner!.closeSession();
     }
   }
 
