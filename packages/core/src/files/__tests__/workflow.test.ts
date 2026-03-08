@@ -1452,6 +1452,30 @@ steps:
     });
   });
 
+  describe('legacy step compatibility', () => {
+    it('should reject workflows with unsupported legacy step types', () => {
+      const yamlContent = `
+version: '1.0'
+name: legacy-workflow
+description: Workflow using legacy step containers
+steps:
+  - id: maybe-run
+    type: conditional
+    name: Conditional branch
+    condition: steps.setup.outputs.success == true
+    then:
+      - id: then-step
+        type: agent
+        name: Then step
+        prompt: Continue work
+`;
+
+      writeFileSync(workflowPath, yamlContent, 'utf8');
+
+      expect(() => WorkflowManager.load(workflowPath)).toThrow();
+    });
+  });
+
   describe('type guards', () => {
     it('isAgentStep should return true for agent steps', () => {
       const step: WorkflowAgentStep = {
@@ -1755,6 +1779,7 @@ steps:
           totalSteps: number;
           runSteps: number;
           totalDuration: number;
+          stepsOutput: Map<string, Map<string, string>>;
         };
       }> = [];
 
@@ -1772,6 +1797,114 @@ steps:
       expect(completedSteps[1].step.id).toBe('step2');
       expect(completedSteps[1].context.stepIndex).toBe(1);
       expect(completedSteps[1].context.runSteps).toBe(2);
+    });
+
+    it('should use flattened executable step indices when loops are present', async () => {
+      const steps: WorkflowStep[] = [
+        {
+          id: 'step1',
+          type: 'agent',
+          name: 'Step 1',
+          prompt: 'First',
+        } as WorkflowAgentStep,
+        {
+          id: 'loop1',
+          type: 'loop',
+          name: 'Loop',
+          until: 'steps.substep2.outputs.done == "true"',
+          maxIterations: 1,
+          steps: [
+            {
+              id: 'substep1',
+              type: 'agent',
+              name: 'Sub-step 1',
+              prompt: 'Inner 1',
+            } as WorkflowAgentStep,
+            {
+              id: 'substep2',
+              type: 'agent',
+              name: 'Sub-step 2',
+              prompt: 'Inner 2',
+            } as WorkflowAgentStep,
+          ],
+        } as WorkflowLoopStep,
+        {
+          id: 'step2',
+          type: 'agent',
+          name: 'Step 2',
+          prompt: 'Last',
+        } as WorkflowAgentStep,
+      ];
+
+      const workflow = WorkflowManager.create(
+        workflowPath,
+        'loop-progress-workflow',
+        'Loop progress workflow',
+        [],
+        [],
+        steps
+      );
+
+      const observedIndices: Array<{ id: string; stepIndex: number }> = [];
+      const runner: WorkflowRunner = {
+        runAgentStep: async (step, stepIndex) => {
+          observedIndices.push({ id: step.id, stepIndex });
+          return {
+            id: step.id,
+            success: true,
+            duration: 0.1,
+            outputs: new Map([['done', 'true']]),
+          };
+        },
+        runStep: async (step, stepIndex, stepsOutput) => {
+          observedIndices.push({ id: step.id, stepIndex });
+
+          if (step.type !== 'loop') {
+            return {
+              id: step.id,
+              success: true,
+              duration: 0.1,
+              outputs: new Map([['done', 'true']]),
+            };
+          }
+
+          for (let index = 0; index < step.steps.length; index++) {
+            const subStep = step.steps[index] as WorkflowAgentStep;
+            const subResult = await runner.runAgentStep(
+              subStep,
+              stepIndex + index,
+              stepsOutput
+            );
+            stepsOutput.set(subStep.id, subResult.outputs);
+          }
+
+          return {
+            id: step.id,
+            success: true,
+            duration: 0.2,
+            outputs: new Map([['done', 'true']]),
+          };
+        },
+      };
+
+      const completedSteps: Array<{ id: string; stepIndex: number }> = [];
+      await workflow.run(runner, (step, _result, context) => {
+        completedSteps.push({ id: step.id, stepIndex: context.stepIndex });
+      });
+
+      expect(WorkflowManager.countSteps(workflow.steps)).toBe(4);
+      expect(observedIndices).toEqual([
+        { id: 'step1', stepIndex: 0 },
+        { id: 'loop1', stepIndex: 1 },
+        { id: 'substep1', stepIndex: 1 },
+        { id: 'substep2', stepIndex: 2 },
+        { id: 'step2', stepIndex: 3 },
+      ]);
+      expect(completedSteps).toEqual([
+        { id: 'step1', stepIndex: 0 },
+        { id: 'loop1', stepIndex: 1 },
+        { id: 'step2', stepIndex: 3 },
+      ]);
     });
 
     it('should handle mixed command and agent steps', async () => {

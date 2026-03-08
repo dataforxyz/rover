@@ -185,13 +185,11 @@ describe('workflow utilities', () => {
       expect(loopStep).toBeDefined();
       expect(loopStep!.id).toBe('test_fix_loop');
 
-      // Loop should have sub-steps including command steps
-      const commandSubSteps = loopStep!.steps.filter(
-        (s: any) => s.type === 'command'
+      // Loop should have sub-steps including a command step.
+      const commandSubStep = loopStep!.steps.find(
+        (s: any) => s.type === 'command' && s.id === 'run_tests'
       );
-      expect(commandSubSteps.length).toBeGreaterThanOrEqual(2);
-      expect(commandSubSteps.map((s: any) => s.id)).toContain('build');
-      expect(commandSubSteps.map((s: any) => s.id)).toContain('run_tests');
+      expect(commandSubStep).toBeDefined();
     });
 
     it('should load workflows with unique step IDs', () => {

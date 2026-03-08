@@ -25,7 +25,13 @@ vi.mock('../runner.js', () => ({
   })),
 }));
 
-import { executeStep, shouldSkipStep } from '../step-executor.js';
+import {
+  executeStep,
+  shouldSkipStep,
+  isTransientError,
+  PauseWorkflowError,
+  collectNestedStepIds,
+} from '../step-executor.js';
 import type { WorkflowManager } from 'rover-core';
 import type { ACPRunner } from '../acp-runner.js';
 import type {
@@ -39,6 +45,7 @@ function createMockWorkflowManager(): WorkflowManager {
     getStepTimeout: vi.fn().mockReturnValue(300),
     getStepRetries: vi.fn().mockReturnValue(0),
     getStep: vi.fn(),
+    findStep: vi.fn().mockReturnValue(undefined),
     getStepTool: vi.fn().mockReturnValue('claude'),
     getStepModel: vi.fn().mockReturnValue('sonnet'),
     defaults: { tool: 'claude', model: 'sonnet' },
@@ -225,7 +232,10 @@ describe('executeStep', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
 
     const result = await executeStep(loopStep, {
-      workflow: createMockWorkflowManager(),
+      workflow: {
+        ...createMockWorkflowManager(),
+        config: { timeout: 3600, continueOnError: true },
+      } as unknown as WorkflowManager,
       inputs: new Map(),
       stepsOutput,
       totalSteps: 1,
@@ -300,7 +310,10 @@ describe('executeStep', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
 
     const result = await executeStep(loopStep, {
-      workflow: createMockWorkflowManager(),
+      workflow: {
+        ...createMockWorkflowManager(),
+        config: { timeout: 3600, continueOnError: true },
+      } as unknown as WorkflowManager,
       inputs: new Map(),
       stepsOutput,
       totalSteps: 1,
@@ -460,7 +473,10 @@ describe('executeStep', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
 
     const result = await executeStep(loopStep, {
-      workflow: createMockWorkflowManager(),
+      workflow: {
+        ...createMockWorkflowManager(),
+        config: { timeout: 3600, continueOnError: true },
+      } as unknown as WorkflowManager,
       inputs: new Map(),
       stepsOutput,
       totalSteps: 1,
@@ -472,8 +488,10 @@ describe('executeStep', () => {
     expect(result.outputs.get('iterations')).toBe('1');
     // fix_agent should have been skipped (if condition not met)
     expect(Runner).not.toHaveBeenCalled();
-    // fix_agent should still have an empty output entry from the skip
-    expect(stepsOutput.get('fix_agent')).toEqual(new Map());
+    // fix_agent should still have a sentinel output entry from the skip
+    expect(stepsOutput.get('fix_agent')).toEqual(
+      new Map([['__skipped__', 'true']])
+    );
   });
 
   it('skips fix_agent via if-guard when tests pass on first iteration', async () => {
@@ -555,7 +573,7 @@ describe('executeStep', () => {
 
     const workflow = {
       ...createMockWorkflowManager(),
-      config: { timeout: 3600, continueOnError: false, loopLimit: 3 },
+      config: { timeout: 3600, continueOnError: true, loopLimit: 3 },
     } as unknown as WorkflowManager;
 
     const result = await executeStep(loopStep, {
@@ -569,6 +587,53 @@ describe('executeStep', () => {
     expect(result.success).toBe(false);
     // loopLimit (3) should cap maxIterations (10)
     expect(result.outputs.get('iterations')).toBe('3');
+  });
+
+  it('stops loop execution on the first failed sub-step by default', async () => {
+    const { launch } = await import('rover-core');
+    const { Runner } = await import('../runner.js');
+
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 1,
+      stdout: 'FAIL',
+      stderr: 'nope',
+    } as any);
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'stop_on_failure_loop',
+      name: 'Stop On Failure',
+      type: 'loop',
+      until: 'steps.run_cmd.outputs.exit_code == 0',
+      maxIterations: 3,
+      steps: [
+        {
+          id: 'run_cmd',
+          name: 'Run',
+          type: 'command',
+          command: 'false',
+        } as WorkflowCommandStep,
+        {
+          id: 'fix_agent',
+          name: 'Fix',
+          type: 'agent',
+          prompt: 'Fix it',
+          outputs: [],
+        } as WorkflowAgentStep,
+      ],
+    };
+
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput: new Map(),
+      totalSteps: 1,
+      currentStepIndex: 0,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.outputs.get('iterations')).toBe('1');
+    expect(result.error).toBe('nope');
+    expect(Runner).not.toHaveBeenCalled();
   });
 
   it('loop step fails after max iterations', async () => {
@@ -598,7 +663,10 @@ describe('executeStep', () => {
     };
 
     const result = await executeStep(loopStep, {
-      workflow: createMockWorkflowManager(),
+      workflow: {
+        ...createMockWorkflowManager(),
+        config: { timeout: 3600, continueOnError: true },
+      } as unknown as WorkflowManager,
       inputs: new Map(),
       stepsOutput: new Map(),
       totalSteps: 1,
@@ -656,7 +724,10 @@ describe('executeStep', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
 
     const result = await executeStep(nestedLoop, {
-      workflow: createMockWorkflowManager(),
+      workflow: {
+        ...createMockWorkflowManager(),
+        config: { timeout: 3600, continueOnError: true },
+      } as unknown as WorkflowManager,
       inputs: new Map(),
       stepsOutput,
       totalSteps: 1,
@@ -726,6 +797,338 @@ describe('executeStep', () => {
     expect(mockAcpRunner.closeSession).toHaveBeenCalledOnce();
   });
 
+  it('resumes a loop from a saved sub-step boundary', async () => {
+    const { launch } = await import('rover-core');
+    const checkpointStore = {
+      getLoopProgress: vi.fn().mockReturnValue({
+        iteration: 2,
+        nextSubStepIndex: 1,
+        subStepOutputs: {
+          run_tests: { exit_code: '1', stderr: 'failed previously' },
+        },
+        skippedSubSteps: [],
+      }),
+      getData: vi.fn().mockReturnValue({
+        loopSignatures: {},
+      }),
+      setLoopProgress: vi.fn(),
+      setLoopSignature: vi.fn(),
+      clearLoopProgress: vi.fn(),
+      persist: vi.fn().mockReturnValue(true),
+    };
+
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 0,
+      stdout: 'PASS',
+      stderr: '',
+    } as any);
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'resume_loop',
+      name: 'Resume Loop',
+      type: 'loop',
+      until: 'steps.run_tests.outputs.exit_code == 0',
+      maxIterations: 3,
+      steps: [
+        {
+          id: 'run_tests',
+          name: 'Run Tests',
+          type: 'command',
+          command: 'npm test',
+        } as WorkflowCommandStep,
+        {
+          id: 'fix_agent',
+          name: 'Fix',
+          type: 'agent',
+          prompt: 'Fix: {{steps.run_tests.outputs.stderr}}',
+          outputs: [],
+        } as WorkflowAgentStep,
+      ],
+    };
+
+    const stepsOutput = new Map<string, Map<string, string>>();
+
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput,
+      totalSteps: 1,
+      currentStepIndex: 0,
+      checkpointStore: checkpointStore as any,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.outputs.get('iterations')).toBe('3');
+    expect(launch).toHaveBeenCalledOnce();
+    expect(stepsOutput.get('run_tests')?.get('exit_code')).toBe('0');
+    expect(checkpointStore.setLoopProgress).toHaveBeenCalledWith(
+      'resume_loop',
+      expect.objectContaining({
+        iteration: 3,
+        nextSubStepIndex: 1,
+      })
+    );
+    expect(checkpointStore.clearLoopProgress).toHaveBeenCalledWith(
+      'resume_loop'
+    );
+  });
+
+  it('re-evaluates until before advancing when resuming at end-of-iteration', async () => {
+    const { launch } = await import('rover-core');
+    const checkpointStore = {
+      getLoopProgress: vi.fn().mockReturnValue({
+        iteration: 2,
+        nextSubStepIndex: 1,
+        subStepOutputs: {
+          run_tests: { exit_code: '0', stdout: 'already passing' },
+        },
+        skippedSubSteps: [],
+      }),
+      getData: vi.fn().mockReturnValue({
+        loopSignatures: {},
+      }),
+      setLoopProgress: vi.fn(),
+      setLoopSignature: vi.fn(),
+      clearLoopProgress: vi.fn(),
+      persist: vi.fn().mockReturnValue(true),
+    };
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'resume_until_boundary_loop',
+      name: 'Resume Until Boundary Loop',
+      type: 'loop',
+      until: 'steps.run_tests.outputs.exit_code == 0',
+      maxIterations: 3,
+      steps: [
+        {
+          id: 'run_tests',
+          name: 'Run Tests',
+          type: 'command',
+          command: 'npm test',
+        } as WorkflowCommandStep,
+      ],
+    };
+
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput: new Map(),
+      totalSteps: 1,
+      currentStepIndex: 0,
+      checkpointStore: checkpointStore as any,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.outputs.get('iterations')).toBe('2');
+    expect(launch).not.toHaveBeenCalled();
+    expect(checkpointStore.clearLoopProgress).toHaveBeenCalledWith(
+      'resume_until_boundary_loop'
+    );
+  });
+
+  it('restores skipped loop sub-steps as empty outputs on resume', async () => {
+    const { launch } = await import('rover-core');
+    const checkpointStore = {
+      getLoopProgress: vi.fn().mockReturnValue({
+        iteration: 1,
+        nextSubStepIndex: 1,
+        subStepOutputs: {
+          run_tests: { exit_code: '0', stdout: 'PASS' },
+        },
+        skippedSubSteps: ['fix_agent'],
+      }),
+      getData: vi.fn().mockReturnValue({
+        loopSignatures: {},
+      }),
+      setLoopProgress: vi.fn(),
+      setLoopSignature: vi.fn(),
+      clearLoopProgress: vi.fn(),
+      persist: vi.fn().mockReturnValue(true),
+    };
+
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 0,
+      stdout: 'PASS',
+      stderr: '',
+    } as any);
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'skip_resume_loop',
+      name: 'Skip Resume Loop',
+      type: 'loop',
+      until: 'steps.run_tests.outputs.exit_code == 0',
+      maxIterations: 2,
+      steps: [
+        {
+          id: 'run_tests',
+          name: 'Run Tests',
+          type: 'command',
+          command: 'npm test',
+        } as WorkflowCommandStep,
+        {
+          id: 'fix_agent',
+          name: 'Fix',
+          type: 'agent',
+          if: 'steps.run_tests.outputs.exit_code != 0',
+          prompt: 'Fix it',
+          outputs: [],
+        } as WorkflowAgentStep,
+      ],
+    };
+
+    const stepsOutput = new Map<string, Map<string, string>>();
+
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput,
+      totalSteps: 1,
+      currentStepIndex: 0,
+      checkpointStore: checkpointStore as any,
+    });
+
+    expect(result.success).toBe(true);
+    expect(stepsOutput.get('fix_agent')).toEqual(
+      new Map([['__skipped__', 'true']])
+    );
+    expect(checkpointStore.clearLoopProgress).toHaveBeenCalledWith(
+      'skip_resume_loop'
+    );
+  });
+
+  it('clears descendant outputs when skipping a nested loop sub-step', async () => {
+    const { launch } = await import('rover-core');
+    const checkpointStore = {
+      getLoopProgress: vi.fn().mockReturnValue(undefined),
+      getData: vi.fn().mockReturnValue({
+        loopSignatures: {},
+      }),
+      setLoopProgress: vi.fn(),
+      setLoopSignature: vi.fn(),
+      clearLoopProgress: vi.fn(),
+      persist: vi.fn().mockReturnValue(true),
+    };
+
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 0,
+      stdout: 'PASS',
+      stderr: '',
+    } as any);
+
+    const stepsOutput = new Map<string, Map<string, string>>([
+      ['stale_nested_loop', new Map([['iterations', '1']])],
+      [
+        'stale_inner_cmd',
+        new Map([
+          ['exit_code', '0'],
+          ['stdout', 'stale'],
+        ]),
+      ],
+    ]);
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'outer_loop',
+      name: 'Outer Loop',
+      type: 'loop',
+      until: 'steps.run_tests.outputs.exit_code == 0',
+      maxIterations: 1,
+      steps: [
+        {
+          id: 'run_tests',
+          name: 'Run Tests',
+          type: 'command',
+          command: 'npm test',
+        } as WorkflowCommandStep,
+        {
+          id: 'stale_nested_loop',
+          name: 'Nested Loop',
+          type: 'loop',
+          if: 'steps.run_tests.outputs.exit_code != 0',
+          maxIterations: 1,
+          steps: [
+            {
+              id: 'stale_inner_cmd',
+              name: 'Inner Command',
+              type: 'command',
+              command: 'echo stale',
+            } as WorkflowCommandStep,
+          ],
+        } as WorkflowLoopStep,
+      ],
+    };
+
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput,
+      totalSteps: 1,
+      currentStepIndex: 0,
+      checkpointStore: checkpointStore as any,
+    });
+
+    expect(result.success).toBe(true);
+    expect(stepsOutput.get('stale_nested_loop')).toEqual(
+      new Map([['__skipped__', 'true']])
+    );
+    expect(stepsOutput.has('stale_inner_cmd')).toBe(false);
+  });
+
+  it('clears invalid saved loop progress and restarts the loop', async () => {
+    const { launch } = await import('rover-core');
+    const checkpointStore = {
+      getLoopProgress: vi.fn().mockReturnValue({
+        iteration: 1,
+        nextSubStepIndex: -1,
+        subStepOutputs: {},
+        skippedSubSteps: [],
+      }),
+      getData: vi.fn().mockReturnValue({
+        loopSignatures: {},
+      }),
+      setLoopProgress: vi.fn(),
+      setLoopSignature: vi.fn(),
+      clearLoopProgress: vi.fn(),
+      persist: vi.fn().mockReturnValue(true),
+    };
+
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 0,
+      stdout: 'PASS',
+      stderr: '',
+    } as any);
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'invalid_resume_loop',
+      name: 'Invalid Resume Loop',
+      type: 'loop',
+      until: 'steps.run_cmd.outputs.exit_code == 0',
+      maxIterations: 2,
+      steps: [
+        {
+          id: 'run_cmd',
+          name: 'Run',
+          type: 'command',
+          command: 'true',
+        } as WorkflowCommandStep,
+      ],
+    };
+
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput: new Map(),
+      totalSteps: 1,
+      currentStepIndex: 0,
+      checkpointStore: checkpointStore as any,
+    });
+
+    expect(result.success).toBe(true);
+    expect(launch).toHaveBeenCalledOnce();
+    expect(checkpointStore.clearLoopProgress).toHaveBeenCalledWith(
+      'invalid_resume_loop'
+    );
+  });
+
   it('shouldSkipStep returns true when if condition is false (callers skip before executeStep)', () => {
     const agentStep: WorkflowAgentStep = {
       id: 'conditional_agent',
@@ -785,6 +1188,391 @@ describe('executeStep', () => {
         currentStepIndex: 0,
       })
     ).rejects.toThrow('Unsupported step type');
+  });
+
+  it('loop with maxIterations=0 never executes body', async () => {
+    const { launch } = await import('rover-core');
+    const { Runner } = await import('../runner.js');
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'zero_loop',
+      name: 'Zero Iterations',
+      type: 'loop',
+      until: 'steps.run_cmd.outputs.exit_code == 0',
+      maxIterations: 0,
+      steps: [
+        {
+          id: 'run_cmd',
+          name: 'Run',
+          type: 'command',
+          command: 'echo hello',
+        } as WorkflowCommandStep,
+        {
+          id: 'agent_step',
+          name: 'Agent',
+          type: 'agent',
+          prompt: 'Do something',
+          outputs: [],
+        } as WorkflowAgentStep,
+      ],
+    };
+
+    const stepsOutput = new Map<string, Map<string, string>>();
+
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput,
+      totalSteps: 1,
+      currentStepIndex: 0,
+    });
+
+    expect(result.id).toBe('zero_loop');
+    // Loop body never ran, condition was never checked, so success is false
+    expect(result.success).toBe(false);
+    expect(result.outputs.get('iterations')).toBe('0');
+    expect(result.outputs.get('condition_met')).toBe('false');
+    // No sub-steps should have been executed
+    expect(launch).not.toHaveBeenCalled();
+    expect(Runner).not.toHaveBeenCalled();
+    // No sub-step outputs should exist
+    expect(stepsOutput.has('run_cmd')).toBe(false);
+    expect(stepsOutput.has('agent_step')).toBe(false);
+  });
+
+  it('retryable loop sub-step failure returns failed result when no checkpoint store', async () => {
+    const { launch } = await import('rover-core');
+    const { Runner } = await import('../runner.js');
+
+    // First sub-step (command) succeeds
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 0,
+      stdout: 'PASS',
+      stderr: '',
+    } as any);
+
+    // Second sub-step (agent) returns a retryable failure
+    vi.mocked(Runner).mockImplementation(
+      () =>
+        ({
+          run: vi.fn().mockResolvedValue({
+            id: 'failing_agent',
+            success: false,
+            duration: 1.0,
+            error: 'credit limit exceeded',
+            outputs: new Map([['error_retryable', 'true']]),
+          }),
+          tool: 'claude',
+        }) as any
+    );
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'pause_loop',
+      name: 'Pause Loop',
+      type: 'loop',
+      until: 'steps.run_cmd.outputs.exit_code == 0',
+      maxIterations: 3,
+      steps: [
+        {
+          id: 'run_cmd',
+          name: 'Run Command',
+          type: 'command',
+          command: 'npm test',
+        } as WorkflowCommandStep,
+        {
+          id: 'failing_agent',
+          name: 'Failing Agent',
+          type: 'agent',
+          prompt: 'Fix something',
+          outputs: [],
+        } as WorkflowAgentStep,
+      ],
+    };
+
+    const stepsOutput = new Map<string, Map<string, string>>();
+
+    // Without a checkpoint store, retryable errors return a failed result
+    // instead of throwing PauseWorkflowError (no checkpoint to resume from)
+    const result = await executeStep(loopStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput,
+      totalSteps: 1,
+      currentStepIndex: 0,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('credit limit exceeded');
+
+    // The command sub-step that completed before the error should have its outputs stored
+    expect(stepsOutput.get('run_cmd')?.get('exit_code')).toBe('0');
+    expect(stepsOutput.get('run_cmd')?.get('stdout')).toBe('PASS');
+  });
+  it('retries ACP transient errors (thrown exceptions) before propagating', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const agentStep: WorkflowAgentStep = {
+        id: 'acp_transient',
+        name: 'ACP Transient',
+        type: 'agent',
+        prompt: 'Do something',
+        outputs: [],
+      };
+
+      let callCount = 0;
+      const mockAcpRunner = {
+        createSession: vi.fn().mockResolvedValue('session-789'),
+        runStep: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount <= 2) {
+            throw new Error('ECONNREFUSED: connection refused');
+          }
+          return {
+            id: 'acp_transient',
+            success: true,
+            duration: 0.5,
+            outputs: new Map([['result', 'ok']]),
+          };
+        }),
+        closeSession: vi.fn(),
+        stepsOutput: new Map<string, Map<string, string>>(),
+      } as unknown as ACPRunner;
+
+      const resultPromise = executeStep(agentStep, {
+        workflow: createMockWorkflowManager(),
+        inputs: new Map(),
+        stepsOutput: new Map(),
+        totalSteps: 1,
+        currentStepIndex: 0,
+        acpRunner: mockAcpRunner,
+      });
+
+      // Advance past the first retry delay (10s)
+      await vi.advanceTimersByTimeAsync(10_000);
+      // Advance past the second retry delay (20s)
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      const result = await resultPromise;
+
+      expect(result.success).toBe(true);
+      // Should have retried twice then succeeded on the 3rd attempt
+      expect(mockAcpRunner.runStep).toHaveBeenCalledTimes(3);
+      // closeSession should be called each time (once per retry + once for success)
+      expect(mockAcpRunner.closeSession).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recreates shared ACP sessions before retrying transient exceptions', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const agentStep: WorkflowAgentStep = {
+        id: 'acp_shared_transient',
+        name: 'ACP Shared Transient',
+        type: 'agent',
+        prompt: 'Do something',
+        outputs: [],
+      };
+
+      let callCount = 0;
+      const mockAcpRunner = {
+        createSession: vi.fn().mockResolvedValue('session-recreated'),
+        runStep: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            throw new Error('connection reset by peer');
+          }
+          return {
+            id: 'acp_shared_transient',
+            success: true,
+            duration: 0.5,
+            outputs: new Map([['result', 'ok']]),
+          };
+        }),
+        closeSession: vi.fn(),
+        stepsOutput: new Map<string, Map<string, string>>(),
+      } as unknown as ACPRunner;
+
+      const resultPromise = executeStep(agentStep, {
+        workflow: createMockWorkflowManager(),
+        inputs: new Map(),
+        stepsOutput: new Map(),
+        totalSteps: 1,
+        currentStepIndex: 0,
+        acpRunner: mockAcpRunner,
+        reuseAcpSession: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await resultPromise;
+
+      expect(result.success).toBe(true);
+      expect(mockAcpRunner.runStep).toHaveBeenCalledTimes(2);
+      expect(mockAcpRunner.closeSession).toHaveBeenCalledTimes(1);
+      expect(mockAcpRunner.createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates non-transient ACP thrown exceptions immediately', async () => {
+    const agentStep: WorkflowAgentStep = {
+      id: 'acp_fatal',
+      name: 'ACP Fatal',
+      type: 'agent',
+      prompt: 'Do something',
+      outputs: [],
+    };
+
+    const mockAcpRunner = {
+      createSession: vi.fn().mockResolvedValue('session-000'),
+      runStep: vi.fn().mockRejectedValue(new Error('Invalid API key')),
+      closeSession: vi.fn(),
+      stepsOutput: new Map<string, Map<string, string>>(),
+    } as unknown as ACPRunner;
+
+    await expect(
+      executeStep(agentStep, {
+        workflow: createMockWorkflowManager(),
+        inputs: new Map(),
+        stepsOutput: new Map(),
+        totalSteps: 1,
+        currentStepIndex: 0,
+        acpRunner: mockAcpRunner,
+      })
+    ).rejects.toThrow('Invalid API key');
+
+    // Should NOT retry — non-transient error
+    expect(mockAcpRunner.runStep).toHaveBeenCalledTimes(1);
+  });
+
+  it('PauseWorkflowError in loop persists checkpoint before propagating', async () => {
+    const { launch } = await import('rover-core');
+    const { Runner } = await import('../runner.js');
+
+    vi.mocked(launch).mockResolvedValue({
+      exitCode: 0,
+      stdout: 'PASS',
+      stderr: '',
+    } as any);
+
+    vi.mocked(Runner).mockImplementation(
+      () =>
+        ({
+          run: vi.fn().mockResolvedValue({
+            id: 'failing_agent',
+            success: false,
+            duration: 1.0,
+            error: 'credit limit exceeded',
+            outputs: new Map([['error_retryable', 'true']]),
+          }),
+          tool: 'claude',
+        }) as any
+    );
+
+    const loopStep: WorkflowLoopStep = {
+      id: 'checkpoint_loop',
+      name: 'Checkpoint Loop',
+      type: 'loop',
+      until: 'steps.run_cmd.outputs.exit_code == 0',
+      maxIterations: 3,
+      steps: [
+        {
+          id: 'run_cmd',
+          name: 'Run Command',
+          type: 'command',
+          command: 'npm test',
+        } as WorkflowCommandStep,
+        {
+          id: 'failing_agent',
+          name: 'Failing Agent',
+          type: 'agent',
+          prompt: 'Fix something',
+          outputs: [],
+        } as WorkflowAgentStep,
+      ],
+    };
+
+    const mockCheckpointStore = {
+      getData: vi.fn().mockReturnValue({ completedSteps: [] }),
+      getCompletedStep: vi.fn(),
+      getLoopProgress: vi.fn().mockReturnValue(undefined),
+      setLoopProgress: vi.fn(),
+      setLoopSignature: vi.fn(),
+      clearLoopProgress: vi.fn(),
+      setCompletedSteps: vi.fn(),
+      addCompletedStep: vi.fn(),
+      persist: vi.fn().mockReturnValue(true),
+      saveFailureSnapshot: vi.fn().mockReturnValue(true),
+    };
+
+    await expect(
+      executeStep(loopStep, {
+        workflow: createMockWorkflowManager(),
+        inputs: new Map(),
+        stepsOutput: new Map(),
+        totalSteps: 1,
+        currentStepIndex: 0,
+        checkpointStore: mockCheckpointStore as any,
+      })
+    ).rejects.toThrow(PauseWorkflowError);
+
+    // Loop progress should have been persisted for the command sub-step before the error
+    expect(mockCheckpointStore.setLoopProgress).toHaveBeenCalled();
+    // Failure snapshot should have been saved for the failing agent step
+    expect(mockCheckpointStore.saveFailureSnapshot).toHaveBeenCalled();
+  });
+
+  it('does not pause when a retryable failure cannot be checkpointed', async () => {
+    const { Runner } = await import('../runner.js');
+
+    vi.mocked(Runner).mockImplementation(
+      () =>
+        ({
+          run: vi.fn().mockResolvedValue({
+            id: 'retryable_agent',
+            success: false,
+            duration: 1.0,
+            error: 'credit limit exceeded',
+            outputs: new Map([['error_retryable', 'true']]),
+          }),
+          tool: 'claude',
+        }) as any
+    );
+
+    const agentStep: WorkflowAgentStep = {
+      id: 'retryable_agent',
+      name: 'Retryable Agent',
+      type: 'agent',
+      prompt: 'Do something',
+      outputs: [],
+    };
+
+    const statusManager = {
+      pause: vi.fn(),
+    };
+
+    const checkpointStore = {
+      getData: vi.fn().mockReturnValue({ completedSteps: [] }),
+      saveFailureSnapshot: vi.fn().mockReturnValue(false),
+    };
+
+    const result = await executeStep(agentStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput: new Map(),
+      totalSteps: 1,
+      currentStepIndex: 0,
+      statusManager: statusManager as any,
+      checkpointStore: checkpointStore as any,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('credit limit exceeded');
+    expect(statusManager.pause).not.toHaveBeenCalled();
   });
 });
 
@@ -865,5 +1653,118 @@ describe('shouldSkipStep', () => {
     const failing = new Map<string, Map<string, string>>();
     failing.set('test', new Map([['exit_code', '1']]));
     expect(shouldSkipStep(step, failing)).toBe(false);
+  });
+});
+
+describe('collectNestedStepIds', () => {
+  it('returns the id of a leaf node with no sub-steps', () => {
+    expect(collectNestedStepIds({ id: 'step1' })).toEqual(['step1']);
+  });
+
+  it('returns the id of a leaf node with empty steps array', () => {
+    expect(collectNestedStepIds({ id: 'step1', steps: [] })).toEqual(['step1']);
+  });
+
+  it('collects ids from a flat list of sub-steps', () => {
+    const node = {
+      id: 'loop1',
+      steps: [{ id: 'sub1' }, { id: 'sub2' }, { id: 'sub3' }],
+    };
+    expect(collectNestedStepIds(node)).toEqual([
+      'loop1',
+      'sub1',
+      'sub2',
+      'sub3',
+    ]);
+  });
+
+  it('collects ids from deeply nested structures', () => {
+    const node = {
+      id: 'outer_loop',
+      steps: [
+        {
+          id: 'inner_loop',
+          steps: [
+            { id: 'deep_step_a' },
+            {
+              id: 'deepest_loop',
+              steps: [{ id: 'leaf' }],
+            },
+          ],
+        },
+        { id: 'sibling_step' },
+      ],
+    };
+    expect(collectNestedStepIds(node)).toEqual([
+      'outer_loop',
+      'inner_loop',
+      'deep_step_a',
+      'deepest_loop',
+      'leaf',
+      'sibling_step',
+    ]);
+  });
+
+  it('collects ids from conditional branches nested inside loops', () => {
+    const node = {
+      id: 'outer_loop',
+      steps: [
+        {
+          id: 'branch',
+          then: [
+            { id: 'then_step' },
+            {
+              id: 'then_nested_loop',
+              steps: [{ id: 'then_leaf' }],
+            },
+          ],
+          else: [{ id: 'else_step' }],
+        },
+      ],
+    };
+
+    expect(collectNestedStepIds(node)).toEqual([
+      'outer_loop',
+      'branch',
+      'then_step',
+      'then_nested_loop',
+      'then_leaf',
+      'else_step',
+    ]);
+  });
+});
+
+describe('isTransientError', () => {
+  it('matches network errors', () => {
+    expect(isTransientError('ECONNREFUSED')).toBe(true);
+    expect(isTransientError('ETIMEDOUT')).toBe(true);
+    expect(isTransientError('ENETUNREACH')).toBe(true);
+  });
+
+  it('matches rate limit codes', () => {
+    expect(isTransientError('too many requests')).toBe(true);
+    expect(isTransientError('HTTP 429')).toBe(true);
+  });
+
+  it('does not match general text containing credit', () => {
+    expect(isTransientError('checking credit card balance')).toBe(false);
+  });
+
+  it('does not match empty string', () => {
+    expect(isTransientError('')).toBe(false);
+  });
+
+  it('is case insensitive', () => {
+    expect(isTransientError('Network_Error')).toBe(true);
+    expect(isTransientError('CONNECTION_REFUSED')).toBe(true);
+    expect(isTransientError('Too Many Requests')).toBe(true);
+  });
+
+  it('does NOT match generic "timeout" (prevents infinite retry loops)', () => {
+    expect(isTransientError('timeout')).toBe(false);
+    expect(isTransientError('Request timeout')).toBe(false);
+    expect(isTransientError('Timeout waiting for response')).toBe(false);
+    expect(isTransientError('Step execution timeout after 300s')).toBe(false);
+    expect(isTransientError('Task timed out')).toBe(false);
   });
 });

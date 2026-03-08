@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { launch, launchSync, getVersion } from 'rover-core';
 import {
   checkImageCache,
@@ -281,7 +284,7 @@ describe('computeSetupHash', () => {
     expect(a).not.toBe(b);
   });
 
-  it('is unaffected by project ordering', () => {
+  it('changes when project ordering changes', () => {
     const projA = {
       name: 'alpha',
       path: 'alpha',
@@ -294,7 +297,7 @@ describe('computeSetupHash', () => {
     };
     const a = computeSetupHash(makeInputs({ projects: [projA, projB] }));
     const b = computeSetupHash(makeInputs({ projects: [projB, projA] }));
-    expect(a).toBe(b);
+    expect(a).not.toBe(b);
   });
 
   it('is stable without projects field', () => {
@@ -688,6 +691,7 @@ describe('removeCacheImage', () => {
 describe('checkImageCache', () => {
   const mockedLaunchSync = vi.mocked(launchSync);
   const mockedGetVersion = vi.mocked(getVersion);
+  const tmpDirs: string[] = [];
 
   function makeProjectConfig(
     overrides: Record<string, unknown> = {}
@@ -708,6 +712,19 @@ describe('checkImageCache', () => {
     mockedLaunchSync.mockReset();
     mockedGetVersion.mockReturnValue('1.0.0-test');
   });
+
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    tmpDirs.length = 0;
+  });
+
+  function createTmpDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'rover-cache-'));
+    tmpDirs.push(dir);
+    return dir;
+  }
 
   it('resolves image tag to image ID for hashing', () => {
     const imageId = 'sha256:aabbccdd11223344';
@@ -836,6 +853,65 @@ describe('checkImageCache', () => {
       cacheFilesContent: '',
       mcps: [],
     });
+    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
+  it('hashes sub-project init scripts using the root-relative configured path', () => {
+    const projectRoot = createTmpDir();
+    mkdirSync(join(projectRoot, 'packages', 'api', 'scripts'), {
+      recursive: true,
+    });
+    mkdirSync(join(projectRoot, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'scripts', 'setup.sh'),
+      '#!/bin/sh\necho subproject\n'
+    );
+    writeFileSync(
+      join(projectRoot, 'scripts', 'setup.sh'),
+      '#!/bin/sh\necho root\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            initScript: 'scripts/setup.sh',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    const expectedHash = computeSetupHash({
+      agentImage: 'sha256:img',
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      taskManagers: [],
+      agent: 'claude',
+      roverVersion: '1.0.0-test',
+      initScriptContent: '',
+      cacheFilesContent: '',
+      mcps: [],
+      projects: [
+        {
+          name: 'api',
+          path: 'packages/api',
+          initScriptContent: '#!/bin/sh\necho root\n',
+        },
+      ],
+    });
+
     expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
   });
 });

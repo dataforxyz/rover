@@ -48,6 +48,34 @@ describe('SubProjectSchema', () => {
     expect(() => SubProjectSchema.parse({ name: 'backend' })).toThrow();
   });
 
+  it('should reject a sub-project path with traversal segments', () => {
+    expect(() =>
+      SubProjectSchema.parse({
+        name: 'backend',
+        path: '../backend',
+      })
+    ).toThrow();
+  });
+
+  it('should reject a sub-project path that is not normalized', () => {
+    expect(() =>
+      SubProjectSchema.parse({
+        name: 'backend',
+        path: 'packages/../backend',
+      })
+    ).toThrow();
+  });
+
+  it('should reject a sub-project init script with traversal segments', () => {
+    expect(() =>
+      SubProjectSchema.parse({
+        name: 'backend',
+        path: 'packages/backend',
+        initScript: '../scripts/init.sh',
+      })
+    ).toThrow();
+  });
+
   it('should reject invalid language values', () => {
     expect(() =>
       SubProjectSchema.parse({
@@ -126,5 +154,23 @@ describe('ProjectConfigSchema with projects', () => {
         projects: [{ invalid: true }],
       })
     ).toThrow();
+  });
+
+  it('should reject duplicate sub-project paths', () => {
+    expect(() =>
+      ProjectConfigSchema.parse({
+        ...baseConfig,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/shared',
+          },
+          {
+            name: 'worker',
+            path: 'packages/shared',
+          },
+        ],
+      })
+    ).toThrow(/Duplicate project path/);
   });
 });

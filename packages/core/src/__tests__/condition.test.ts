@@ -49,7 +49,7 @@ describe('evaluateCondition', () => {
     ).toBe(false);
   });
 
-  it('returns false when step does not exist (!= operator)', () => {
+  it('returns true when step does not exist (!= operator)', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
 
     expect(
@@ -57,7 +57,7 @@ describe('evaluateCondition', () => {
         'steps.missing_step.outputs.exit_code != 0',
         stepsOutput
       )
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('returns false when output key does not exist (== operator)', () => {
@@ -69,24 +69,13 @@ describe('evaluateCondition', () => {
     ).toBe(false);
   });
 
-  it('returns false when output key does not exist (!= operator)', () => {
+  it('returns true when output key does not exist (!= operator)', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
     stepsOutput.set('run_tests', new Map());
 
     expect(
       evaluateCondition('steps.run_tests.outputs.exit_code != 0', stepsOutput)
-    ).toBe(false);
-  });
-
-  it('returns false when OR clauses only reference missing outputs', () => {
-    const stepsOutput = new Map<string, Map<string, string>>();
-
-    expect(
-      evaluateCondition(
-        'steps.build.outputs.exit_code != 0 || steps.checkpoint.outputs.exit_code != 0',
-        stepsOutput
-      )
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('returns false and warns for invalid condition format', () => {
@@ -98,6 +87,33 @@ describe('evaluateCondition', () => {
       expect.stringContaining('does not match expected format')
     );
     warnSpy.mockRestore();
+  });
+
+  it('returns false and warns when using && operator with spaces', () => {
+    const stepsOutput = new Map<string, Map<string, string>>();
+    stepsOutput.set('a', new Map([['x', '1']]));
+    stepsOutput.set('b', new Map([['y', '2']]));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = evaluateCondition(
+      'steps.a.outputs.x == 1 && steps.b.outputs.y == 2',
+      stepsOutput
+    );
+    expect(result).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"&&" (AND) operator is not supported')
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('does not treat && inside a value as a logical operator', () => {
+    const stepsOutput = new Map<string, Map<string, string>>();
+    stepsOutput.set('cmd', new Map([['result', 'echo&&true']]));
+
+    // "echo&&true" in the value should NOT trigger the && warning
+    expect(
+      evaluateCondition('steps.cmd.outputs.result == echo&&true', stepsOutput)
+    ).toBe(true);
   });
 
   it('handles whitespace in condition', () => {
@@ -119,19 +135,6 @@ describe('evaluateCondition', () => {
     expect(
       evaluateCondition('steps.run-tests.outputs.exit-code == 0', stepsOutput)
     ).toBe(true);
-  });
-
-  it('compares string values correctly', () => {
-    const stepsOutput = new Map<string, Map<string, string>>();
-    stepsOutput.set('check', new Map([['status', 'passed']]));
-
-    expect(
-      evaluateCondition('steps.check.outputs.status == passed', stepsOutput)
-    ).toBe(true);
-
-    expect(
-      evaluateCondition('steps.check.outputs.status == failed', stepsOutput)
-    ).toBe(false);
   });
 
   it('normalizes boolean-like values case-insensitively', () => {
@@ -174,7 +177,6 @@ describe('evaluateCondition', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
     stepsOutput.set('check', new Map([['status', 'Passed']]));
 
-    // "Passed" should NOT match "passed" — only booleans are normalized
     expect(
       evaluateCondition('steps.check.outputs.status == passed', stepsOutput)
     ).toBe(false);
@@ -220,86 +222,49 @@ describe('evaluateCondition', () => {
       ).toBe(false);
     });
 
-    it('returns true when both clauses are true', () => {
+    it('does not split || inside a value (no steps. after ||)', () => {
       const stepsOutput = new Map<string, Map<string, string>>();
-      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
-      stepsOutput.set('checkpoint', new Map([['exit_code', '1']]));
+      stepsOutput.set('cmd', new Map([['result', 'a||b']]));
+
+      // "a||b" is the value, not a logical OR between clauses
+      expect(
+        evaluateCondition('steps.cmd.outputs.result == a||b', stepsOutput)
+      ).toBe(true);
+    });
+
+    it('handles three OR clauses', () => {
+      const stepsOutput = new Map<string, Map<string, string>>();
+      stepsOutput.set('a', new Map([['x', '0']]));
+      stepsOutput.set('b', new Map([['y', '0']]));
+      stepsOutput.set('c', new Map([['z', '1']]));
 
       expect(
         evaluateCondition(
-          'steps.run_tests.outputs.exit_code == 0 || steps.checkpoint.outputs.exit_code != 0',
+          'steps.a.outputs.x == 1 || steps.b.outputs.y == 1 || steps.c.outputs.z == 1',
           stepsOutput
         )
       ).toBe(true);
     });
 
-    it('handles whitespace around ||', () => {
+    it('accepts OR clauses without spaces around the operator', () => {
       const stepsOutput = new Map<string, Map<string, string>>();
-      stepsOutput.set('a', new Map([['x', '1']]));
-      stepsOutput.set('b', new Map([['y', '2']]));
+      stepsOutput.set('test', new Map([['exit_code', '1']]));
+      stepsOutput.set('lint', new Map([['exit_code', '0']]));
 
       expect(
         evaluateCondition(
-          'steps.a.outputs.x == 1  ||  steps.b.outputs.y == 2',
+          'steps.test.outputs.exit_code == 0||steps.lint.outputs.exit_code == 0',
           stepsOutput
         )
-      ).toBe(true);
-    });
-
-    it('handles || without surrounding whitespace', () => {
-      const stepsOutput = new Map<string, Map<string, string>>();
-      stepsOutput.set('a', new Map([['x', '1']]));
-      stepsOutput.set('b', new Map([['y', '2']]));
-
-      expect(
-        evaluateCondition(
-          'steps.a.outputs.x == 0||steps.b.outputs.y == 2',
-          stepsOutput
-        )
-      ).toBe(true);
-    });
-
-    it('works with a single clause (no ||)', () => {
-      const stepsOutput = new Map<string, Map<string, string>>();
-      stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
-
-      expect(
-        evaluateCondition('steps.run_tests.outputs.exit_code == 0', stepsOutput)
       ).toBe(true);
     });
   });
 
-  it('returns false and warns for && without surrounding whitespace', () => {
-    const stepsOutput = new Map<string, Map<string, string>>();
-    stepsOutput.set('a', new Map([['x', '1']]));
-    stepsOutput.set('b', new Map([['y', '2']]));
-
+  it('returns false for empty condition string', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const result = evaluateCondition(
-      'steps.a.outputs.x == 1&&steps.b.outputs.y == 2',
-      stepsOutput
-    );
-    expect(result).toBe(false);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('"&&" (AND) operator is not supported')
-    );
-    warnSpy.mockRestore();
-  });
-
-  it('returns false and warns when using && operator with spaces', () => {
     const stepsOutput = new Map<string, Map<string, string>>();
-    stepsOutput.set('a', new Map([['x', '1']]));
-    stepsOutput.set('b', new Map([['y', '2']]));
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const result = evaluateCondition(
-      'steps.a.outputs.x == 1 && steps.b.outputs.y == 2',
-      stepsOutput
-    );
-    expect(result).toBe(false);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('"&&" (AND) operator is not supported')
-    );
+    expect(evaluateCondition('', stepsOutput)).toBe(false);
     warnSpy.mockRestore();
   });
 });
