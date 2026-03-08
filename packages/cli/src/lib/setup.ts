@@ -608,7 +608,10 @@ else
     safe_exit 1
   fi
 fi
-git -C ${escapedPath} fetch --all --tags --prune || true
+if ! git -C ${escapedPath} fetch --all --tags --prune; then
+  echo "❌ Failed to fetch repository ${escapedName}"
+  safe_exit 1
+fi
 ${checkoutRef}
 git -C ${escapedPath} reset --hard HEAD
 git -C ${escapedPath} clean -fd

@@ -336,6 +336,13 @@ describe('SetupBuilder multi-repo projects', () => {
 
     expect(script).toContain("git -C '/workspace/frontend' reset --hard HEAD");
     expect(script).toContain("git -C '/workspace/frontend' clean -fd");
+    expect(script).toContain(
+      "if ! git -C '/workspace/frontend' fetch --all --tags --prune; then"
+    );
+    expect(script).toContain("❌ Failed to fetch repository 'frontend'");
+    expect(script).not.toContain(
+      "git -C '/workspace/frontend' fetch --all --tags --prune || true"
+    );
   });
 
   it('keeps init-script mount indices aligned on cached image reuse', () => {

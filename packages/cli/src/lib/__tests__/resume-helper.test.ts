@@ -268,7 +268,7 @@ describe('resumeTask', () => {
     ]);
   });
 
-  it('ignores malformed checkpoints and recreates a clean worktree', async () => {
+  it('falls back to a full rerun without recreating the worktree when the checkpoint is malformed', async () => {
     const iterationPath = join(tempDir, 'iterations');
     const worktreePath = join(tempDir, 'worktree');
     mkdirSync(worktreePath, { recursive: true });
@@ -285,22 +285,6 @@ describe('resumeTask', () => {
     mkdirSync(join(iterationPath, '1'), { recursive: true });
     writeFileSync(checkpointPath, '{"foo":"bar"}', 'utf8');
 
-    mockedLaunchSync
-      .mockReturnValueOnce({
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-      } as any)
-      .mockReturnValueOnce({
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-      } as any)
-      .mockReturnValueOnce({
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-      } as any);
     mockedCreateSandbox.mockResolvedValue({
       createAndStart: vi.fn().mockResolvedValue('container-rerun'),
     } as any);
@@ -311,16 +295,11 @@ describe('resumeTask', () => {
     };
 
     expect(result.status).toBe('ok');
-    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
-      1,
-      'git',
-      ['worktree', 'remove', worktreePath, '--force'],
-      { cwd: project.path, reject: false }
-    );
-    expect(gitInstance.createWorktree).toHaveBeenCalledWith(
-      worktreePath,
-      'rover/task-1',
-      'main'
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+    expect(gitInstance.createWorktree).not.toHaveBeenCalled();
+    expect(mockedCopyEnvironmentFiles).toHaveBeenCalledWith(
+      project.path,
+      worktreePath
     );
     expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
       projectPath: project.path,
@@ -331,6 +310,40 @@ describe('resumeTask', () => {
         task.iterations
       ),
     });
+  });
+
+  it('refuses automatic recreation when the checkpoint is malformed and the worktree is missing', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const missingWorktreePath = join(tempDir, 'missing-worktree');
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath: missingWorktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    const checkpointPath = join(iterationPath, '1', 'checkpoint.json');
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(checkpointPath, '{"foo":"bar"}', 'utf8');
+
+    const result = await resumeTask(project, 1);
+    const gitInstance = mockedGit.mock.results.at(-1)?.value as {
+      createWorktree: ReturnType<typeof vi.fn>;
+    };
+
+    expect(result.status).toBe('failed');
+    expect(result).toMatchObject({
+      error:
+        'Resume failed: task worktree is missing and checkpoint recovery cannot safely recreate it',
+    });
+    expect(gitInstance.createWorktree).not.toHaveBeenCalled();
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+    expect(mockedCreateSandbox).not.toHaveBeenCalled();
+    expect(task.markPaused).toHaveBeenCalledWith(
+      'Resume failed: task worktree is missing and checkpoint recovery cannot safely recreate it'
+    );
   });
 
   it('returns not_resumable for non-PAUSED/FAILED tasks', async () => {

@@ -305,9 +305,9 @@ async function resumeTaskLocked(
 
   const checkpointPath = join(iterationPath, 'checkpoint.json');
   // Validate checkpoint file is parseable JSON, not just present on disk.
-  // A corrupted checkpoint would cause the container to fail after the
-  // task is already marked IN_PROGRESS.
-  let hasCheckpoint = false;
+  // A corrupted checkpoint should fall back to a full rerun from the existing
+  // worktree rather than deleting task progress.
+  let checkpointState: 'missing' | 'valid' | 'invalid' = 'missing';
   if (existsSync(checkpointPath)) {
     try {
       const raw = readFileSync(checkpointPath, 'utf8');
@@ -317,7 +317,7 @@ async function resumeTaskLocked(
         typeof parsed === 'object' &&
         Array.isArray(parsed.completedSteps)
       ) {
-        hasCheckpoint = true;
+        checkpointState = 'valid';
         // Warn about step IDs in the checkpoint that may not exist in
         // the current workflow (e.g. workflow edited between pause and
         // resume). The agent will handle stale entries gracefully via
@@ -338,6 +338,7 @@ async function resumeTaskLocked(
           );
         }
       } else {
+        checkpointState = 'invalid';
         log(
           colors.yellow(
             `  ⚠ Checkpoint file for task ${taskId} has invalid structure, ignoring it.`
@@ -345,6 +346,7 @@ async function resumeTaskLocked(
         );
       }
     } catch {
+      checkpointState = 'invalid';
       log(
         colors.yellow(
           `  ⚠ Checkpoint file for task ${taskId} is corrupted, ignoring it.`
@@ -439,7 +441,7 @@ async function resumeTaskLocked(
   };
 
   let worktreeCreated = false;
-  if (!hasCheckpoint) {
+  if (checkpointState === 'missing') {
     try {
       recreateWorktree();
       worktreeCreated = true;
@@ -455,13 +457,15 @@ async function resumeTaskLocked(
     }
   } else if (!existsSync(worktreePath)) {
     const errorMsg =
-      'Resume failed: task worktree is missing and cannot be recreated safely from a checkpoint';
+      checkpointState === 'valid'
+        ? 'Resume failed: task worktree is missing and cannot be recreated safely from a checkpoint'
+        : 'Resume failed: task worktree is missing and checkpoint recovery cannot safely recreate it';
+    const warningMsg =
+      checkpointState === 'valid'
+        ? `  ⚠ Task ${taskId} worktree is missing; refusing checkpoint resume from a recreated workspace.`
+        : `  ⚠ Task ${taskId} worktree is missing and the checkpoint is unreadable; refusing to recreate the workspace automatically.`;
     restoreResumableStatus(errorMsg);
-    log(
-      colors.yellow(
-        `  ⚠ Task ${taskId} worktree is missing; refusing checkpoint resume from a recreated workspace.`
-      )
-    );
+    log(colors.yellow(warningMsg));
     return { status: 'failed', error: errorMsg };
   } else {
     try {
@@ -549,8 +553,8 @@ async function resumeTaskLocked(
   try {
     const sandbox = await createSandbox(task, undefined, {
       projectPath: project.path,
-      checkpointPath: hasCheckpoint ? checkpointPath : undefined,
-      resumeFromCheckpoint: hasCheckpoint,
+      checkpointPath: checkpointState === 'valid' ? checkpointPath : undefined,
+      resumeFromCheckpoint: checkpointState === 'valid',
       iterationLogsPath: project.getTaskIterationLogsPath(
         task.id,
         task.iterations
