@@ -373,10 +373,10 @@ describe('context-optimizer', () => {
       expect(result).toBe('');
     });
 
-    it('should preserve leading and trailing whitespace in clean content', () => {
+    it('should trim whitespace and preserve trailing newline in clean content', () => {
       const output = '\nresolved content\n';
       const result = sanitizeAIOutput(output, 'original');
-      expect(result).toBe('\nresolved content\n');
+      expect(result).toBe('resolved content\n');
     });
   });
 

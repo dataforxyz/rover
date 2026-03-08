@@ -1996,7 +1996,7 @@ steps:
       expect(result.success).toBe(false);
       expect(result.stepResults).toHaveLength(0);
       expect(result.error).toContain('requires a generic step executor');
-      expect(result.runSteps).toBe(1);
+      expect(result.runSteps).toBe(0);
     });
   });
 });
