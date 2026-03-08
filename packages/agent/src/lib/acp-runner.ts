@@ -36,7 +36,7 @@ import { GeminiOrQwenACPClient } from './gemini-or-qwen-acp-client.js';
 import { createAgent } from './agents/index.js';
 import type { Agent } from './agents/types.js';
 import { copyFileSync, rmSync } from 'node:fs';
-import { resolvePlaceholders } from './placeholders.js';
+import { resolvePlaceholders, truncateFileContent } from './placeholders.js';
 
 /**
  * Format an unknown error for display.
@@ -665,7 +665,18 @@ export class ACPRunner {
           const stepOutputs = this.stepsOutput.get(stepId);
           const fileContent = stepOutputs?.get(contentKey);
           if (fileContent) {
-            return fileContent;
+            const { text, truncated } = truncateFileContent(
+              fileContent,
+              `${stepId}.${outputName}`
+            );
+            if (truncated) {
+              console.log(
+                colors.yellow(
+                  `⚠️  Truncated file content for '${outputName}' from step '${stepId}' to fit prompt`
+                )
+              );
+            }
+            return text;
           }
           extraWarnings.push(
             `File content for '${outputName}' not found in step '${stepId}'`

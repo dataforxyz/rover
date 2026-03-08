@@ -28,7 +28,7 @@ import type {
   WorkflowOutputType,
 } from 'rover-schemas';
 import { isAgentStep } from 'rover-schemas';
-import { resolvePlaceholders } from './placeholders.js';
+import { resolvePlaceholders, truncateFileContent } from './placeholders.js';
 import {
   parseAgentError,
   isWaitingForAuthentication,
@@ -647,7 +647,14 @@ export class Runner {
       // It's a file type, read the file content
       if (existsSync(value)) {
         try {
-          return readFileSync(value, 'utf-8');
+          const raw = readFileSync(value, 'utf-8');
+          const { text, truncated } = truncateFileContent(raw, value);
+          if (truncated) {
+            warnings.push(
+              `Truncated file '${value}' to fit prompt (was ${raw.length} chars)`
+            );
+          }
+          return text;
         } catch (err) {
           warnings.push(
             `Could not read file '${value}': ${err instanceof Error ? err.message : String(err)}`

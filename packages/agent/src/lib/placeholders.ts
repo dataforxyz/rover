@@ -41,6 +41,33 @@ export interface ResolveResult {
  *
  * Uses callback-form String.replace to avoid $& / $1 special patterns in values.
  */
+/**
+ * Maximum characters allowed when injecting file content into a prompt.
+ * Prevents "Prompt is too long" errors from the AI provider when previous
+ * workflow steps produce very large output files (e.g. a detailed plan
+ * covering dozens of files).
+ */
+export const MAX_INJECTED_FILE_CHARS = 150_000;
+
+/**
+ * Truncate content that exceeds MAX_INJECTED_FILE_CHARS, appending a marker
+ * so the agent knows the content was trimmed.
+ */
+export function truncateFileContent(
+  content: string,
+  label: string
+): { text: string; truncated: boolean } {
+  if (content.length <= MAX_INJECTED_FILE_CHARS) {
+    return { text: content, truncated: false };
+  }
+  const truncated = content.slice(0, MAX_INJECTED_FILE_CHARS);
+  const droppedChars = content.length - MAX_INJECTED_FILE_CHARS;
+  return {
+    text: `${truncated}\n\n... [truncated ${droppedChars} chars — ${label} too large for prompt]`,
+    truncated: true,
+  };
+}
+
 export function resolvePlaceholders(
   template: string,
   options: ResolveOptions
