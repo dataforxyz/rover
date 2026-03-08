@@ -30,6 +30,25 @@ import colors from 'ansi-colors';
 
 // Default step timeout in seconds
 const DEFAULT_STEP_TIMEOUT = 60 * 30; // 30 minutes
+const CONDITION_REFERENCE_REGEX =
+  /steps\.([\w-]+)\.outputs\.([\w-]+)\s*(==|!=)\s*.+/;
+
+function hasAllConditionOutputs(
+  condition: string,
+  stepsOutput: Map<string, Map<string, string>>
+): boolean {
+  const clauses = condition.split(/\s*\|\|\s*(?=steps\.)/);
+
+  return clauses.every(clause => {
+    const match = clause.trim().match(CONDITION_REFERENCE_REGEX);
+    if (!match) {
+      return false;
+    }
+
+    const [, stepId, outputName] = match;
+    return stepsOutput.get(stepId)?.has(outputName) === true;
+  });
+}
 
 export interface StepResult {
   id: string;
@@ -598,6 +617,17 @@ export class WorkflowManager {
 
       // Check `if` condition before running step
       if (step.if) {
+        if (!hasAllConditionOutputs(step.if, stepsOutput)) {
+          console.log(
+            colors.gray(
+              `  ⏭ Skipping step "${step.name}" (required outputs not available yet)`
+            )
+          );
+          stepsOutput.set(step.id, new Map());
+          flattenedStepIndex += stepWidth;
+          continue;
+        }
+
         const conditionResult = evaluateCondition(step.if, stepsOutput);
         if (!conditionResult) {
           console.log(
@@ -614,6 +644,11 @@ export class WorkflowManager {
       if (isLoopStep(step) && runner.runStep) {
         // Loop steps are handled by the agent package's step executor
         result = await runner.runStep(step, currentStepIndex, stepsOutput);
+      } else if (isLoopStep(step)) {
+        runSteps++;
+        workflowSuccess = false;
+        workflowError = `Workflow step "${step.name}" requires a generic step executor`;
+        break;
       } else if (isCommandStep(step)) {
         if (runner.runStep) {
           // Prefer the agent package's command runner (supports placeholders, shell-escaping)
@@ -626,7 +661,7 @@ export class WorkflowManager {
       } else {
         // Unknown step type - skip with warning
         console.warn(
-          `Warning: Skipping step "${step.name}" with unknown type "${(step as any).type}"`
+          `Warning: Skipping unrecognized workflow step at index ${currentStepIndex}`
         );
         continue;
       }

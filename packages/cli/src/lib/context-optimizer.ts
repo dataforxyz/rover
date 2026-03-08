@@ -165,10 +165,11 @@ export function sanitizeAIOutput(
     s = s.replace(/\n?---[A-Z_]*END[A-Z_]*---\s*$/i, '');
   }
 
-  // Trim leading whitespace and trailing whitespace, but preserve a single
-  // trailing newline so resolved files keep their POSIX line ending.
-  s = s.trim();
-  return s.length > 0 ? s + '\n' : s;
+  if (s.length === 0) {
+    return s;
+  }
+
+  return s.endsWith('\n') ? s : `${s}\n`;
 }
 
 /** Returns true if content still has conflict markers */

@@ -119,10 +119,11 @@ function isValidCondition(condition: string): boolean {
   const parts: string[] = [];
   const regex = /\s*\|\|\s*(?=steps\.)/g;
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(condition)) !== null) {
+  let match = regex.exec(condition);
+  while (match !== null) {
     parts.push(condition.slice(lastIndex, match.index));
     lastIndex = match.index + match[0].length;
+    match = regex.exec(condition);
   }
   parts.push(condition.slice(lastIndex));
   return parts.every(part => SINGLE_CONDITION_REGEX.test(part.trim()));
@@ -196,6 +197,7 @@ export const WorkflowConditionalStepSchema: z.ZodType<any> =
     /** Condition expression to evaluate */
     condition: z.string(),
     /** Steps to execute if condition is true */
+    // biome-ignore lint/suspicious/noThenProperty: Workflow conditionals use the literal "then" key in YAML.
     then: z.lazy(() => z.array(WorkflowStepSchema)).optional(),
     /** Steps to execute if condition is false */
     else: z.lazy(() => z.array(WorkflowStepSchema)).optional(),

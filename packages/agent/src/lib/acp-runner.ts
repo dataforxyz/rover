@@ -1064,8 +1064,15 @@ export class ACPRunner {
    */
   closeSession(): void {
     if (this.sessionId) {
+      const sessionId = this.sessionId;
       if (VERBOSE) {
-        console.log(colors.gray(`🔌 Closing session: ${this.sessionId}`));
+        console.log(colors.gray(`🔌 Closing session: ${sessionId}`));
+      }
+      const connectionWithEndSession = this.connection as
+        | { endSession?: (args: { sessionId: string }) => Promise<unknown> }
+        | null;
+      if (connectionWithEndSession?.endSession) {
+        void connectionWithEndSession.endSession({ sessionId });
       }
       this.sessionId = null;
       this.isSessionCreated = false;

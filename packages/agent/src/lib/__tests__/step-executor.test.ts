@@ -409,7 +409,10 @@ describe('executeStep', () => {
     };
 
     const result = await executeStep(loopStep, {
-      workflow: createMockWorkflowManager(),
+      workflow: {
+        ...createMockWorkflowManager(),
+        config: { timeout: 3600, continueOnError: true },
+      } as unknown as WorkflowManager,
       inputs: new Map(),
       stepsOutput: new Map(),
       totalSteps: 1,

@@ -47,6 +47,7 @@ describe('WorkflowSchema', () => {
             name: 'Branch',
             type: 'conditional',
             condition: 'true',
+            // biome-ignore lint/suspicious/noThenProperty: Test fixtures use the literal workflow key.
             then: [],
           },
         ],
