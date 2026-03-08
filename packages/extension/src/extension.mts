@@ -536,11 +536,11 @@ export function activate(context: vscode.ExtensionContext) {
             }, 5000);
           }
 
-          vscode.window.showErrorMessage(`Failed to create task: ${error}`);
+          vscode.window.showErrorMessage(`Failed to push branch: ${error}`);
         }
       } catch (error) {
-        console.error('Error in inspectTask command:', error);
-        vscode.window.showErrorMessage(`Failed to open task details: ${error}`);
+        console.error('Error in pushBranch command:', error);
+        vscode.window.showErrorMessage(`Failed to push branch: ${error}`);
       }
     }
   );
@@ -683,15 +683,97 @@ export function activate(context: vscode.ExtensionContext) {
             }, 5000);
           }
 
-          vscode.window.showErrorMessage(`Failed to create task: ${error}`);
+          vscode.window.showErrorMessage(`Failed to iterate task: ${error}`);
         }
       } catch (error) {
-        console.error('Error in inspectTask command:', error);
-        vscode.window.showErrorMessage(`Failed to open task details: ${error}`);
+        console.error('Error in iterateTask command:', error);
+        vscode.window.showErrorMessage(`Failed to iterate task: ${error}`);
       }
     }
   );
   context.subscriptions.push(iterateTaskCommand);
+
+  const restartTaskCommand = vscode.commands.registerCommand(
+    'rover.restartTask',
+    async (item: TaskItem | any) => {
+      const taskId = item?.task?.id || item?.id;
+      if (!taskId) {
+        vscode.window.showErrorMessage('Invalid task item - missing task ID');
+        return;
+      }
+
+      let statusBarItem: vscode.StatusBarItem | undefined;
+      try {
+        statusBarItem = vscode.window.createStatusBarItem(
+          vscode.StatusBarAlignment.Left,
+          100
+        );
+        statusBarItem.text = '$(loading~spin) Restarting task...';
+        statusBarItem.show();
+
+        const restartResult = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Restarting task',
+            cancellable: false,
+          },
+          async progress => {
+            progress.report({
+              increment: 30,
+              message: 'Preparing a fresh task run...',
+            });
+            statusBarItem!.text = '$(loading~spin) Preparing fresh task run...';
+
+            const restartResult = await cli.restartTask(taskId);
+
+            progress.report({
+              increment: 70,
+              message: 'Refreshing task state...',
+            });
+            statusBarItem!.text = '$(loading~spin) Refreshing task state...';
+
+            return restartResult;
+          }
+        );
+
+        if (restartResult.success) {
+          statusBarItem.text = '$(check) Task restarted successfully';
+          statusBarItem.tooltip = `Task: ${restartResult.title || taskId}`;
+          setTimeout(() => {
+            statusBarItem?.dispose();
+          }, 3000);
+
+          vscode.window.showInformationMessage(
+            `Task restarted successfully${restartResult.title ? `: ${restartResult.title}` : ''}`
+          );
+        } else {
+          statusBarItem.text = '$(error) Task restart failed';
+          statusBarItem.tooltip = `Error: ${restartResult.error}`;
+          setTimeout(() => {
+            statusBarItem?.dispose();
+          }, 5000);
+
+          vscode.window.showErrorMessage(
+            `Failed to restart task: ${restartResult.error}`
+          );
+        }
+
+        tasksWebviewProvider.refresh();
+      } catch (error) {
+        console.error('Error in restartTask command:', error);
+        if (statusBarItem) {
+          statusBarItem.text = '$(error) Task restart failed';
+          statusBarItem.tooltip = `Error: ${error}`;
+          setTimeout(() => {
+            statusBarItem?.dispose();
+          }, 5000);
+        }
+
+        vscode.window.showErrorMessage(`Failed to restart task: ${error}`);
+      }
+    }
+  );
+  context.subscriptions.push(restartTaskCommand);
 
   const mergeTaskCommand = vscode.commands.registerCommand(
     'rover.mergeTask',
@@ -836,7 +918,7 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showErrorMessage(`Failed to merge task: ${error}`);
         }
       } catch (error) {
-        console.error('Error in inspectTask command:', error);
+        console.error('Error in mergeTask command:', error);
         vscode.window.showErrorMessage(`Failed to merge: ${error}`);
       }
     }
