@@ -15,6 +15,7 @@
  */
 
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
+import { cleanupE2ETestDir } from './e2e-utils.js';
 import {
   mkdtempSync,
   rmSync,
@@ -108,7 +109,7 @@ describe('rover init (e2e)', () => {
     // Restore original state
     process.chdir(originalCwd);
     process.env.PATH = originalPath;
-    rmSync(testDir, { recursive: true, force: true });
+    cleanupE2ETestDir(testDir);
   });
 
   /**

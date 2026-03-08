@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, it, expect } from 'vitest';
+import { cleanupE2ETestDir } from './e2e-utils.js';
 import {
   mkdtempSync,
   rmSync,
@@ -168,7 +169,7 @@ exit 0
   afterEach(() => {
     process.chdir(originalCwd);
     process.env.PATH = originalPath;
-    rmSync(testDir, { recursive: true, force: true });
+    cleanupE2ETestDir(testDir);
   });
 
   it('rejects resume when lock is held by another live process', async () => {

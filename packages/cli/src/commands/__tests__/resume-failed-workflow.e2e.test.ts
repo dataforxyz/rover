@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
-import { SKIP_REAL_AGENT_TESTS } from './e2e-utils.js';
+import { cleanupE2ETestDir, SKIP_REAL_AGENT_TESTS } from './e2e-utils.js';
 
 describe.skipIf(SKIP_REAL_AGENT_TESTS)(
   'rover resume from natural failed workflow (e2e)',
@@ -138,7 +138,7 @@ describe.skipIf(SKIP_REAL_AGENT_TESTS)(
     afterEach(() => {
       process.chdir(originalCwd);
       process.env.PATH = originalPath;
-      rmSync(testDir, { recursive: true, force: true });
+      cleanupE2ETestDir(testDir);
     });
 
     it('resumes a naturally failed task produced by a deterministic command workflow', async () => {
