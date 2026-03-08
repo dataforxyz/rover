@@ -313,13 +313,14 @@ ${installScripts.join('\n')}
       agentInstallSection = `# Agent-specific CLI installation and credential setup
 echo -e "\\n📦 Installing Agent CLI and setting up credentials"
 # Pass the environment variables to ensure it loads the right credentials
-sudo -E rover-agent install $AGENT --user-dir $HOME
+sudo -E rover-agent install $AGENT
+AGENT_INSTALL_RC=$?
 # Set the right permissions after installing and moving credentials
 for d in .claude .codex .copilot .cursor .gemini .qwen .config .local .claude.json; do
   [ -e "$HOME/$d" ] && sudo chown -R $(id -u):$(id -g) "$HOME/$d"
 done
 
-if [ $? -eq 0 ]; then
+if [ $AGENT_INSTALL_RC -eq 0 ]; then
     echo "✅ $AGENT was installed successfully."
 else
     echo "❌ $AGENT could not be installed"
