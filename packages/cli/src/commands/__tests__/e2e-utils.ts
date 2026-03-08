@@ -61,17 +61,33 @@ const makeWritableForCleanup = (path: string) => {
     return;
   }
 
-  const entry = lstatSync(path);
+  let entry;
+  try {
+    entry = lstatSync(path);
+  } catch {
+    return;
+  }
+
   if (entry.isDirectory()) {
-    chmodSync(path, 0o700);
-    for (const child of readdirSync(path)) {
+    try {
+      chmodSync(path, 0o700);
+    } catch {}
+
+    let children: string[] = [];
+    try {
+      children = readdirSync(path);
+    } catch {}
+
+    for (const child of children) {
       makeWritableForCleanup(`${path}/${child}`);
     }
     return;
   }
 
   if (!entry.isSymbolicLink()) {
-    chmodSync(path, 0o600);
+    try {
+      chmodSync(path, 0o600);
+    } catch {}
   }
 };
 
@@ -81,7 +97,10 @@ export const cleanupE2ETestDir = (path: string) => {
   }
 
   makeWritableForCleanup(path);
-  rmSync(path, { recursive: true, force: true });
+
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {}
 };
 
 /**
