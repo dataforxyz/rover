@@ -26,7 +26,7 @@ export const UserDefaultsSchema = z.object({
   /** Watch interval in seconds for `rover list --watch` (default: 3) */
   watchIntervalSeconds: z.number().min(1).max(60).optional(),
   /** Default models per agent (e.g., { claude: "opus", gemini: "flash" }) */
-  models: z.record(AiAgentSchema, z.string()).optional(),
+  models: z.record(AiAgentSchema, z.string().optional()).optional(),
 });
 
 /**
