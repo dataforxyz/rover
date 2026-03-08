@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { getDataDir, type ProjectConfig } from 'rover-core';
+import { getDataDir, type ProjectConfigManager } from 'rover-core';
 import { isPathWithin } from '../../utils/path-utils.js';
 
 function normalizeKnownRoot(path: string): string {
@@ -12,7 +12,7 @@ function normalizeKnownRoot(path: string): string {
 
 export function validateSandboxWorktreePath(
   worktreePath: string,
-  projectConfig: ProjectConfig
+  projectConfig: ProjectConfigManager
 ): string {
   let realWorktreePath: string;
   try {

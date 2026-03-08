@@ -2,10 +2,10 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ProjectConfig } from 'rover-core';
+import type { ProjectConfigManager } from 'rover-core';
 import { validateSandboxWorktreePath } from '../worktree-path.js';
 
-function createProjectConfig(projectRoot: string): ProjectConfig {
+function createProjectConfig(projectRoot: string): ProjectConfigManager {
   return {
     version: '1.2',
     projectRoot,
@@ -16,7 +16,7 @@ function createProjectConfig(projectRoot: string): ProjectConfig {
     taskManagers: [],
     attribution: true,
     allInitScripts: [],
-  } as ProjectConfig;
+  } as unknown as ProjectConfigManager;
 }
 
 describe('validateSandboxWorktreePath', () => {

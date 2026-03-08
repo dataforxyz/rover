@@ -178,12 +178,12 @@ export function loadCheckpoint(path: string): CheckpointData | null {
               trackedDiffHash: string;
               untrackedHash: string;
             }) => ({
-            name: entry.name,
-            path: entry.path,
-            repository: entry.repository,
-            head: entry.head,
-            trackedDiffHash: entry.trackedDiffHash,
-            untrackedHash: entry.untrackedHash,
+              name: entry.name,
+              path: entry.path,
+              repository: entry.repository,
+              head: entry.head,
+              trackedDiffHash: entry.trackedDiffHash,
+              untrackedHash: entry.untrackedHash,
             })
           )
       : undefined;
