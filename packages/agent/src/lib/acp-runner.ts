@@ -17,11 +17,11 @@ import {
 import colors from 'ansi-colors';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import {
-  isAgentStep,
-  type WorkflowAgentStep,
-  type WorkflowOutput,
-  type WorkflowStep,
+import { isAgentStep, isLoopStep } from 'rover-schemas';
+import type {
+  WorkflowAgentStep,
+  WorkflowOutput,
+  WorkflowStep,
 } from 'rover-schemas';
 import {
   WorkflowManager,
@@ -103,6 +103,22 @@ export class ACPRunner {
     // Determine which tool to use
     // Priority: CLI flag > workflow defaults > fallback to claude
     this.tool = config.defaultTool || this.workflow.defaults?.tool || 'claude';
+  }
+
+  private getAgentStepIds(
+    steps: WorkflowStep[] = this.workflow.steps
+  ): string[] {
+    const agentStepIds: string[] = [];
+
+    for (const step of steps) {
+      if (isAgentStep(step)) {
+        agentStepIds.push(step.id);
+      } else if (isLoopStep(step)) {
+        agentStepIds.push(...this.getAgentStepIds(step.steps));
+      }
+    }
+
+    return agentStepIds;
   }
 
   /**
@@ -494,16 +510,13 @@ export class ACPRunner {
       );
     }
 
-    // Calculate current progress.
-    // For sub-steps nested inside loops, findIndex returns -1 since they
-    // are not top-level steps.  Clamp to 0 to avoid negative progress.
-    const stepIndex = Math.max(
-      0,
-      this.workflow.steps.findIndex((s: WorkflowStep) => s.id === stepId)
-    );
-    const totalSteps = this.workflow.steps.length;
-    const currentProgress = Math.floor((stepIndex / totalSteps) * 100);
-    const nextProgress = Math.floor(((stepIndex + 1) / totalSteps) * 100);
+    // Calculate current progress
+    const agentStepIds = this.getAgentStepIds();
+    const stepIndex = agentStepIds.indexOf(stepId);
+    const totalSteps = Math.max(agentStepIds.length, 1);
+    const safeStepIndex = stepIndex >= 0 ? stepIndex : 0;
+    const currentProgress = Math.floor((safeStepIndex / totalSteps) * 100);
+    const nextProgress = Math.floor(((safeStepIndex + 1) / totalSteps) * 100);
 
     try {
       // Update status before executing step
