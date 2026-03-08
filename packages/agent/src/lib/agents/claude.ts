@@ -181,7 +181,7 @@ export class ClaudeAgent extends BaseAgent {
   }
 
   toolArguments(): string[] {
-    return ['-y', '@zed-industries/claude-code-acp'];
+    return ['-y', '@zed-industries/claude-agent-acp'];
   }
 
   toolInteractiveArguments(
