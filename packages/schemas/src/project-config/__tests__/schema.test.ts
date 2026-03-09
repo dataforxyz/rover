@@ -57,6 +57,15 @@ describe('SubProjectSchema', () => {
     ).toThrow();
   });
 
+  it('should reject a sub-project path that is exactly ..', () => {
+    expect(() =>
+      SubProjectSchema.parse({
+        name: 'backend',
+        path: '..',
+      })
+    ).toThrow();
+  });
+
   it('should reject a sub-project path that is not normalized', () => {
     expect(() =>
       SubProjectSchema.parse({
@@ -72,6 +81,16 @@ describe('SubProjectSchema', () => {
         name: 'backend',
         path: 'packages/backend',
         initScript: '../scripts/init.sh',
+      })
+    ).toThrow();
+  });
+
+  it('should reject a sub-project init script that is exactly ..', () => {
+    expect(() =>
+      SubProjectSchema.parse({
+        name: 'backend',
+        path: 'packages/backend',
+        initScript: '..',
       })
     ).toThrow();
   });

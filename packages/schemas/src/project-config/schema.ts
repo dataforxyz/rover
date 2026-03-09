@@ -133,7 +133,10 @@ const isNormalizedRelativePath = (value: string): boolean => {
   const normalized = path.normalize(value);
 
   return (
-    normalized === value && normalized !== '.' && !normalized.startsWith('../')
+    normalized === value &&
+    normalized !== '.' &&
+    !normalized.startsWith('../') &&
+    normalized !== '..'
   );
 };
 

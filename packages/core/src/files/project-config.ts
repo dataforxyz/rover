@@ -422,6 +422,9 @@ export class ProjectConfigManager {
     if (!this.data.projects) {
       this.data.projects = [];
     }
+    if (this.data.projects.some(p => p.path === project.path)) {
+      throw new Error(`Project path already exists: ${project.path}`);
+    }
     if (!this.data.projects.some(p => p.name === project.name)) {
       this.data.projects.push(project);
       this.save();

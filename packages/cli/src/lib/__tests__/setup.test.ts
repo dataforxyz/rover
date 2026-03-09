@@ -292,6 +292,52 @@ describe('SetupBuilder multi-repo projects', () => {
     );
   });
 
+  it('escapes quoted project paths in checkpoint resume verification', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: "apps/it's-api",
+          repository: 'https://github.com/dataforxyz/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any,
+      { resumeFromCheckpoint: true }
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain("node -e 'const fs=require(");
+    expect(script).toContain(`repo.path === "apps/it'"'"'s-api"`);
+  });
+
   it('hard resets and cleans reused external repositories before checkout', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);

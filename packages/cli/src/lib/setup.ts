@@ -544,6 +544,9 @@ NODE
         const escapedPath = this.shellEscape(targetPath);
         const escapedRepository = this.shellEscape(project.repository!);
         const escapedRef = project.ref ? this.shellEscape(project.ref) : '';
+        const checkpointLookupScript = this.shellEscape(
+          `const fs=require('fs'); const checkpoint=JSON.parse(fs.readFileSync('/output/checkpoint.json','utf8')); const entry=(checkpoint.externalRepositories||[]).find(repo => repo.path === ${JSON.stringify(project.path)}); if (!entry) process.exit(2); process.stdout.write([entry.head, entry.trackedDiffHash, entry.untrackedHash].join('\\t'));`
+        );
 
         const checkoutRef = project.ref
           ? `
@@ -581,7 +584,7 @@ if [ ! -f /output/checkpoint.json ]; then
   echo "❌ Checkpoint file is missing; cannot resume ${escapedName} safely"
   safe_exit 1
 fi
-if ! expected_state=$(node -e "const fs=require('fs'); const checkpoint=JSON.parse(fs.readFileSync('/output/checkpoint.json','utf8')); const entry=(checkpoint.externalRepositories||[]).find(repo => repo.path === ${this.shellEscape(project.path)}); if (!entry) process.exit(2); process.stdout.write([entry.head, entry.trackedDiffHash, entry.untrackedHash].join('\\t'));"); then
+if ! expected_state=$(node -e ${checkpointLookupScript}); then
   echo "❌ Checkpoint is missing repository state for ${escapedName}; cannot resume safely"
   safe_exit 1
 fi
