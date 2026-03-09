@@ -407,16 +407,20 @@ export class Git {
     branch: string,
     message: string,
     options: GitWorktreeOptions = {}
-  ): boolean {
+  ): { success: boolean; error?: string } {
     try {
       launchSync('git', ['merge', '--no-ff', branch, '-m', message], {
         cwd: options.worktreePath ?? this.cwd,
       });
 
-      return true;
-    } catch (_err) {
+      return { success: true };
+    } catch (err) {
+      const stderr = (err as any)?.stderr?.toString().trim() || '';
+      const errorMessage =
+        stderr || (err instanceof Error ? err.message : String(err));
+
       // There was an error with the merge
-      return false;
+      return { success: false, error: errorMessage };
     }
   }
 
@@ -448,10 +452,30 @@ export class Git {
       return { success: true };
     } catch (err) {
       const stderr = (err as any)?.stderr?.toString().trim() || '';
-      const message =
+      const errorMessage =
         stderr || (err instanceof Error ? err.message : String(err));
-      return { success: false, error: message };
+      return { success: false, error: errorMessage };
     }
+  }
+
+  /**
+   * Check whether `commit` is an ancestor of `ofCommit`.
+   * Uses `git merge-base --is-ancestor` which exits 0 when true, 1 when false.
+   */
+  isAncestor(
+    commit: string,
+    ofCommit: string,
+    options: GitWorktreeOptions = {}
+  ): boolean {
+    const result = launchSync(
+      'git',
+      ['merge-base', '--is-ancestor', commit, ofCommit],
+      {
+        cwd: options.worktreePath ?? this.cwd,
+        reject: false,
+      }
+    );
+    return result.exitCode === 0;
   }
 
   /**

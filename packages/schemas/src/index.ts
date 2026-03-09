@@ -1,5 +1,5 @@
 // Declare all schemas, types, and errors
-export { AI_AGENT } from './agent.js';
+export { AI_AGENT, AGENT_EXIT_CODE } from './agent.js';
 
 // Workflow library
 export {
@@ -11,22 +11,34 @@ export {
   type WorkflowDefaults,
   type WorkflowConfig,
   type WorkflowStep,
+  type WorkflowLegacyStep,
   type WorkflowAgentStep,
   type WorkflowAgentTool,
   type WorkflowCommandStep,
+  type WorkflowConditionalStep,
   type WorkflowLoopStep,
+  type WorkflowParallelStep,
+  type WorkflowSequentialStep,
   isAgentStep,
   isCommandStep,
+  isConditionalStep,
   isLoopStep,
+  isParallelStep,
+  isSequentialStep,
 } from './workflow/types.js';
 
 export {
   WorkflowLoadError,
+  WorkflowSaveError,
   WorkflowValidationError,
 } from './workflow/errors.js';
 
 export {
   CURRENT_WORKFLOW_SCHEMA_VERSION,
+  SINGLE_CONDITION_REGEX,
+  WorkflowConditionalStepSchema,
+  WorkflowParallelStepSchema,
+  WorkflowSequentialStepSchema,
   WorkflowSchema,
   WorkflowLoopStepSchema,
 } from './workflow/schema.js';

@@ -28,7 +28,7 @@ import type {
   WorkflowOutputType,
 } from 'rover-schemas';
 import { isAgentStep } from 'rover-schemas';
-import { resolvePlaceholders, truncateFileContent } from './placeholders.js';
+import { resolvePlaceholders } from './placeholders.js';
 import {
   parseAgentError,
   isWaitingForAuthentication,
@@ -184,9 +184,16 @@ export class Runner {
      * to abort the current execution without waiting for the timeout. Tools like
      * Gemini and Qwen behaves this way
      */
+    const STDERR_BUFFER_LIMIT = 8192;
     const authWaitingDetector = function* (chunk: unknown) {
       const chunkStr = String(chunk);
       stderrBuffer += chunkStr;
+
+      // Keep only the tail of stderr to bound memory for long-running agents.
+      // Auth detection patterns only appear at startup so this is safe.
+      if (stderrBuffer.length > STDERR_BUFFER_LIMIT * 2) {
+        stderrBuffer = stderrBuffer.slice(-STDERR_BUFFER_LIMIT);
+      }
 
       // Check for authentication prompts
       if (isWaitingForAuthentication(stderrBuffer) && !authDetected) {
@@ -647,14 +654,7 @@ export class Runner {
       // It's a file type, read the file content
       if (existsSync(value)) {
         try {
-          const raw = readFileSync(value, 'utf-8');
-          const { text, truncated } = truncateFileContent(raw, value);
-          if (truncated) {
-            warnings.push(
-              `Truncated file '${value}' to fit prompt (was ${raw.length} chars)`
-            );
-          }
-          return text;
+          return readFileSync(value, 'utf-8');
         } catch (err) {
           warnings.push(
             `Could not read file '${value}': ${err instanceof Error ? err.message : String(err)}`

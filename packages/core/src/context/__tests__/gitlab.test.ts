@@ -24,6 +24,12 @@ const MockGit = vi.mocked(Git);
 describe('GitLabProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    MockGit.mockImplementation(
+      () =>
+        ({
+          remoteUrl: vi.fn().mockReturnValue('git@gitlab.com:owner/repo.git'),
+        }) as unknown as Git
+    );
     // Default: glab CLI is available
     mockLaunchSync.mockImplementation((cmd, args) => {
       if (cmd === 'glab' && args?.[0] === '--version') {
@@ -166,13 +172,67 @@ describe('GitLabProvider', () => {
         }
         if (cmd === 'glab' && args?.[0] === 'issue' && args?.[1] === 'view') {
           // Verify correct repo is used
-          expect(args).toContain('explicit/repo');
+          expect(args).toContain('gitlab.com/explicit/repo');
           return {
             exitCode: 0,
             stdout: JSON.stringify(issueResponse),
           } as ReturnType<typeof launchSync>;
         }
         if (cmd === 'glab' && args?.[0] === 'api') {
+          return {
+            exitCode: 0,
+            stdout: '[]',
+          } as ReturnType<typeof launchSync>;
+        }
+        return { exitCode: 1 } as ReturnType<typeof launchSync>;
+      });
+
+      const provider = new GitLabProvider(
+        new URL('gitlab:explicit/repo/issue/15'),
+        {
+          originalUri: 'gitlab:explicit/repo/issue/15',
+          trustAllAuthors: true,
+        }
+      );
+
+      await provider.build();
+    });
+
+    it('should preserve the current GitLab host for explicit URIs', async () => {
+      MockGit.mockImplementation(
+        () =>
+          ({
+            remoteUrl: vi
+              .fn()
+              .mockReturnValue('git@gitlab.mycompany.com:team/project.git'),
+          }) as unknown as Git
+      );
+
+      const issueResponse = {
+        iid: 15,
+        title: 'Test Issue',
+        description: 'Issue body',
+        state: 'opened',
+        labels: [],
+        assignees: [],
+        author: { username: 'testuser' },
+        created_at: '2024-01-15T10:00:00Z',
+        updated_at: '2024-01-20T15:30:00Z',
+      };
+
+      mockLaunchSync.mockImplementation((cmd, args) => {
+        if (cmd === 'glab' && args?.[0] === '--version') {
+          return { exitCode: 0 } as ReturnType<typeof launchSync>;
+        }
+        if (cmd === 'glab' && args?.[0] === 'issue' && args?.[1] === 'view') {
+          expect(args).toContain('gitlab.mycompany.com/explicit/repo');
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify(issueResponse),
+          } as ReturnType<typeof launchSync>;
+        }
+        if (cmd === 'glab' && args?.[0] === 'api') {
+          expect(args).toContain('gitlab.mycompany.com/explicit/repo');
           return {
             exitCode: 0,
             stdout: '[]',

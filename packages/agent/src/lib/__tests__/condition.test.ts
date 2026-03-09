@@ -246,6 +246,19 @@ describe('evaluateCondition', () => {
       ).toBe(true);
     });
 
+    it('handles || without surrounding whitespace', () => {
+      const stepsOutput = new Map<string, Map<string, string>>();
+      stepsOutput.set('a', new Map([['x', '1']]));
+      stepsOutput.set('b', new Map([['y', '2']]));
+
+      expect(
+        evaluateCondition(
+          'steps.a.outputs.x == 0||steps.b.outputs.y == 2',
+          stepsOutput
+        )
+      ).toBe(true);
+    });
+
     it('works with a single clause (no ||)', () => {
       const stepsOutput = new Map<string, Map<string, string>>();
       stepsOutput.set('run_tests', new Map([['exit_code', '0']]));
@@ -254,5 +267,39 @@ describe('evaluateCondition', () => {
         evaluateCondition('steps.run_tests.outputs.exit_code == 0', stepsOutput)
       ).toBe(true);
     });
+  });
+
+  it('returns false and warns for && without surrounding whitespace', () => {
+    const stepsOutput = new Map<string, Map<string, string>>();
+    stepsOutput.set('a', new Map([['x', '1']]));
+    stepsOutput.set('b', new Map([['y', '2']]));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = evaluateCondition(
+      'steps.a.outputs.x == 1&&steps.b.outputs.y == 2',
+      stepsOutput
+    );
+    expect(result).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"&&" (AND) operator is not supported')
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('returns false and warns when using && operator with spaces', () => {
+    const stepsOutput = new Map<string, Map<string, string>>();
+    stepsOutput.set('a', new Map([['x', '1']]));
+    stepsOutput.set('b', new Map([['y', '2']]));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = evaluateCondition(
+      'steps.a.outputs.x == 1 && steps.b.outputs.y == 2',
+      stepsOutput
+    );
+    expect(result).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"&&" (AND) operator is not supported')
+    );
+    warnSpy.mockRestore();
   });
 });

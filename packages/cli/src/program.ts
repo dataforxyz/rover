@@ -20,6 +20,7 @@ import iterateCmd from './commands/iterate.js';
 import shellCmd from './commands/shell.js';
 import resetCmd from './commands/reset.js';
 import restartCmd from './commands/restart.js';
+import resumeCmd from './commands/resume.js';
 import deleteCmd from './commands/delete.js';
 import mergeCmd from './commands/merge.js';
 import rebaseCmd from './commands/rebase.js';
@@ -57,6 +58,7 @@ const commands: CommandDefinition[] = [
   shellCmd,
   resetCmd,
   restartCmd,
+  resumeCmd,
   deleteCmd,
   mergeCmd,
   rebaseCmd,
@@ -274,8 +276,12 @@ export function createProgram(
       '(Deprecated. Use --context) Fetch task description from a GitHub issue number'
     )
     .option(
+      '--from-gitlab <issue>',
+      '(Deprecated. Use --context) Fetch task description from a GitLab issue number'
+    )
+    .option(
       '--include-comments',
-      '(Deprecated. Use --context-trust-all-authors) Include issue comments in the task description (requires --from-github)'
+      '(Deprecated. Use --context-trust-all-authors) Include issue comments in the task description (requires --from-github or --from-gitlab)'
     )
     .addOption(
       new Option(
@@ -348,6 +354,14 @@ export function createProgram(
     .argument('<taskId>', 'Task ID to restart')
     .option('--json', 'Output the result in JSON format')
     .action(restartCmd.action);
+
+  // Resume a paused or failed task
+  program
+    .command('resume')
+    .description('Resume a paused or failed task from checkpoint')
+    .argument('<taskId>', 'Task ID to resume')
+    .option('--json', 'Output the result in JSON format')
+    .action(resumeCmd.action);
 
   // Stop a running task
   program

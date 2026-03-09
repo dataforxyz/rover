@@ -15,7 +15,7 @@
  */
 
 import { beforeEach, afterEach, describe, it, expect } from 'vitest';
-import { SKIP_REAL_AGENT_TESTS } from './e2e-utils.js';
+import { cleanupE2ETestDir, SKIP_REAL_AGENT_TESTS } from './e2e-utils.js';
 import {
   mkdtempSync,
   rmSync,
@@ -189,8 +189,8 @@ exit 0
   afterEach(() => {
     process.chdir(originalCwd);
     process.env.PATH = originalPath;
-    rmSync(testDir, { recursive: true, force: true });
-    rmSync(remoteDir, { recursive: true, force: true });
+    cleanupE2ETestDir(testDir);
+    cleanupE2ETestDir(remoteDir);
   });
 
   /**

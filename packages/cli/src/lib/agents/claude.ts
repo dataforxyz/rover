@@ -16,7 +16,13 @@ import { PromptBuilder, IPromptTask } from '../prompts/index.js';
 import { parseJsonResponse } from '../../utils/json-parser.js';
 import { homedir, tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  rmdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import type { WorkflowInput } from 'rover-schemas';
 
 // Environment variables reference:
@@ -35,9 +41,7 @@ const CLAUDE_CODE_ENV_VARS = [
 
   // Amazon Bedrock configuration
   'CLAUDE_CODE_USE_BEDROCK',
-  'AWS_BEARER_TOKEN_BEDROCK',
   'ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION',
-  'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_SKIP_BEDROCK_AUTH',
   'awsAuthRefresh',
   'awsCredentialExport',
@@ -286,7 +290,9 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     const claudeCreds = join(homedir(), '.claude', '.credentials.json');
     const gcloudConfig = join(homedir(), '.config', 'gcloud');
 
-    dockerMounts.push(`-v`, `${claudeFile}:/.claude.json:Z,ro`);
+    if (existsSync(claudeFile)) {
+      dockerMounts.push(`-v`, `${claudeFile}:/.claude.json:Z,ro`);
+    }
 
     if (requiredClaudeCredentials()) {
       if (existsSync(claudeCreds)) {
@@ -300,7 +306,16 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
           userCredentialsTempPath,
           '.credentials.json'
         );
-        writeFileSync(claudeCredsFile, claudeCredsData);
+        writeFileSync(claudeCredsFile, claudeCredsData, { mode: 0o600 });
+        // Schedule cleanup of host-side temp credentials after mount
+        process.on('exit', () => {
+          try {
+            unlinkSync(claudeCredsFile);
+            rmdirSync(userCredentialsTempPath);
+          } catch {
+            // Best effort cleanup
+          }
+        });
         // Do not mount credentials as RO, as they will be
         // shredded by the setup script when it finishes
         dockerMounts.push(`-v`, `${claudeCredsFile}:/.credentials.json:Z`);

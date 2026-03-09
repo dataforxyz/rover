@@ -37,6 +37,8 @@ export class TaskCard extends LitElement {
         return 'codicon-repo-push';
       case 'FAILED':
         return 'codicon-error';
+      case 'PAUSED':
+        return 'codicon-debug-pause';
       case 'RUNNING':
       case 'ITERATING':
       case 'INITIALIZING':
@@ -70,6 +72,11 @@ export class TaskCard extends LitElement {
     if (task.completedAt) {
       const completed = new Date(task.completedAt);
       return `Completed ${this.formatRelativeTime(completed)}`;
+    }
+
+    if (task.status === 'PAUSED' && task.pausedAt) {
+      const paused = new Date(task.pausedAt);
+      return `Paused ${this.formatRelativeTime(paused)}`;
     }
 
     if (
@@ -195,6 +202,7 @@ export class TaskCard extends LitElement {
       this.task.status?.toLowerCase()
     );
     const isFailed = this.task.status?.toLowerCase() === 'failed';
+    const isPaused = this.task.status?.toLowerCase() === 'paused';
 
     return html`
       <div class="task-card">
@@ -305,6 +313,30 @@ export class TaskCard extends LitElement {
                   >
                     <i class="codicon codicon-debug-restart"></i>
                     Retry
+                  </button>
+                `
+                : ''
+            }
+            ${
+              isPaused
+                ? html`
+                  <button
+                    class="action-button"
+                    @click=${(e: Event) =>
+                      this.executeTaskAction(e, 'resumeTask')}
+                    title="Resume this paused task"
+                  >
+                    <i class="codicon codicon-debug-continue"></i>
+                    Resume
+                  </button>
+                  <button
+                    class="action-button"
+                    @click=${(e: Event) =>
+                      this.executeTaskAction(e, 'viewLogs', this.task.status)}
+                    title="View task logs"
+                  >
+                    <i class="codicon codicon-output"></i>
+                    Logs
                   </button>
                 `
                 : ''

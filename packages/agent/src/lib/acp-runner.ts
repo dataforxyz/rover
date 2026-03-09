@@ -5,6 +5,10 @@
  * re-injecting file contents for each step.
  */
 
+// NOTE: spawn is used intentionally here instead of launch() from rover-core.
+// The ACP agent runs as a long-lived subprocess with piped stdio for
+// bidirectional ndjson communication; launch() waits for process completion
+// and is not suitable for interactive/persistent child processes.
 import { spawn, ChildProcess } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import {
@@ -17,11 +21,12 @@ import {
 import colors from 'ansi-colors';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { isAgentStep, isLoopStep } from 'rover-schemas';
-import type {
-  WorkflowAgentStep,
-  WorkflowOutput,
-  WorkflowStep,
+import {
+  isAgentStep,
+  isLoopStep,
+  type WorkflowAgentStep,
+  type WorkflowOutput,
+  type WorkflowStep,
 } from 'rover-schemas';
 import {
   WorkflowManager,
@@ -31,29 +36,13 @@ import {
   showList,
   type StepResult,
 } from 'rover-core';
-import { ACPClient } from './acp-client.js';
+import { ACPClient, clearAllTerminals } from './acp-client.js';
 import { GeminiOrQwenACPClient } from './gemini-or-qwen-acp-client.js';
 import { createAgent } from './agents/index.js';
 import type { Agent } from './agents/types.js';
 import { copyFileSync, rmSync } from 'node:fs';
-import { resolvePlaceholders, truncateFileContent } from './placeholders.js';
-
-/**
- * Format an unknown error for display.
- * ACP SDK may throw plain JSON-RPC error objects instead of Error instances.
- */
-function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  if (error !== null && typeof error === 'object') {
-    try {
-      return JSON.stringify(error, null, 2);
-    } catch {
-      return String(error);
-    }
-  }
-  return String(error);
-}
+import { resolvePlaceholders } from './placeholders.js';
+import { formatError } from './format-error.js';
 
 export interface ACPRunnerStepResult extends StepResult {}
 
@@ -67,6 +56,26 @@ export interface ACPRunnerConfig {
   logger?: JsonlLogger;
   /** MCP servers to pass to each ACP session. */
   mcpServers?: McpServer[];
+}
+
+/**
+ * Collect IDs of leaf (non-loop) steps, recursing into loop sub-steps.
+ * Loop step IDs themselves are omitted because they are containers, not
+ * directly executable agent/command steps.
+ */
+function flattenLeafStepIds(steps: WorkflowStep[]): string[] {
+  const stepIds: string[] = [];
+
+  for (const step of steps) {
+    if (step.type === 'loop') {
+      stepIds.push(...flattenLeafStepIds(step.steps));
+      continue;
+    }
+
+    stepIds.push(step.id);
+  }
+
+  return stepIds;
 }
 
 export class ACPRunner {
@@ -105,22 +114,6 @@ export class ACPRunner {
     this.tool = config.defaultTool || this.workflow.defaults?.tool || 'claude';
   }
 
-  private getAgentStepIds(
-    steps: WorkflowStep[] = this.workflow.steps
-  ): string[] {
-    const agentStepIds: string[] = [];
-
-    for (const step of steps) {
-      if (isAgentStep(step)) {
-        agentStepIds.push(step.id);
-      } else if (isLoopStep(step)) {
-        agentStepIds.push(...this.getAgentStepIds(step.steps));
-      }
-    }
-
-    return agentStepIds;
-  }
-
   /**
    * Create the appropriate ACPClient subclass for the current tool.
    */
@@ -132,6 +125,14 @@ export class ACPRunner {
       default:
         return new ACPClient();
     }
+  }
+
+  /**
+   * Whether the ACP connection has been successfully initialized and
+   * is ready to create sessions and dispatch prompts.
+   */
+  isReady(): boolean {
+    return this.isConnectionInitialized && this.connection != null;
   }
 
   /**
@@ -415,6 +416,14 @@ export class ACPRunner {
       const promptCost = this.client.getLastPromptCost();
       const cost = promptCost.amount > 0 ? promptCost.amount : undefined;
 
+      if (VERBOSE && promptCost.amount <= 0) {
+        console.log(
+          colors.gray(
+            `[ACP] Prompt cost not reported (amount: ${promptCost.amount}, currency: ${promptCost.currency})`
+          )
+        );
+      }
+
       return { stopReason: promptResult.stopReason, response, tokens, cost };
     } catch (error) {
       console.log(
@@ -504,19 +513,24 @@ export class ACPRunner {
     const outputs = new Map<string, string>();
     const step = this.workflow.getStep(stepId);
 
+    // Defensive: callers (e.g. step-executor) already verify this before
+    // dispatching to ACPRunner, but we guard here to surface any future
+    // misuse early rather than producing a confusing runtime failure.
     if (!isAgentStep(step)) {
       throw new Error(
         `ACPRunner.runStep only supports agent steps, but step "${stepId}" is type "${step.type}"`
       );
     }
 
-    // Calculate current progress
-    const agentStepIds = this.getAgentStepIds();
-    const stepIndex = agentStepIds.indexOf(stepId);
-    const totalSteps = Math.max(agentStepIds.length, 1);
-    const safeStepIndex = stepIndex >= 0 ? stepIndex : 0;
-    const currentProgress = Math.floor((safeStepIndex / totalSteps) * 100);
-    const nextProgress = Math.floor(((safeStepIndex + 1) / totalSteps) * 100);
+    const flattenedStepIds = flattenLeafStepIds(this.workflow.steps);
+    const rawStepIndex = flattenedStepIds.indexOf(stepId);
+    const stepIndex = Math.max(0, rawStepIndex);
+    const totalSteps = Math.max(
+      1,
+      WorkflowManager.countSteps(this.workflow.steps)
+    );
+    const currentProgress = Math.floor((stepIndex / totalSteps) * 100);
+    const nextProgress = Math.floor(((stepIndex + 1) / totalSteps) * 100);
 
     try {
       // Update status before executing step
@@ -531,13 +545,15 @@ export class ACPRunner {
         progress: currentProgress,
       });
 
-      // Set the model only if explicitly specified at the step level or via
-      // CLI flag.  When neither is set we must NOT fall back to the workflow-
-      // level defaults because those belong to the workflow's default tool
-      // (e.g. "sonnet" for Claude) and would be invalid for a different agent
-      // (e.g. Qwen).  Omitting the model lets the agent use its own default.
+      const workflowDefaultModel =
+        step.tool && this.workflow.defaults?.tool !== step.tool
+          ? undefined
+          : this.workflow.defaults?.model;
       const stepModel =
-        (isAgentStep(step) && step.model) || this.defaultModel || undefined;
+        (isAgentStep(step) && step.model) ||
+        this.defaultModel ||
+        workflowDefaultModel ||
+        undefined;
       if (stepModel) {
         try {
           await this.setModel(stepModel);
@@ -678,18 +694,7 @@ export class ACPRunner {
           const stepOutputs = this.stepsOutput.get(stepId);
           const fileContent = stepOutputs?.get(contentKey);
           if (fileContent) {
-            const { text, truncated } = truncateFileContent(
-              fileContent,
-              `${stepId}.${outputName}`
-            );
-            if (truncated) {
-              console.log(
-                colors.yellow(
-                  `⚠️  Truncated file content for '${outputName}' from step '${stepId}' to fit prompt`
-                )
-              );
-            }
-            return text;
+            return fileContent;
           }
           extraWarnings.push(
             `File content for '${outputName}' not found in step '${stepId}'`
@@ -938,8 +943,10 @@ export class ACPRunner {
       }
     }
 
-    // Try to find inline JSON object
-    const inlineMatch = content.match(/\{[^{}]*"[^"]+"\s*:\s*"[^"]*"[^{}]*\}/);
+    // Try to find inline JSON object (supports string, boolean, number, and null values)
+    const inlineMatch = content.match(
+      /\{[^{}]*"[^"]+"\s*:\s*(?:"[^"]*"|true|false|null|-?\d+(?:\.\d+)?)[^{}]*\}/
+    );
     if (inlineMatch) {
       try {
         return JSON.parse(inlineMatch[0]);
@@ -959,6 +966,9 @@ export class ACPRunner {
     outputName: string,
     outputs: Map<string, string>
   ): string | undefined {
+    // Escape outputName for safe use in RegExp
+    const escapedName = outputName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
     // Check all file content outputs
     for (const [key, content] of outputs.entries()) {
       if (!key.endsWith('_content')) continue;
@@ -966,7 +976,7 @@ export class ACPRunner {
       // Pattern 1: Markdown header followed by value
       // e.g., "## Task complexity\n\nsimple"
       const headerPattern = new RegExp(
-        `##\\s*(?:Task\\s+)?${outputName}[\\s\\S]*?\\n+\\s*(simple|complex|true|false|\\w+)`,
+        `##\\s*(?:Task\\s+)?${escapedName}[\\s\\S]*?\\n+\\s*(simple|complex|true|false|\\w+)`,
         'i'
       );
       const headerMatch = content.match(headerPattern);
@@ -977,7 +987,7 @@ export class ACPRunner {
       // Pattern 2: Key-value format
       // e.g., "complexity: simple" or "issues_found: true"
       const kvPattern = new RegExp(
-        `["']?${outputName}["']?\\s*[=:]\\s*["']?(\\w+)["']?`,
+        `["']?${escapedName}["']?\\s*[=:]\\s*["']?(\\w+)["']?`,
         'i'
       );
       const kvMatch = content.match(kvPattern);
@@ -1054,11 +1064,22 @@ export class ACPRunner {
    */
   closeSession(): void {
     if (this.sessionId) {
+      const sessionId = this.sessionId;
       if (VERBOSE) {
-        console.log(colors.gray(`🔌 Closing session: ${this.sessionId}`));
+        console.log(colors.gray(`🔌 Closing session: ${sessionId}`));
+      }
+      const connectionWithEndSession = this.connection as {
+        endSession?: (args: { sessionId: string }) => Promise<unknown>;
+      } | null;
+      if (connectionWithEndSession?.endSession) {
+        void connectionWithEndSession.endSession({ sessionId });
       }
       this.sessionId = null;
       this.isSessionCreated = false;
+      // Reset per-session cost tracking so a new session starts fresh.
+      if (this.client) {
+        this.client.resetCost();
+      }
     }
   }
 
@@ -1070,9 +1091,29 @@ export class ACPRunner {
       if (VERBOSE) {
         console.log(colors.gray('\n🔌 Closing ACP connection...'));
       }
-      this.agentProcess.kill('SIGTERM');
+      const proc = this.agentProcess;
+      // Signal the child process and allow a brief window for graceful
+      // shutdown before destroying streams and escalating to SIGKILL.
+      proc.kill('SIGTERM');
+      const destroyTimer = setTimeout(() => {
+        proc.stdin?.destroy();
+        proc.stdout?.destroy();
+        proc.stderr?.destroy();
+      }, 500);
+      destroyTimer.unref();
+      // Force-kill after a longer grace period if the process ignores SIGTERM
+      const killTimer = setTimeout(() => {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // Process already exited
+        }
+      }, 5000);
+      killTimer.unref();
       this.agentProcess = null;
     }
+    // Clean up any tracked terminals to prevent resource leaks
+    clearAllTerminals();
     this.connection = null;
     this.sessionId = null;
     this.isConnectionInitialized = false;

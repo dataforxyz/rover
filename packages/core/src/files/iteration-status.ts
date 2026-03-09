@@ -113,10 +113,12 @@ export class IterationStatusManager {
     this.data.currentStep = currentStep;
     this.data.progress = progress;
     this.data.updatedAt = new Date().toISOString();
+    // Clear stale provider from a previous pause
+    this.data.provider = undefined;
 
-    if (error) {
-      this.data.error = error;
-    }
+    // Clear or update error — ensures stale errors from a previous pause
+    // don't persist after a successful resume.  Treat empty string as "no error".
+    this.data.error = error || undefined;
 
     this.save();
   }
@@ -131,6 +133,9 @@ export class IterationStatusManager {
     this.data.progress = 100;
     this.data.updatedAt = now;
     this.data.completedAt = now;
+    // Clear stale error and provider from a previous pause
+    this.data.error = undefined;
+    this.data.provider = undefined;
     this.save();
   }
 
@@ -145,20 +150,57 @@ export class IterationStatusManager {
     this.data.error = error;
     this.data.updatedAt = now;
     this.data.completedAt = now;
+    // Clear stale provider from a previous pause
+    this.data.provider = undefined;
     this.save();
   }
 
   /**
-   * Save current status to disk
+   * Mark status as paused (e.g., due to credit limit exhaustion)
+   * Unlike fail(), this does NOT set completedAt since the workflow is not terminal.
+   */
+  pause(currentStep: string, error: string, provider?: string): void {
+    // Guard against pausing a terminal iteration — completed/failed
+    // iterations should not be overwritten back to paused.
+    if (this.data.status === 'completed' || this.data.status === 'failed') {
+      console.warn(
+        `Warning: Ignoring pause() on iteration already in terminal status "${this.data.status}" (task ${this.data.taskId})`
+      );
+      return;
+    }
+    this.data.status = 'paused';
+    this.data.currentStep = currentStep;
+    this.data.error = error || undefined;
+    // Explicitly set provider — clears stale value from a previous pause
+    // when no provider is given for this pause.
+    this.data.provider = provider || undefined;
+    this.data.updatedAt = new Date().toISOString();
+    this.save();
+  }
+
+  /** Whether the last save() call failed, meaning in-memory state may differ from disk. */
+  private _lastSaveFailed = false;
+
+  /** Returns true if the last save() call failed and disk state may be stale. */
+  get lastSaveFailed(): boolean {
+    return this._lastSaveFailed;
+  }
+
+  /**
+   * Save current status to disk.
+   * Logs a warning on write failure rather than throwing, because callers
+   * (including signal handlers) may not have error handling in place and a
+   * thrown exception could prevent checkpoint saves or exit-code logic.
    */
   private save(): void {
     try {
       const json = JSON.stringify(this.data, null, 2);
       writeFileSync(this.filePath, json, 'utf8');
-    } catch (error) {
-      // Log error but don't throw to avoid breaking workflow execution
-      console.error(
-        `Warning: Failed to save status file: ${error instanceof Error ? error.message : String(error)}`
+      this._lastSaveFailed = false;
+    } catch (err) {
+      this._lastSaveFailed = true;
+      console.warn(
+        `Warning: Failed to save iteration status to ${this.filePath}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
@@ -168,7 +210,7 @@ export class IterationStatusManager {
     return this.data.taskId;
   }
 
-  get status(): string {
+  get status(): IterationStatusName {
     return this.data.status;
   }
 
@@ -194,6 +236,10 @@ export class IterationStatusManager {
 
   get error(): string | undefined {
     return this.data.error;
+  }
+
+  get provider(): string | undefined {
+    return this.data.provider;
   }
 
   /**

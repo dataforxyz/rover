@@ -41,64 +41,33 @@ export interface ResolveResult {
  *
  * Uses callback-form String.replace to avoid $& / $1 special patterns in values.
  */
-/**
- * Maximum characters allowed when injecting file content into a prompt.
- * Prevents "Prompt is too long" errors from the AI provider when previous
- * workflow steps produce very large output files (e.g. a detailed plan
- * covering dozens of files).
- */
-export const MAX_INJECTED_FILE_CHARS = 150_000;
-
-/**
- * Truncate content that exceeds MAX_INJECTED_FILE_CHARS, appending a marker
- * so the agent knows the content was trimmed.
- */
-export function truncateFileContent(
-  content: string,
-  label: string
-): { text: string; truncated: boolean } {
-  if (content.length <= MAX_INJECTED_FILE_CHARS) {
-    return { text: content, truncated: false };
-  }
-  const truncated = content.slice(0, MAX_INJECTED_FILE_CHARS);
-  const droppedChars = content.length - MAX_INJECTED_FILE_CHARS;
-  return {
-    text: `${truncated}\n\n... [truncated ${droppedChars} chars — ${label} too large for prompt]`,
-    truncated: true,
-  };
-}
-
 export function resolvePlaceholders(
   template: string,
   options: ResolveOptions
 ): ResolveResult {
   const placeholderRegex = /\{\{([^}]+)\}\}/g;
-  const matches = [...template.matchAll(placeholderRegex)];
   const warnings: string[] = [];
   const unresolved: string[] = [];
-  let result = template;
 
-  for (const match of matches) {
-    const fullMatch = match[0];
-    const rawPath = match[1].trim();
-    const parts = rawPath.split('.');
-    let replacementValue: string | undefined;
+  // Single-pass replacement using callback to avoid corruption when resolved
+  // values contain text that looks like other placeholders.
+  const result = template.replace(placeholderRegex, (fullMatch, rawPathRaw) => {
+    const rawPath = rawPathRaw.trim();
+    const parts = rawPath.split('.').map((p: string) => p.trim());
 
     if (parts[0] === 'inputs' && parts.length === 2) {
       const inputName = parts[1];
       const value = options.inputs.get(inputName);
 
       if (value !== undefined) {
-        replacementValue = value;
-      } else {
-        warnings.push(`Input '${inputName}' not provided`);
-        unresolved.push(fullMatch);
+        return value;
       }
-    } else if (
-      parts[0] === 'steps' &&
-      parts.length === 4 &&
-      parts[2] === 'outputs'
-    ) {
+      warnings.push(`Input '${inputName}' not provided`);
+      unresolved.push(fullMatch);
+      return fullMatch;
+    }
+
+    if (parts[0] === 'steps' && parts.length === 4 && parts[2] === 'outputs') {
       const stepId = parts[1];
       const outputName = parts[3];
       const stepOutputs = options.stepsOutput.get(stepId);
@@ -106,27 +75,25 @@ export function resolvePlaceholders(
       if (!stepOutputs) {
         warnings.push(`Step '${stepId}' has not been executed yet`);
         unresolved.push(fullMatch);
-      } else {
-        const rawValue = stepOutputs.get(outputName);
-        if (rawValue === undefined) {
-          warnings.push(`Output '${outputName}' not found in step '${stepId}'`);
-          unresolved.push(fullMatch);
-        } else {
-          replacementValue = options.transformStepOutput
-            ? options.transformStepOutput(stepId, outputName, rawValue)
-            : rawValue;
-        }
+        return fullMatch;
       }
-    } else {
-      warnings.push(`Invalid placeholder format: '${rawPath}'`);
-      unresolved.push(fullMatch);
+
+      const rawValue = stepOutputs.get(outputName);
+      if (rawValue === undefined) {
+        warnings.push(`Output '${outputName}' not found in step '${stepId}'`);
+        unresolved.push(fullMatch);
+        return fullMatch;
+      }
+
+      return options.transformStepOutput
+        ? options.transformStepOutput(stepId, outputName, rawValue)
+        : rawValue;
     }
 
-    // Use callback form to avoid $& / $1 special replacement patterns in values.
-    if (replacementValue !== undefined) {
-      result = result.replace(fullMatch, () => replacementValue!);
-    }
-  }
+    warnings.push(`Invalid placeholder format: '${rawPath}'`);
+    unresolved.push(fullMatch);
+    return fullMatch;
+  });
 
   if (options.failOnUnresolved && unresolved.length > 0) {
     throw new Error(`Unresolved placeholders: ${unresolved.join(', ')}`);

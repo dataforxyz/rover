@@ -60,24 +60,31 @@ export class SetupBuilder {
   private iterationPath: string;
   private isDockerRootless: boolean;
   private projectConfig: ProjectConfigManager;
+  private resumeFromCheckpoint: boolean;
 
   constructor(
     taskDescription: TaskDescriptionManager,
     agent: string,
-    projectConfig: ProjectConfigManager
+    projectConfig: ProjectConfigManager,
+    options: { resumeFromCheckpoint?: boolean } = {}
   ) {
     this.agent = agent;
     this.task = taskDescription;
     this.projectConfig = projectConfig;
+    this.resumeFromCheckpoint = options.resumeFromCheckpoint === true;
 
     let isDockerRootless = false;
 
-    const dockerInfo = launchSync('docker', ['info', '-f', 'json']).stdout;
-    if (dockerInfo) {
-      const info = JSON.parse(dockerInfo.toString());
-      isDockerRootless = (info?.SecurityOptions || []).some((value: string) =>
-        value.includes('rootless')
-      );
+    try {
+      const dockerInfo = launchSync('docker', ['info', '-f', 'json']).stdout;
+      if (dockerInfo) {
+        const info = JSON.parse(dockerInfo.toString());
+        isDockerRootless = (info?.SecurityOptions || []).some((value: string) =>
+          value.includes('rootless')
+        );
+      }
+    } catch {
+      // Docker may not be available (e.g. Podman-only environment)
     }
 
     this.isDockerRootless = isDockerRootless;
@@ -233,7 +240,8 @@ fi`;
     // --- home setup ---
     let homeSetup = '';
     if (useCachedImage) {
-      // Cached image already has HOME dirs; just fix ownership of bind-mounts
+      // The entrypoint provisions the runtime HOME for remapped UIDs. Here we
+      // only need to fix bind-mount ownership and load the cached profile.
       homeSetup = `sudo chown -R $(id -u):$(id -g) /workspace
 sudo chown -R $(id -u):$(id -g) /output
 
@@ -314,18 +322,16 @@ ${installScripts.join('\n')}
 echo -e "\\n📦 Installing Agent CLI and setting up credentials"
 # Pass the environment variables to ensure it loads the right credentials
 sudo -E rover-agent install $AGENT
-AGENT_INSTALL_RC=$?
-# Set the right permissions after installing and moving credentials
-for d in .claude .codex .copilot .cursor .gemini .qwen .config .local .claude.json; do
-  [ -e "$HOME/$d" ] && sudo chown -R $(id -u):$(id -g) "$HOME/$d"
-done
 
-if [ $AGENT_INSTALL_RC -eq 0 ]; then
+if [ $? -eq 0 ]; then
     echo "✅ $AGENT was installed successfully."
 else
     echo "❌ $AGENT could not be installed"
     safe_exit 1
 fi
+
+# Set the right permissions after installing and moving credentials
+sudo chown -R $(id -u):$(id -g) $HOME
 
 echo -e "\\n📦 Done installing agent"`;
     }
@@ -336,9 +342,7 @@ echo -e "\\n📦 Done installing agent"`;
     const credentialInstallSection = `# Copy credentials (runs on every start, including cached images)
 echo -e "\\n📦 Copying agent credentials"
 sudo rover-agent-install $AGENT
-for d in .claude .codex .copilot .cursor .gemini .qwen .config .local .claude.json; do
-  [ -e "$HOME/$d" ] && sudo chown -R $(id -u):$(id -g) "$HOME/$d"
-done
+sudo chown -R $(id -u):$(id -g) $HOME
 echo "✅ Credentials copied successfully"`;
 
     // --- MCP config section ---
@@ -351,21 +355,21 @@ echo "✅ Credentials copied successfully"`;
       if (mcps && mcps.length > 0) {
         configureAllMCPCommands.push('echo "✅ Configuring custom MCPs"');
         for (const mcp of mcps) {
-          let cmd = `rover-agent config mcp ${this.agent} "${mcp.name}" --transport "${mcp.transport}"`;
+          let cmd = `rover-agent config mcp ${this.agent} ${this.shellEscape(mcp.name)} --transport ${this.shellEscape(mcp.transport)}`;
 
           if (mcp.envs && mcp.envs.length > 0) {
             for (const env of mcp.envs) {
-              cmd += ` --env "${env}"`;
+              cmd += ` --env ${this.shellEscape(env)}`;
             }
           }
 
           if (mcp.headers && mcp.headers.length > 0) {
             for (const header of mcp.headers) {
-              cmd += ` --header "${header}"`;
+              cmd += ` --header ${this.shellEscape(header)}`;
             }
           }
 
-          cmd += ` "${mcp.commandOrUrl}"`;
+          cmd += ` ${this.shellEscape(mcp.commandOrUrl)}`;
 
           configureAllMCPCommands.push(cmd);
         }
@@ -409,41 +413,44 @@ echo -e "\\n📦 Done installing MCP servers"`;
 
     // --- initScript execution ---
     let initScriptExecution = '';
-    if (!useCachedImage) {
-      const allInitScripts = this.projectConfig.allInitScripts;
-      if (allInitScripts.length > 0) {
-        const scriptBlocks: string[] = [];
-        for (let i = 0; i < allInitScripts.length; i++) {
-          const entry = allInitScripts[i];
-          const mountPath =
-            allInitScripts.length === 1 && !entry.path
-              ? '/init-script.sh'
-              : `/init-script-${i}.sh`;
-          const label = entry.path ? ` (${entry.path})` : '';
-          let block = `echo "🔧 Running initialization script${label}"
+    const allInitScripts = this.projectConfig.allInitScripts;
+    const executableInitScripts = allInitScripts.flatMap((entry, index) =>
+      useCachedImage && !entry.path ? [] : [{ entry, index }]
+    );
+    if (executableInitScripts.length > 0) {
+      const scriptBlocks: string[] = [];
+      for (const { entry, index } of executableInitScripts) {
+        const mountPath =
+          allInitScripts.length === 1 && !entry.path
+            ? '/init-script.sh'
+            : `/init-script-${index}.sh`;
+        const escapedWorkspacePath = entry.path
+          ? this.shellEscape(`/workspace/${entry.path}`)
+          : '';
+        const label = entry.path ? ` (${entry.path})` : '';
+        let block = `echo "🔧 Running initialization script${label}"
 chmod +x ${mountPath}`;
-          if (entry.path) {
-            block += `\ncd /workspace/${entry.path}`;
-          }
-          block += `\n/bin/sh ${mountPath}
+        if (entry.path) {
+          block += `\ncd ${escapedWorkspacePath}`;
+        }
+        block += `\n/bin/sh ${mountPath}
 if [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else
   echo "❌ Initialization script${label} failed"
   safe_exit 1
 fi`;
-          if (entry.path) {
-            block += '\ncd /workspace';
-          }
-          scriptBlocks.push(block);
+        if (entry.path) {
+          block += '\ncd /workspace';
         }
-        initScriptExecution = `
+        scriptBlocks.push(block);
+      }
+      initScriptExecution = `
 echo -e "\\n======================================="
 echo "🔧 Running initialization scripts"
 echo "======================================="
 ${scriptBlocks.join('\n')}
 `;
-      }
     }
 
     // --- external project repositories ---
@@ -453,6 +460,84 @@ ${scriptBlocks.join('\n')}
     );
 
     if (projectsWithRepositories.length > 0) {
+      const repositoryStateFunctions = `
+compute_repo_untracked_hash() {
+  local repo_path="$1"
+  node - "$repo_path" <<'NODE'
+const { createHash } = require('crypto');
+const { existsSync, lstatSync, readFileSync, readlinkSync } = require('fs');
+const { join } = require('path');
+const { spawnSync } = require('child_process');
+
+const repoPath = process.argv[2];
+const result = spawnSync(
+  'git',
+  ['ls-files', '--others', '--exclude-standard', '-z'],
+  { cwd: repoPath, encoding: 'utf8' }
+);
+const entries = (result.stdout || '')
+  .split('\\0')
+  .filter(Boolean)
+  .sort((a, b) => a.localeCompare(b));
+
+const hash = createHash('sha256');
+for (const relativePath of entries) {
+  const fullPath = join(repoPath, relativePath);
+  hash.update(relativePath);
+  hash.update('\\0');
+
+  if (!existsSync(fullPath)) {
+    hash.update('missing\\0');
+    continue;
+  }
+
+  const stat = lstatSync(fullPath);
+  if (stat.isSymbolicLink()) {
+    hash.update('symlink\\0');
+    hash.update(readlinkSync(fullPath));
+    hash.update('\\0');
+    continue;
+  }
+
+  if (stat.isFile()) {
+    hash.update('file\\0');
+    hash.update(readFileSync(fullPath));
+    hash.update('\\0');
+    continue;
+  }
+
+  if (stat.isDirectory()) {
+    hash.update('dir\\0');
+    continue;
+  }
+
+  hash.update('other\\0');
+}
+
+process.stdout.write(hash.digest('hex'));
+NODE
+}
+
+compute_repo_tracked_diff_hash() {
+  local repo_path="$1"
+  node - "$repo_path" <<'NODE'
+const { createHash } = require('crypto');
+const { spawnSync } = require('child_process');
+
+const repoPath = process.argv[2];
+const result = spawnSync(
+  'git',
+  ['diff', '--binary', 'HEAD', '--no-ext-diff'],
+  { cwd: repoPath, encoding: 'utf8' }
+);
+
+process.stdout.write(
+  createHash('sha256').update((result.stdout || '').trimEnd()).digest('hex')
+);
+NODE
+}
+`;
+
       const syncBlocks = projectsWithRepositories.map(project => {
         const targetPath = `/workspace/${project.path}`;
         const escapedName = this.shellEscape(project.name);
@@ -462,18 +547,56 @@ ${scriptBlocks.join('\n')}
 
         const checkoutRef = project.ref
           ? `
-echo "🔀 Checking out ${project.ref} for ${project.name}"
-if git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
-  git -C ${escapedPath} checkout ${escapedRef}
-elif git -C ${escapedPath} rev-parse --verify origin/${escapedRef} >/dev/null 2>&1; then
-  git -C ${escapedPath} checkout -B ${escapedRef} origin/${escapedRef}
+echo "🔀 Checking out ${escapedRef} for ${escapedName}"
+if git -C ${escapedPath} rev-parse --verify refs/remotes/origin/${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout -B ${escapedRef} refs/remotes/origin/${escapedRef}
+elif git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout --detach ${escapedRef}
 else
-  echo "❌ Could not resolve ref ${project.ref} in ${project.name}"
+  echo "❌ Could not resolve ref ${escapedRef} in ${escapedName}"
   safe_exit 1
 fi`
-          : '';
+          : `
+default_remote_ref=$(git -C ${escapedPath} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+if [ -z "$default_remote_ref" ]; then
+  echo "❌ Could not determine default remote branch for ${escapedName}"
+  safe_exit 1
+fi
+default_branch="\${default_remote_ref#origin/}"
+echo "🔀 Checking out default branch $default_branch for ${escapedName}"
+git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"`;
 
-        return `echo "📥 Syncing repository ${project.name}"
+        if (this.resumeFromCheckpoint) {
+          return `echo "📥 Verifying repository ${escapedName} for checkpoint resume"
+if [ ! -d ${escapedPath}/.git ]; then
+  echo "❌ Repository ${escapedName} is missing at ${escapedPath}; cannot resume from checkpoint safely"
+  safe_exit 1
+fi
+current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
+if [ "$current_origin" != ${escapedRepository} ]; then
+  echo "❌ Existing repository at ${escapedPath} points to a different origin"
+  safe_exit 1
+fi
+if [ ! -f /output/checkpoint.json ]; then
+  echo "❌ Checkpoint file is missing; cannot resume ${escapedName} safely"
+  safe_exit 1
+fi
+if ! expected_state=$(node -e "const fs=require('fs'); const checkpoint=JSON.parse(fs.readFileSync('/output/checkpoint.json','utf8')); const entry=(checkpoint.externalRepositories||[]).find(repo => repo.path === ${this.shellEscape(project.path)}); if (!entry) process.exit(2); process.stdout.write([entry.head, entry.trackedDiffHash, entry.untrackedHash].join('\\t'));"); then
+  echo "❌ Checkpoint is missing repository state for ${escapedName}; cannot resume safely"
+  safe_exit 1
+fi
+IFS=$'\\t' read -r expected_head expected_tracked_diff_hash expected_untracked_hash <<< "$expected_state"
+current_head=$(git -C ${escapedPath} rev-parse HEAD)
+current_tracked_diff_hash=$(compute_repo_tracked_diff_hash ${escapedPath})
+current_untracked_hash=$(compute_repo_untracked_hash ${escapedPath})
+if [ "$current_head" != "$expected_head" ] || [ "$current_tracked_diff_hash" != "$expected_tracked_diff_hash" ] || [ "$current_untracked_hash" != "$expected_untracked_hash" ]; then
+  echo "❌ Repository ${escapedName} no longer matches the checkpointed revision"
+  safe_exit 1
+fi
+echo "✅ Repository ${escapedName} is ready for checkpoint resume"`;
+        }
+
+        return `echo "📥 Syncing repository ${escapedName}"
 mkdir -p "$(dirname ${escapedPath})"
 if [ ! -d ${escapedPath}/.git ]; then
   rm -rf ${escapedPath}
@@ -481,19 +604,25 @@ if [ ! -d ${escapedPath}/.git ]; then
 else
   current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
   if [ "$current_origin" != ${escapedRepository} ]; then
-    echo "❌ Existing repository at ${targetPath} points to a different origin"
+    echo "❌ Existing repository at ${escapedPath} points to a different origin"
     safe_exit 1
   fi
 fi
-git -C ${escapedPath} fetch --all --tags --prune || true
+if ! git -C ${escapedPath} fetch --all --tags --prune; then
+  echo "❌ Failed to fetch repository ${escapedName}"
+  safe_exit 1
+fi
 ${checkoutRef}
-echo "✅ Repository ${project.name} is ready"`;
+git -C ${escapedPath} reset --hard HEAD
+git -C ${escapedPath} clean -fd
+echo "✅ Repository ${escapedName} is ready"`;
       });
 
       projectRepositoriesSection = `
 echo -e "\\n======================================="
-echo "📥 Syncing external repositories"
+echo "${this.resumeFromCheckpoint ? '📥 Verifying external repositories for checkpoint resume' : '📥 Syncing external repositories'}"
 echo "======================================="
+${repositoryStateFunctions}
 ${syncBlocks.join('\n')}
 `;
     }

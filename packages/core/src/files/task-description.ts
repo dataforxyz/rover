@@ -207,12 +207,13 @@ export class TaskDescriptionManager {
     migrated.executionStatus = data.executionStatus || '';
     migrated.runningAt = data.runningAt || undefined;
     migrated.errorAt = data.errorAt || undefined;
-    migrated.exitCode = data.exitCode || 0;
+    migrated.exitCode = data.exitCode ?? 0;
 
     // Preserve optional datetime fields
     migrated.startedAt = data.startedAt || undefined;
     migrated.completedAt = data.completedAt || undefined;
     migrated.failedAt = data.failedAt || undefined;
+    migrated.pausedAt = data.pausedAt || undefined;
     migrated.lastIterationAt = data.lastIterationAt || undefined;
     migrated.lastStatusCheck = data.lastStatusCheck || undefined;
 
@@ -220,8 +221,10 @@ export class TaskDescriptionManager {
     migrated.error = data.error;
 
     // Preserve restart tracking information
-    migrated.restartCount = data.restartCount || 0;
+    migrated.restartCount = data.restartCount ?? 0;
+    migrated.autoRetryCount = data.autoRetryCount ?? 0;
     migrated.lastRestartAt = data.lastRestartAt || undefined;
+    migrated.lastResumedAt = data.lastResumedAt || undefined;
 
     // Preserve agent, agentModel, and sourceBranch fields
     migrated.agent = data.agent;
@@ -277,6 +280,8 @@ export class TaskDescriptionManager {
         return 'MERGED';
       case 'pushed':
         return 'PUSHED';
+      case 'paused':
+        return 'PAUSED';
       default:
         return 'NEW';
     }
@@ -333,22 +338,42 @@ export class TaskDescriptionManager {
     const timestamp = metadata?.timestamp || new Date().toISOString();
 
     switch (status) {
+      case 'NEW':
+        // Clear stale metadata from a previous PAUSED, FAILED, or IN_PROGRESS state
+        this.data.error = undefined;
+        this.data.pausedAt = undefined;
+        break;
       case 'IN_PROGRESS':
         if (!this.data.startedAt) {
           this.data.startedAt = timestamp;
         }
+        // Clear stale error and pausedAt from a previous PAUSED or FAILED state on resume
+        this.data.error = undefined;
+        this.data.pausedAt = undefined;
         break;
       case 'ITERATING':
         this.data.lastIterationAt = timestamp;
+        // Clear stale error and pausedAt from a previous PAUSED or FAILED state on resume
+        this.data.error = undefined;
+        this.data.pausedAt = undefined;
         break;
       case 'COMPLETED':
         this.data.completedAt = timestamp;
+        this.data.error = undefined;
+        this.data.pausedAt = undefined;
         break;
       case 'FAILED':
         this.data.failedAt = timestamp;
-        if (metadata?.error) {
-          this.data.error = metadata.error;
-        }
+        this.data.pausedAt = undefined;
+        // Intentionally clears error when metadata.error is undefined so that
+        // stale errors from a previous status don't persist.
+        this.data.error = metadata?.error;
+        break;
+      case 'PAUSED':
+        this.data.pausedAt = timestamp;
+        // Intentionally clears error when metadata.error is undefined so that
+        // stale errors from a previous status don't persist.
+        this.data.error = metadata?.error;
         break;
       case 'MERGED':
       case 'PUSHED':
@@ -356,6 +381,7 @@ export class TaskDescriptionManager {
         if (!this.data.completedAt) {
           this.data.completedAt = timestamp;
         }
+        this.data.pausedAt = undefined;
         break;
     }
 
@@ -385,6 +411,23 @@ export class TaskDescriptionManager {
   }
 
   /**
+   * Mark a task as resuming so startup timeout recovery can detect crashes
+   * before a replacement container ID has been recorded.
+   */
+  markResuming(
+    startedAt?: string,
+    options: { resetAutoRetryCount?: boolean } = {}
+  ): void {
+    const timestamp = startedAt || new Date().toISOString();
+    this.data.restartCount = (this.data.restartCount || 0) + 1;
+    if (options.resetAutoRetryCount ?? true) {
+      this.data.autoRetryCount = 0;
+    }
+    this.data.lastResumedAt = timestamp;
+    this.setStatus('IN_PROGRESS', { timestamp });
+  }
+
+  /**
    * Mark task as iterating
    */
   markIterating(timestamp?: string): void {
@@ -406,6 +449,13 @@ export class TaskDescriptionManager {
   }
 
   /**
+   * Mark task as paused (e.g., due to credit limit exhaustion)
+   */
+  markPaused(error?: string): void {
+    this.setStatus('PAUSED', { error });
+  }
+
+  /**
    * Reset task back to NEW status (for container start failures or user reset)
    */
   resetToNew(timestamp?: string): void {
@@ -420,6 +470,7 @@ export class TaskDescriptionManager {
 
     // Increment restart count
     this.data.restartCount = (this.data.restartCount || 0) + 1;
+    this.data.autoRetryCount = 0;
     this.data.lastRestartAt = restartTimestamp;
 
     // Reset to IN_PROGRESS status
@@ -488,7 +539,9 @@ export class TaskDescriptionManager {
           );
         }
 
-        throw new Error('There was an error retrieving the task iterations');
+        throw new Error(
+          `Failed to retrieve iterations for task ${this.taskId}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
 
@@ -529,7 +582,9 @@ export class TaskDescriptionManager {
           );
         }
 
-        throw new Error('There was an error retrieving the task iterations');
+        throw new Error(
+          `Failed to retrieve iterations for task ${this.taskId}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
 
@@ -581,12 +636,17 @@ export class TaskDescriptionManager {
 
       switch (status.status) {
         case 'completed':
-          statusName = status.status.toUpperCase() as TaskStatus;
+          statusName = 'COMPLETED';
           timestamp = status.completedAt;
           break;
         case 'failed':
           statusName = 'FAILED';
           timestamp = status.completedAt;
+          error = status.error;
+          break;
+        case 'paused':
+          statusName = 'PAUSED';
+          timestamp = status.updatedAt;
           error = status.error;
           break;
         case 'running':
@@ -681,6 +741,9 @@ export class TaskDescriptionManager {
   get failedAt(): string | undefined {
     return this.data.failedAt;
   }
+  get pausedAt(): string | undefined {
+    return this.data.pausedAt;
+  }
   get lastIterationAt(): string | undefined {
     return this.data.lastIterationAt;
   }
@@ -729,8 +792,14 @@ export class TaskDescriptionManager {
   get restartCount(): number | undefined {
     return this.data.restartCount;
   }
+  get autoRetryCount(): number | undefined {
+    return this.data.autoRetryCount;
+  }
   get lastRestartAt(): string | undefined {
     return this.data.lastRestartAt;
+  }
+  get lastResumedAt(): string | undefined {
+    return this.data.lastResumedAt;
   }
   get version(): string {
     return this.data.version;
@@ -739,7 +808,7 @@ export class TaskDescriptionManager {
     return this.data.workflowName;
   }
   get rawData(): TaskDescription {
-    return this.data;
+    return { ...this.data };
   }
   get inputs(): Record<string, string> {
     return this.data.inputs;
@@ -799,6 +868,11 @@ export class TaskDescriptionManager {
 
   setAgentImage(agentImage: string): void {
     this.data.agentImage = agentImage;
+    this.save();
+  }
+
+  setAutoRetryCount(count: number): void {
+    this.data.autoRetryCount = count;
     this.save();
   }
 
@@ -862,6 +936,8 @@ export class TaskDescriptionManager {
       this.data.completedAt = new Date().toISOString();
     } else if (status === 'failed') {
       this.data.failedAt = new Date().toISOString();
+    } else if (status === 'paused') {
+      this.data.pausedAt = new Date().toISOString();
     }
 
     this.save();
@@ -928,7 +1004,15 @@ export class TaskDescriptionManager {
   }
 
   /**
+   * Check if task is paused
+   */
+  isPaused(): boolean {
+    return this.data.status === 'PAUSED';
+  }
+
+  /**
    * Check if task is in an active state (NEW, IN_PROGRESS, or ITERATING)
+   * PAUSED is NOT active - it's idle, waiting for external resume.
    */
   isActive(): boolean {
     return this.isNew() || this.isInProgress() || this.isIterating();

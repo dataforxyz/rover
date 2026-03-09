@@ -21,6 +21,8 @@
  * environment-based test filtering for mock vs real agent tests.
  */
 
+import { chmodSync, existsSync, lstatSync, readdirSync, rmSync } from 'node:fs';
+
 /**
  * When true, tests that require real AI agent execution should run.
  * Set ROVER_E2E_REAL_AGENT=true to enable real agent tests.
@@ -53,6 +55,53 @@ export const SKIP_REAL_AGENT_TESTS = !REAL_AGENT_MODE;
  * ```
  */
 export const SKIP_MOCK_TESTS = REAL_AGENT_MODE;
+
+const makeWritableForCleanup = (path: string) => {
+  if (!existsSync(path)) {
+    return;
+  }
+
+  let entry;
+  try {
+    entry = lstatSync(path);
+  } catch {
+    return;
+  }
+
+  if (entry.isDirectory()) {
+    try {
+      chmodSync(path, 0o700);
+    } catch {}
+
+    let children: string[] = [];
+    try {
+      children = readdirSync(path);
+    } catch {}
+
+    for (const child of children) {
+      makeWritableForCleanup(`${path}/${child}`);
+    }
+    return;
+  }
+
+  if (!entry.isSymbolicLink()) {
+    try {
+      chmodSync(path, 0o600);
+    } catch {}
+  }
+};
+
+export const cleanupE2ETestDir = (path: string) => {
+  if (!existsSync(path)) {
+    return;
+  }
+
+  makeWritableForCleanup(path);
+
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {}
+};
 
 /**
  * ============================================================================

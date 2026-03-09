@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { posix as path } from 'node:path';
 
 // Current schema version
 export const CURRENT_PROJECT_SCHEMA_VERSION = '1.4';
@@ -124,6 +125,25 @@ export const HooksConfigSchema = z.object({
   onComplete: z.array(z.string()).optional(),
 });
 
+const isNormalizedRelativePath = (value: string): boolean => {
+  if (!value || value.includes('\\') || path.isAbsolute(value)) {
+    return false;
+  }
+
+  const normalized = path.normalize(value);
+
+  return (
+    normalized === value && normalized !== '.' && !normalized.startsWith('../')
+  );
+};
+
+const RelativeWorkspacePathSchema = z
+  .string()
+  .refine(isNormalizedRelativePath, {
+    message:
+      'Path must be a normalized relative path within the workspace root',
+  });
+
 /**
  * Sub-project definition for multi-project workspaces
  */
@@ -131,7 +151,7 @@ export const SubProjectSchema = z.object({
   /** Sub-project name */
   name: z.string(),
   /** Relative path from workspace root */
-  path: z.string(),
+  path: RelativeWorkspacePathSchema,
   /** Optional Git repository URL/path to clone into `path` */
   repository: z.string().optional(),
   /** Optional branch/tag/commit to checkout after clone */
@@ -143,36 +163,54 @@ export const SubProjectSchema = z.object({
   /** Task managers used in this sub-project */
   taskManagers: z.array(TaskManagerSchema).optional(),
   /** Initialization script for this sub-project */
-  initScript: z.string().optional(),
+  initScript: RelativeWorkspacePathSchema.optional(),
 });
 
 /**
  * Complete project configuration schema
  * Defines the structure of a rover.json file
  */
-export const ProjectConfigSchema = z.object({
-  /** Schema version for migrations */
-  version: z.string(),
-  /** Supported programming languages in the project */
-  languages: z.array(LanguageSchema),
-  /** MCP server configurations */
-  mcps: z.array(MCPSchema),
-  /** Package managers used in the project */
-  packageManagers: z.array(PackageManagerSchema),
-  /** Task managers used in the project */
-  taskManagers: z.array(TaskManagerSchema),
-  /** Whether to show attribution in outputs */
-  attribution: z.boolean(),
-  /** Optional custom environment variables */
-  envs: z.array(z.string()).optional(),
-  /** Optional path to environment variables file */
-  envsFile: z.string().optional(),
-  /** Optional sandbox configuration */
-  sandbox: SandboxConfigSchema.optional(),
-  /** Optional hooks configuration for task lifecycle events */
-  hooks: HooksConfigSchema.optional(),
-  /** Optional glob patterns for files to exclude from agent context */
-  excludePatterns: z.array(z.string()).optional(),
-  /** Optional sub-projects for multi-project workspaces */
-  projects: z.array(SubProjectSchema).optional(),
-});
+export const ProjectConfigSchema = z
+  .object({
+    /** Schema version for migrations */
+    version: z.string(),
+    /** Supported programming languages in the project */
+    languages: z.array(LanguageSchema),
+    /** MCP server configurations */
+    mcps: z.array(MCPSchema),
+    /** Package managers used in the project */
+    packageManagers: z.array(PackageManagerSchema),
+    /** Task managers used in the project */
+    taskManagers: z.array(TaskManagerSchema),
+    /** Whether to show attribution in outputs */
+    attribution: z.boolean(),
+    /** Optional custom environment variables */
+    envs: z.array(z.string()).optional(),
+    /** Optional path to environment variables file */
+    envsFile: z.string().optional(),
+    /** Optional sandbox configuration */
+    sandbox: SandboxConfigSchema.optional(),
+    /** Optional hooks configuration for task lifecycle events */
+    hooks: HooksConfigSchema.optional(),
+    /** Optional glob patterns for files to exclude from agent context */
+    excludePatterns: z.array(z.string()).optional(),
+    /** Optional sub-projects for multi-project workspaces */
+    projects: z.array(SubProjectSchema).optional(),
+  })
+  .superRefine((config, ctx) => {
+    const seenPaths = new Map<string, number>();
+
+    for (const [index, project] of config.projects?.entries() ?? []) {
+      const previousIndex = seenPaths.get(project.path);
+      if (previousIndex !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['projects', index, 'path'],
+          message: `Duplicate project path "${project.path}" already used by projects[${previousIndex}]`,
+        });
+        continue;
+      }
+
+      seenPaths.set(project.path, index);
+    }
+  });

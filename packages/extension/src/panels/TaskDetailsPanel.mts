@@ -3,7 +3,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { RoverCLI } from '../rover/cli.mjs';
 import { TaskDetails } from '../rover/types.js';
-import { getNonce } from '../lib/nonce.mjs';
 
 export class TaskDetailsPanel {
   public static currentPanel: TaskDetailsPanel | undefined;
@@ -202,23 +201,20 @@ export class TaskDetailsPanel {
 
   private async openFile(filePath: string) {
     try {
-      const resolvedPath = path.resolve(filePath);
-      const workspaceRoots =
-        vscode.workspace.workspaceFolders?.map(folder =>
-          path.resolve(folder.uri.fsPath)
-        ) ?? [];
-
-      if (
-        workspaceRoots.length > 0 &&
-        !workspaceRoots.some(
-          root =>
-            resolvedPath === root || resolvedPath.startsWith(root + path.sep)
-        )
-      ) {
-        vscode.window.showErrorMessage(
-          'Cannot open files outside the workspace'
-        );
-        return;
+      // Validate that the file path is within the workspace or task directory
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (workspaceRoot) {
+        const resolvedPath = path.resolve(filePath);
+        const resolvedRoot = path.resolve(workspaceRoot);
+        if (
+          !resolvedPath.startsWith(resolvedRoot + path.sep) &&
+          resolvedPath !== resolvedRoot
+        ) {
+          vscode.window.showErrorMessage(
+            'Cannot open files outside the workspace'
+          );
+          return;
+        }
       }
 
       const uri = vscode.Uri.file(filePath);
@@ -274,6 +270,13 @@ export class TaskDetailsPanel {
         break;
       case 'refresh':
         this.loadTaskDetails(taskId);
+        break;
+      case 'resumeTask':
+        await vscode.commands.executeCommand('rover.resumeTask', {
+          id: taskId,
+          task: { id: taskId },
+        });
+        await this.loadTaskDetails(taskId);
         break;
       case 'restartTask':
         await vscode.commands.executeCommand('rover.restartTask', {
@@ -351,4 +354,14 @@ export class TaskDetailsPanel {
 </body>
 </html>`;
   }
+}
+
+function getNonce(): string {
+  let text = '';
+  const possible =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
 }

@@ -39,6 +39,10 @@ export interface CreateSandboxOptions {
   sandboxMetadata?: Record<string, unknown>;
   /** Path to mount as /logs inside the container for this iteration */
   iterationLogsPath?: string;
+  /** Path to checkpoint.json for resuming a paused workflow */
+  checkpointPath?: string;
+  /** Resume from an existing checkpoint without resetting workspace state */
+  resumeFromCheckpoint?: boolean;
 }
 
 /**

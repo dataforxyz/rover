@@ -259,9 +259,15 @@ const styles = css`
     color: var(--vscode-testing-iconFailed);
   }
 
+  .status-paused {
+    color: var(--vscode-charts-yellow);
+  }
+
   .status-running,
   .status-initializing,
-  .status-installing {
+  .status-installing,
+  .status-iterating,
+  .status-in_progress {
     color: var(--vscode-testing-iconQueued);
   }
 

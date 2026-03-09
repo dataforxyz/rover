@@ -115,8 +115,11 @@ export class TaskDetailsView extends LitElement {
         return 'status-pushed';
       case 'failed':
         return 'status-failed';
+      case 'paused':
+        return 'status-paused';
       case 'in_progress':
       case 'running':
+      case 'iterating':
       case 'initializing':
       case 'installing':
         return 'status-running';
@@ -135,7 +138,11 @@ export class TaskDetailsView extends LitElement {
         return 'codicon-repo-push';
       case 'FAILED':
         return 'codicon-error';
+      case 'PAUSED':
+        return 'codicon-debug-pause';
       case 'RUNNING':
+      case 'ITERATING':
+      case 'IN_PROGRESS':
       case 'INITIALIZING':
         return 'codicon-sync~spin';
       case 'INSTALLING':
@@ -188,10 +195,16 @@ export class TaskDetailsView extends LitElement {
       `;
     }
 
-    const isRunning = ['running', 'in_progress'].includes(
-      this.taskData.status?.toLowerCase()
-    );
-    const isCompleted = this.taskData.status?.toLowerCase() == 'completed';
+    const isRunning = [
+      'running',
+      'in_progress',
+      'iterating',
+      'initializing',
+      'installing',
+    ].includes(this.taskData.status?.toLowerCase());
+    const isPaused = this.taskData.status?.toLowerCase() === 'paused';
+    const isFailed = this.taskData.status?.toLowerCase() === 'failed';
+    const isCompleted = this.taskData.status?.toLowerCase() === 'completed';
 
     return html`
       <div class="header">
@@ -239,12 +252,43 @@ export class TaskDetailsView extends LitElement {
                     ? ` • Failed ${this.formatRelativeTime(new Date(this.taskData.failedAt))}`
                     : ''
                 }
+                ${
+                  this.taskData.pausedAt
+                    ? ` • Paused ${this.formatRelativeTime(new Date(this.taskData.pausedAt))}`
+                    : ''
+                }
               </span>
             </div>
           </div>
         </div>
         <div class="header-actions">
           <div class="action-buttons">
+            ${
+              isPaused
+                ? html`
+                  <button
+                    class="action-button primary"
+                    @click=${() => this.executeAction('resumeTask')}
+                  >
+                    <span class="codicon codicon-debug-continue"></span>
+                    Resume
+                  </button>
+                `
+                : ''
+            }
+            ${
+              isFailed
+                ? html`
+                  <button
+                    class="action-button primary"
+                    @click=${() => this.executeAction('restartTask')}
+                  >
+                    <span class="codicon codicon-debug-restart"></span>
+                    Retry
+                  </button>
+                `
+                : ''
+            }
             <button
               class="action-button secondary"
               @click=${() => this.executeAction('logs')}

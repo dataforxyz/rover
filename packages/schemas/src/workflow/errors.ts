@@ -14,6 +14,19 @@ export class WorkflowLoadError extends Error {
 }
 
 /**
+ * Error class for workflow save errors
+ */
+export class WorkflowSaveError extends Error {
+  constructor(
+    message: string,
+    public readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = 'WorkflowSaveError';
+  }
+}
+
+/**
  * Error class for workflow validation errors
  */
 export class WorkflowValidationError extends Error {

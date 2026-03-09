@@ -15,6 +15,7 @@ export const IterationStatusNameSchema = z.enum([
   'running',
   'completed',
   'failed',
+  'paused',
 ]);
 
 /**
@@ -25,12 +26,12 @@ export const IterationStatusSchema = z.object({
   /** Original Task ID */
   taskId: z.string(),
 
-  /** Status name (e.g., 'initializing', 'running', 'completed', 'failed') */
+  /** Status name (e.g., 'initializing', 'running', 'completed', 'failed', 'paused') */
   status: IterationStatusNameSchema,
 
   /** Current step name and progress */
   currentStep: z.string(),
-  progress: z.number(),
+  progress: z.number().min(0).max(100),
 
   /** Timestamps in ISO 8601 format */
   startedAt: z.string(),
@@ -39,4 +40,7 @@ export const IterationStatusSchema = z.object({
 
   /** Error information */
   error: z.string().optional(),
+
+  /** AI provider that caused the pause (e.g., 'claude', 'gemini') */
+  provider: z.string().optional(),
 });

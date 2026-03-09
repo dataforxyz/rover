@@ -805,12 +805,6 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
     return;
   }
 
-  if (workflow == null) {
-    jsonOutput.error = `The workflow ${workflow} does not exist`;
-    await exitWithError(jsonOutput, { telemetry });
-    return;
-  }
-
   // Many workflows require instructions and this is the default input we collect
   // from the CLI. We might revisit it in the future when we have more workflows.
   let description = initPrompt?.trim() || '';
@@ -1113,6 +1107,7 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
             exitCode: 1,
             telemetry,
           });
+          return;
         }
       }
     }
