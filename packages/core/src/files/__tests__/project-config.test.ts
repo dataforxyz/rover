@@ -1277,6 +1277,22 @@ describe('ProjectConfigManager - Multi-Project Workspace Support', () => {
     expect(config.projects?.[0].path).toBe('packages/api');
   });
 
+  it('addProject should reject duplicate project paths', () => {
+    const config = ProjectConfigManager.create(testDir);
+
+    config.addProject({ name: 'api', path: 'packages/api' });
+
+    expect(() =>
+      config.addProject({ name: 'worker', path: 'packages/api' })
+    ).toThrow(/Project path already exists/);
+
+    expect(config.projects).toHaveLength(1);
+
+    const jsonData = JSON.parse(readFileSync('rover.json', 'utf8'));
+    expect(jsonData.projects).toHaveLength(1);
+    expect(jsonData.projects[0]).toEqual({ name: 'api', path: 'packages/api' });
+  });
+
   it('removeProject should remove an existing project', () => {
     writeFileSync(
       'rover.json',
