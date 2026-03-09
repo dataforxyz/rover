@@ -15,7 +15,7 @@ export class CodexAgent extends BaseAgent {
   }
 
   override get acpCommand(): string {
-    return 'codex-acp';
+    return 'npx';
   }
 
   getInstallCommand(): string {
@@ -135,7 +135,7 @@ export class CodexAgent extends BaseAgent {
   }
 
   toolArguments(): string[] {
-    return [];
+    return ['-y', '@zed-industries/codex-acp'];
   }
 
   toolInteractiveArguments(
