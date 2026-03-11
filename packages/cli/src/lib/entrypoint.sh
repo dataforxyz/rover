@@ -151,6 +151,14 @@ echo "✅ Package manager MCP is ready"
 {mcpConfigSection}
 {projectRepositoriesSection}
 {exportTaskVariables}
+
+# Ensure agent-installed toolchains are never committed
+for pattern in .tools/ .cache/; do
+  if ! grep -qxF "$pattern" .gitignore 2>/dev/null; then
+    echo "$pattern" >> .gitignore
+  fi
+done
+
 {networkConfigSection}
 {sudoersRemoval}
 {initScriptExecution}

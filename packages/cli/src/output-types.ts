@@ -316,3 +316,13 @@ export interface InspectWorkflowOutput extends CLIJsonOutput {
   workflow?: Workflow;
   source?: string;
 }
+
+// ---------------------------------------------------------------------------
+// build command
+// ---------------------------------------------------------------------------
+
+export interface BuildOutput extends CLIJsonOutput {
+  cacheTag?: string;
+  cached?: boolean;
+  elapsed?: number;
+}

@@ -342,7 +342,12 @@ echo -e "\\n📦 Done installing agent"`;
     const credentialInstallSection = `# Copy credentials (runs on every start, including cached images)
 echo -e "\\n📦 Copying agent credentials"
 sudo rover-agent-install $AGENT
-sudo chown -R $(id -u):$(id -g) $HOME
+# Only fix ownership of credential directories — avoid recursing the entire
+# HOME tree which includes large SDK caches (Flutter, pub-cache, etc.) and
+# can take 4+ minutes on every container start.
+for _cred_dir in $HOME/.codex $HOME/.claude $HOME/.config/github-copilot $HOME/.gemini $HOME/.qwen $HOME/.opencode; do
+  [ -d "$_cred_dir" ] && sudo chown -R $(id -u):$(id -g) "$_cred_dir"
+done
 echo "✅ Credentials copied successfully"`;
 
     // --- MCP config section ---

@@ -69,17 +69,29 @@ export const AGENT_MODELS: Record<AI_AGENT, AgentModelConfig[]> = {
   ],
   [AI_AGENT.Codex]: [
     {
-      name: 'gpt-5.1-codex-max',
-      description: 'Codex-optimized flagship for deep reasoning',
+      name: 'gpt-5.3-codex',
+      description: 'Latest frontier agentic coding model',
       isDefault: true,
     },
-    { name: 'gpt-5.1-codex', description: 'Optimized for codex' },
+    { name: 'gpt-5.4', description: 'Latest frontier agentic coding model' },
+    {
+      name: 'gpt-5.3-codex-spark',
+      description: 'Ultra-fast coding model',
+    },
+    { name: 'gpt-5.2-codex', description: 'Frontier agentic coding model' },
+    {
+      name: 'gpt-5.1-codex-max',
+      description: 'Codex-optimized flagship for deep and fast reasoning',
+    },
+    {
+      name: 'gpt-5.2',
+      description:
+        'Frontier model with improvements across knowledge, reasoning and coding',
+    },
     {
       name: 'gpt-5.1-codex-mini',
-      description: 'Faster and cheaper codex model',
+      description: 'Optimized for codex. Cheaper, faster, but less capable',
     },
-    { name: 'gpt-5.2', description: 'Latest frontier model' },
-    { name: 'gpt-5.1', description: 'Strong general reasoning' },
   ],
   [AI_AGENT.Cursor]: [
     { name: 'auto', description: 'Automatic model selection', isDefault: true },
