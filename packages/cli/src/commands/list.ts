@@ -340,7 +340,11 @@ const listCommand = async (
             const iterStatus = maybeIterationStatus(lastIteration);
             const provider = iterStatus?.provider || task.agent;
             if (provider) {
-              retryScheduler.registerPausedTask(provider, task.id, projectData);
+              await retryScheduler.registerPausedTask(
+                provider,
+                task.id,
+                projectData
+              );
             }
           } else {
             // If task was paused but is no longer, unregister

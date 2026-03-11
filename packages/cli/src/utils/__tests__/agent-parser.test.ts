@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseAgentString, formatAgentWithModel } from '../agent-parser.js';
 import { AI_AGENT } from 'rover-core';
+import { getAgentDefaultModel, resolveModel } from '../../lib/agents/index.js';
+
+// Mock the context module used by getUserDefaultModel
+vi.mock('../../lib/context.js', () => ({
+  getProjectPath: vi.fn(() => null),
+}));
 
 describe('parseAgentString', () => {
   describe('parsing agent without model', () => {
@@ -155,5 +161,38 @@ describe('formatAgentWithModel', () => {
   it('should format gemini with model', () => {
     const result = formatAgentWithModel(AI_AGENT.Gemini, 'flash');
     expect(result).toBe('gemini:flash');
+  });
+});
+
+describe('getAgentDefaultModel', () => {
+  it('returns "sonnet" for Claude', () => {
+    expect(getAgentDefaultModel(AI_AGENT.Claude)).toBe('sonnet');
+  });
+
+  it('returns undefined for Gemini', () => {
+    expect(getAgentDefaultModel(AI_AGENT.Gemini)).toBeUndefined();
+  });
+
+  it('returns undefined for Codex', () => {
+    expect(getAgentDefaultModel(AI_AGENT.Codex)).toBeUndefined();
+  });
+});
+
+describe('resolveModel', () => {
+  it('returns explicit model when provided', () => {
+    expect(resolveModel(AI_AGENT.Claude, 'opus')).toBe('opus');
+  });
+
+  it('falls back to hardcoded default for Claude when no model given', () => {
+    // getUserDefaultModel returns undefined (no project path configured)
+    expect(resolveModel(AI_AGENT.Claude)).toBe('sonnet');
+  });
+
+  it('returns undefined for agents without a hardcoded default and no explicit model', () => {
+    expect(resolveModel(AI_AGENT.Gemini)).toBeUndefined();
+  });
+
+  it('prefers explicit model over hardcoded default', () => {
+    expect(resolveModel(AI_AGENT.Claude, 'haiku')).toBe('haiku');
   });
 });

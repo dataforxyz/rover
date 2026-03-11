@@ -10,9 +10,19 @@ vi.mock('../resume-helper.js', () => ({
   resumeTask: vi.fn(),
 }));
 
+// Mock the claude-usage module — returns null by default (no credentials),
+// so existing blind-backoff tests remain unchanged.
+vi.mock('../claude-usage.js', () => ({
+  checkClaudeUsage: vi.fn().mockResolvedValue(null),
+  invalidateUsageCache: vi.fn(),
+}));
+
 import { resumeTask } from '../resume-helper.js';
+import { checkClaudeUsage, invalidateUsageCache } from '../claude-usage.js';
 
 const mockedResumeTask = vi.mocked(resumeTask);
+const mockedCheckClaudeUsage = vi.mocked(checkClaudeUsage);
+const mockedInvalidateUsageCache = vi.mocked(invalidateUsageCache);
 
 describe('RetryScheduler', () => {
   let scheduler: RetryScheduler;
@@ -22,6 +32,8 @@ describe('RetryScheduler', () => {
     vi.setSystemTime(new Date('2026-01-15T14:00:00.000Z'));
     scheduler = new RetryScheduler();
     mockedResumeTask.mockReset();
+    mockedCheckClaudeUsage.mockReset().mockResolvedValue(null);
+    mockedInvalidateUsageCache.mockReset();
   });
 
   afterEach(() => {
@@ -102,12 +114,14 @@ describe('RetryScheduler', () => {
     path = '/tmp/project',
     taskStatus = 'PAUSED',
     autoRetryCount = 0,
-    restartCount = 0
+    restartCount = 0,
+    agentModel?: string
   ): any {
     const task = {
       status: taskStatus,
       autoRetryCount,
       restartCount,
+      agentModel,
       isPaused: () => taskStatus === 'PAUSED',
       isFailed: () => taskStatus === 'FAILED',
       setAutoRetryCount: vi.fn((count: number) => {
@@ -122,16 +136,16 @@ describe('RetryScheduler', () => {
   }
 
   describe('registerPausedTask', () => {
-    it('creates a new timer for a new provider', () => {
+    it('creates a new timer for a new provider', async () => {
       const mockProject = makeMockProject();
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       const scheduledTime = scheduler.getScheduledTime('claude');
       expect(scheduledTime).toBeDefined();
       expect(scheduledTime!.getTime()).toBeGreaterThan(Date.now());
     });
 
-    it('updates the provider retry time when a newly added task is scheduled earlier', () => {
+    it('updates the provider retry time when a newly added task is scheduled earlier', async () => {
       const mockProject = makeMockProject();
       const randomSpy = vi
         .spyOn(Math, 'random')
@@ -140,10 +154,10 @@ describe('RetryScheduler', () => {
         .mockReturnValueOnce(0)
         .mockReturnValueOnce(0);
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
       const firstScheduledTime = scheduler.getScheduledTime('claude');
 
-      scheduler.registerPausedTask('claude', 2, mockProject);
+      await scheduler.registerPausedTask('claude', 2, mockProject);
       const secondScheduledTime = scheduler.getScheduledTime('claude');
 
       expect(firstScheduledTime).toBeDefined();
@@ -155,19 +169,19 @@ describe('RetryScheduler', () => {
       randomSpy.mockRestore();
     });
 
-    it('creates separate timers for different providers', () => {
+    it('creates separate timers for different providers', async () => {
       const mockProject = makeMockProject();
-      scheduler.registerPausedTask('claude', 1, mockProject);
-      scheduler.registerPausedTask('gemini', 2, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('gemini', 2, mockProject);
 
       expect(scheduler.getScheduledTime('claude')).toBeDefined();
       expect(scheduler.getScheduledTime('gemini')).toBeDefined();
     });
 
-    it('returns task-specific scheduled times for paused tasks', () => {
+    it('returns task-specific scheduled times for paused tasks', async () => {
       const mockProject = makeMockProject();
-      scheduler.registerPausedTask('claude', 1, mockProject);
-      scheduler.registerPausedTask('claude', 2, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 2, mockProject);
 
       expect(scheduler.getScheduledTimeForTask(mockProject, 1)).toBeDefined();
       expect(scheduler.getScheduledTimeForTask(mockProject, 2)).toBeDefined();
@@ -176,12 +190,12 @@ describe('RetryScheduler', () => {
       ).toBeUndefined();
     });
 
-    it('correctly tracks tasks from projects with colons in path', () => {
+    it('correctly tracks tasks from projects with colons in path', async () => {
       const projectA = makeMockProject('/tmp/C:/Users/projectA');
       const projectB = makeMockProject('/home/user:name/project:B');
 
-      scheduler.registerPausedTask('claude', 1, projectA);
-      scheduler.registerPausedTask('claude', 2, projectB);
+      await scheduler.registerPausedTask('claude', 1, projectA);
+      await scheduler.registerPausedTask('claude', 2, projectB);
 
       expect(scheduler.getRetryCount(projectA, 1)).toBe(0);
       expect(scheduler.getRetryCount(projectB, 2)).toBe(0);
@@ -195,12 +209,12 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
       await vi.advanceTimersToNextTimerAsync();
 
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(1);
 
-      scheduler.registerPausedTask('gemini', 1, mockProject);
+      await scheduler.registerPausedTask('gemini', 1, mockProject);
 
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(0);
       const scheduled = scheduler.getScheduledTime('gemini');
@@ -209,7 +223,7 @@ describe('RetryScheduler', () => {
       expect(scheduled!.getUTCHours()).toBe(16);
     });
 
-    it('does not consume auto-retry budget from manual restart history', () => {
+    it('does not consume auto-retry budget from manual restart history', async () => {
       const mockProject = makeMockProject(
         '/tmp/project',
         'PAUSED',
@@ -217,16 +231,16 @@ describe('RetryScheduler', () => {
         MAX_AUTO_RETRIES
       );
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(0);
       expect(scheduler.getScheduledTimeForTask(mockProject, 1)).toBeDefined();
     });
 
-    it('restores persisted auto-retry count across watcher restarts', () => {
+    it('restores persisted auto-retry count across watcher restarts', async () => {
       const mockProject = makeMockProject('/tmp/project', 'PAUSED', 3, 0);
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(3);
       const scheduled = scheduler.getScheduledTimeForTask(mockProject, 1);
@@ -236,10 +250,10 @@ describe('RetryScheduler', () => {
   });
 
   describe('unregisterTask', () => {
-    it('removes a task from the provider group', () => {
+    it('removes a task from the provider group', async () => {
       const mockProject = makeMockProject();
-      scheduler.registerPausedTask('claude', 1, mockProject);
-      scheduler.registerPausedTask('claude', 2, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 2, mockProject);
 
       scheduler.unregisterTask('claude', 1, mockProject);
 
@@ -247,9 +261,9 @@ describe('RetryScheduler', () => {
       expect(scheduler.getScheduledTime('claude')).toBeDefined();
     });
 
-    it('clears timer when last task for provider is removed', () => {
+    it('clears timer when last task for provider is removed', async () => {
       const mockProject = makeMockProject();
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       scheduler.unregisterTask('claude', 1, mockProject);
 
@@ -267,7 +281,7 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
       await vi.advanceTimersToNextTimerAsync();
 
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(1);
@@ -283,8 +297,8 @@ describe('RetryScheduler', () => {
       const projectB = makeMockProject('/tmp/project-b');
       mockedResumeTask.mockResolvedValue({ status: 'ok' });
 
-      scheduler.registerPausedTask('claude', 1, projectA);
-      scheduler.registerPausedTask('claude', 1, projectB);
+      await scheduler.registerPausedTask('claude', 1, projectA);
+      await scheduler.registerPausedTask('claude', 1, projectB);
 
       scheduler.unregisterTask('claude', 1, projectA);
 
@@ -304,7 +318,7 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, colonProject);
+      await scheduler.registerPausedTask('claude', 1, colonProject);
       await vi.advanceTimersToNextTimerAsync();
 
       expect(scheduler.getRetryCount(colonProject, 1)).toBe(1);
@@ -325,7 +339,7 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, colonProject);
+      await scheduler.registerPausedTask('claude', 1, colonProject);
 
       // Exhaust retries so the timer is no longer scheduled but retry count remains.
       for (let i = 0; i < 5; i++) {
@@ -342,10 +356,10 @@ describe('RetryScheduler', () => {
       expect(scheduler.getRetryCount(colonProject, 1)).toBe(0);
     });
 
-    it('handles project paths with multiple colons', () => {
+    it('handles project paths with multiple colons', async () => {
       const multiColonProject = makeMockProject('/path:with:many:colons');
 
-      scheduler.registerPausedTask('claude', 1, multiColonProject);
+      await scheduler.registerPausedTask('claude', 1, multiColonProject);
 
       expect(scheduler.getScheduledTime('claude')).toBeDefined();
 
@@ -361,13 +375,13 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
       await vi.advanceTimersToNextTimerAsync();
 
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(1);
 
       scheduler.unregisterTask('claude', 1, mockProject);
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(0);
     });
@@ -380,10 +394,10 @@ describe('RetryScheduler', () => {
   });
 
   describe('destroy', () => {
-    it('clears all timers', () => {
+    it('clears all timers', async () => {
       const mockProject = makeMockProject();
-      scheduler.registerPausedTask('claude', 1, mockProject);
-      scheduler.registerPausedTask('gemini', 2, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('gemini', 2, mockProject);
 
       scheduler.destroy();
 
@@ -397,8 +411,8 @@ describe('RetryScheduler', () => {
       const mockProject = makeMockProject();
       mockedResumeTask.mockResolvedValue({ status: 'ok' });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
-      scheduler.registerPausedTask('claude', 2, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 2, mockProject);
 
       // Advance time past the scheduled retry
       await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000); // 2 hours
@@ -424,7 +438,7 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       // Advance to fire only the first timer (not the re-registered one)
       await vi.advanceTimersToNextTimerAsync();
@@ -441,7 +455,7 @@ describe('RetryScheduler', () => {
         status: 'not_resumable',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
       await vi.advanceTimersToNextTimerAsync();
 
       expect(mockedResumeTask).toHaveBeenCalledTimes(1);
@@ -453,7 +467,7 @@ describe('RetryScheduler', () => {
       const mockProject = makeMockProject();
       mockedResumeTask.mockRejectedValue(new Error('Container failed'));
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       // Advance to fire only the first timer (not the re-registered one)
       await vi.advanceTimersToNextTimerAsync();
@@ -471,7 +485,7 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       // Fire 5 retry cycles
       for (let i = 0; i < 5; i++) {
@@ -488,7 +502,7 @@ describe('RetryScheduler', () => {
       const mockProject = makeMockProject();
       mockedResumeTask.mockRejectedValue(new Error('Docker broken'));
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       for (let i = 0; i < 5; i++) {
         await vi.advanceTimersToNextTimerAsync();
@@ -505,13 +519,13 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       for (let i = 0; i < 5; i++) {
         await vi.advanceTimersToNextTimerAsync();
       }
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       expect(mockedResumeTask).toHaveBeenCalledTimes(5);
       expect(scheduler.getScheduledTime('claude')).toBeUndefined();
@@ -524,14 +538,14 @@ describe('RetryScheduler', () => {
         error: 'still paused',
       });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       for (let i = 0; i < 5; i++) {
         await vi.advanceTimersToNextTimerAsync();
       }
 
       const logSpy = vi.spyOn(console, 'log');
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('max auto-retries')
@@ -548,7 +562,7 @@ describe('RetryScheduler', () => {
         .mockResolvedValueOnce({ status: 'failed', error: 'still paused' })
         .mockResolvedValueOnce({ status: 'ok' });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
 
       // Fire 3 retry cycles
       for (let i = 0; i < 3; i++) {
@@ -583,14 +597,15 @@ describe('RetryScheduler', () => {
         path: '/tmp/project',
         getTask: vi
           .fn()
-          .mockReturnValueOnce(staleTask)
-          .mockReturnValueOnce(staleTask)
+          .mockReturnValueOnce(staleTask) // autoRetryCount seed
+          .mockReturnValueOnce(staleTask) // agentModel read
+          .mockReturnValueOnce(staleTask) // pre-fire task state check
           .mockReturnValue(resumedTask),
       };
 
       mockedResumeTask.mockResolvedValue({ status: 'ok' });
 
-      scheduler.registerPausedTask('claude', 1, mockProject as any);
+      await scheduler.registerPausedTask('claude', 1, mockProject as any);
       await vi.advanceTimersToNextTimerAsync();
 
       expect(staleTask.setAutoRetryCount).not.toHaveBeenCalled();
@@ -604,13 +619,13 @@ describe('RetryScheduler', () => {
         .mockResolvedValueOnce({ status: 'failed', error: 'still paused' })
         .mockResolvedValue({ status: 'ok' });
 
-      scheduler.registerPausedTask('claude', 1, mockProject);
+      await scheduler.registerPausedTask('claude', 1, mockProject);
       await vi.advanceTimersToNextTimerAsync();
 
       const backedOffRetry = scheduler.getScheduledTime('claude');
       expect(backedOffRetry).toBeDefined();
 
-      scheduler.registerPausedTask('claude', 2, mockProject);
+      await scheduler.registerPausedTask('claude', 2, mockProject);
       const providerScheduledTime = scheduler.getScheduledTime('claude');
 
       expect(providerScheduledTime).toBeDefined();
@@ -627,6 +642,213 @@ describe('RetryScheduler', () => {
       expect(scheduler.getRetryCount(mockProject, 1)).toBe(1);
       // Retry count reset after successful resume
       expect(scheduler.getRetryCount(mockProject, 2)).toBe(0);
+    });
+  });
+
+  describe('usage-informed scheduling', () => {
+    it('uses reset time when Claude usage is exhausted', async () => {
+      const mockProject = makeMockProject();
+      // Usage reports exhausted with reset in 30 minutes
+      const resetTime = new Date('2026-01-15T14:30:00.000Z');
+      mockedCheckClaudeUsage.mockResolvedValue({
+        isExhausted: true,
+        resetsAt: resetTime,
+        utilization: 0.99,
+        limitingBucket: 'five_hour',
+      });
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      const scheduled = scheduler.getScheduledTimeForTask(mockProject, 1);
+      expect(scheduled).toBeDefined();
+      // Should be ~30 min + 2-5 min jitter, not 1 hour blind backoff
+      const delayMs = scheduled!.getTime() - Date.now();
+      expect(delayMs).toBeGreaterThanOrEqual(30 * 60 * 1000);
+      expect(delayMs).toBeLessThanOrEqual(35 * 60 * 1000);
+    });
+
+    it('uses 5-minute delay when Claude usage is not exhausted', async () => {
+      const mockProject = makeMockProject();
+      mockedCheckClaudeUsage.mockResolvedValue({
+        isExhausted: false,
+        resetsAt: null,
+        utilization: 0.5,
+        limitingBucket: null,
+      });
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      const scheduled = scheduler.getScheduledTimeForTask(mockProject, 1);
+      expect(scheduled).toBeDefined();
+      const delayMs = scheduled!.getTime() - Date.now();
+      // Should be 5 minutes
+      expect(delayMs).toBe(5 * 60 * 1000);
+    });
+
+    it('falls back to blind backoff when usage check fails', async () => {
+      const mockProject = makeMockProject();
+      mockedCheckClaudeUsage.mockResolvedValue(null);
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      const scheduled = scheduler.getScheduledTimeForTask(mockProject, 1);
+      expect(scheduled).toBeDefined();
+      // Should be in the blind backoff range (next hour + 2-10 min jitter)
+      expect(scheduled!.getUTCHours()).toBe(15);
+      expect(scheduled!.getUTCMinutes()).toBeGreaterThanOrEqual(2);
+      expect(scheduled!.getUTCMinutes()).toBeLessThanOrEqual(10);
+    });
+
+    it('skips usage check for non-Claude providers', async () => {
+      const mockProject = makeMockProject();
+
+      await scheduler.registerPausedTask('gemini', 1, mockProject);
+
+      expect(mockedCheckClaudeUsage).not.toHaveBeenCalled();
+      const scheduled = scheduler.getScheduledTimeForTask(mockProject, 1);
+      expect(scheduled).toBeDefined();
+    });
+
+    it('falls back to blind backoff when usage check throws', async () => {
+      const mockProject = makeMockProject();
+      mockedCheckClaudeUsage.mockRejectedValue(new Error('Network error'));
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      const scheduled = scheduler.getScheduledTimeForTask(mockProject, 1);
+      expect(scheduled).toBeDefined();
+      // Should be blind backoff
+      expect(scheduled!.getUTCHours()).toBe(15);
+    });
+
+    it('passes task agentModel to checkClaudeUsage during registration', async () => {
+      const mockProject = makeMockProject(
+        '/tmp/project',
+        'PAUSED',
+        0,
+        0,
+        'sonnet'
+      );
+      mockedCheckClaudeUsage.mockResolvedValue(null);
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      expect(mockedCheckClaudeUsage).toHaveBeenCalledWith('sonnet');
+    });
+
+    it('passes undefined model when task has no agentModel', async () => {
+      const mockProject = makeMockProject();
+      mockedCheckClaudeUsage.mockResolvedValue(null);
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      expect(mockedCheckClaudeUsage).toHaveBeenCalledWith(undefined);
+    });
+  });
+
+  describe('pre-fire usage check', () => {
+    it('defers retry without burning attempt when still exhausted', async () => {
+      const mockProject = makeMockProject();
+      // Initial registration: usage check returns null → blind backoff
+      mockedCheckClaudeUsage.mockResolvedValue(null);
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      // Before timer fires, set usage to exhausted
+      const resetTime = new Date(
+        Date.now() + 2 * 60 * 60 * 1000 + 30 * 60 * 1000
+      ); // 2.5h from now
+      mockedCheckClaudeUsage.mockResolvedValue({
+        isExhausted: true,
+        resetsAt: resetTime,
+        utilization: 0.99,
+        limitingBucket: 'five_hour',
+      });
+
+      await vi.advanceTimersToNextTimerAsync();
+
+      // Should have invalidated cache and checked usage
+      expect(mockedInvalidateUsageCache).toHaveBeenCalled();
+      // Should NOT have called resumeTask
+      expect(mockedResumeTask).not.toHaveBeenCalled();
+      // Retry count should not have incremented
+      expect(scheduler.getRetryCount(mockProject, 1)).toBe(0);
+      // Should be re-scheduled
+      expect(scheduler.getScheduledTime('claude')).toBeDefined();
+    });
+
+    it('proceeds with resume when usage is available at fire time', async () => {
+      const mockProject = makeMockProject();
+      mockedCheckClaudeUsage.mockResolvedValue(null);
+      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      // At fire time, usage is available
+      mockedCheckClaudeUsage.mockResolvedValue({
+        isExhausted: false,
+        resetsAt: null,
+        utilization: 0.3,
+        limitingBucket: null,
+      });
+
+      await vi.advanceTimersToNextTimerAsync();
+
+      expect(mockedResumeTask).toHaveBeenCalledTimes(1);
+    });
+
+    it('proceeds with resume when pre-fire usage check fails', async () => {
+      const mockProject = makeMockProject();
+      mockedCheckClaudeUsage.mockResolvedValue(null);
+      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      // At fire time, usage check fails
+      mockedCheckClaudeUsage.mockRejectedValue(new Error('API down'));
+
+      await vi.advanceTimersToNextTimerAsync();
+
+      expect(mockedResumeTask).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips pre-fire usage check for non-Claude providers', async () => {
+      const mockProject = makeMockProject();
+      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+
+      await scheduler.registerPausedTask('gemini', 1, mockProject);
+
+      await vi.advanceTimersToNextTimerAsync();
+
+      expect(mockedInvalidateUsageCache).not.toHaveBeenCalled();
+      expect(mockedResumeTask).toHaveBeenCalledTimes(1);
+    });
+
+    it('passes task agentModel to checkClaudeUsage during pre-fire check', async () => {
+      const mockProject = makeMockProject(
+        '/tmp/project',
+        'PAUSED',
+        0,
+        0,
+        'opus'
+      );
+      // Initial registration: usage check returns null → blind backoff
+      mockedCheckClaudeUsage.mockResolvedValue(null);
+      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+
+      await scheduler.registerPausedTask('claude', 1, mockProject);
+
+      // Reset to track only the pre-fire call
+      mockedCheckClaudeUsage.mockReset().mockResolvedValue({
+        isExhausted: false,
+        resetsAt: null,
+        utilization: 0.3,
+        limitingBucket: null,
+      });
+
+      await vi.advanceTimersToNextTimerAsync();
+
+      expect(mockedCheckClaudeUsage).toHaveBeenCalledWith('opus');
     });
   });
 });

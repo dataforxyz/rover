@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import {
   getAIAgentTool,
   getUserAIAgent,
-  getUserDefaultModel,
+  resolveModel,
 } from '../lib/agents/index.js';
 import {
   ProjectConfigManager,
@@ -768,7 +768,7 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
   // Fill in default models for agents without a specified model
   selectedAgents = selectedAgents.map(({ agent: agentName, model }) => ({
     agent: agentName,
-    model: model ?? getUserDefaultModel(agentName),
+    model: resolveModel(agentName, model),
   }));
 
   // Validate all agents before proceeding

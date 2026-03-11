@@ -28,6 +28,7 @@ import colors from 'ansi-colors';
 import pushCmd from './commands/push.js';
 import stopCmd from './commands/stop.js';
 import mcpCmd from './commands/mcp.js';
+import usageCmd from './commands/usage.js';
 import { addWorkflowCommands } from './commands/workflows/index.js';
 import workflowAddCmd from './commands/workflows/add.js';
 import workflowListCmd from './commands/workflows/list.js';
@@ -65,6 +66,7 @@ const commands: CommandDefinition[] = [
   pushCmd,
   stopCmd,
   mcpCmd,
+  usageCmd,
   workflowAddCmd,
   workflowListCmd,
   workflowInspectCmd,
@@ -558,6 +560,12 @@ export function createProgram(
     .description('Show information about the Rover global store')
     .option('--json', 'Output in JSON format')
     .action(infoCmd.action);
+
+  program
+    .command('usage')
+    .description('Show Claude API usage and rate limit status')
+    .option('--json', 'Output in JSON format')
+    .action(usageCmd.action);
 
   program
     .command('cleanup')
