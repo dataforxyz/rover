@@ -32,18 +32,18 @@ echo "=== Running tests for task $ROVER_TASK_ID ==="
 # Selected test files are passed as extra arguments.
 TEST_ARGS=("$@")
 
-if [[ ${#TEST_ARGS[@]} -eq 0 ]]; then
-    # No specific tests selected — run the full suite
-    TEST_ARGS=("test/")
-fi
-
-echo "  Test targets: ${TEST_ARGS[*]}"
+echo "  Test targets: ${TEST_ARGS[*]:-full suite}"
 echo ""
 
 # ── Run tests ─────────────────────────────────────────────────
 # Capture output for pattern matching by the pipeline.
 set +e
-OUTPUT=$(npm test -- "${TEST_ARGS[@]}" 2>&1)
+if [[ ${#TEST_ARGS[@]} -eq 0 ]]; then
+    # No specific tests selected — run the full suite
+    OUTPUT=$(npm test 2>&1)
+else
+    OUTPUT=$(npm test -- "${TEST_ARGS[@]}" 2>&1)
+fi
 EXIT_CODE=$?
 set -e
 

@@ -1,8 +1,8 @@
 {
   "version": "1.4",
-  "languages": ["javascript"],
+  "languages": ["typescript"],
   "mcps": [],
-  "packageManagers": ["npm"],
+  "packageManagers": ["pnpm"],
   "taskManagers": [],
   "attribution": true
 }
