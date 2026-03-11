@@ -161,3 +161,6 @@ demos/*
 !demos/*.tape
 !demos/README.md
 !demos/run.sh
+
+# Pipeline state
+.rover-pipeline/
