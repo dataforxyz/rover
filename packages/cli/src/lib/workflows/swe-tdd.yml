@@ -363,11 +363,13 @@ steps:
         name: 'Build'
         if: steps.context.outputs.build_command != none
         command: '{{steps.context.outputs.build_command}}'
+        allow_failure: true
 
       - id: run_tests
         type: command
         name: 'Run Tests'
         command: '{{steps.context.outputs.test_command}}'
+        allow_failure: true
 
       - id: fix_code
         type: agent
@@ -452,7 +454,8 @@ steps:
       - id: git_diff
         type: command
         name: 'Capture Git Diff'
-        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1)'
+        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1) -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules"'
+        allow_failure: true
 
       - id: code_review
         type: agent
@@ -592,12 +595,14 @@ steps:
         name: 'Build After Review'
         if: steps.context.outputs.build_command != none
         command: '{{steps.context.outputs.build_command}}'
+        allow_failure: true
 
       - id: run_tests_after_review
         type: command
         name: 'Run Tests After Review'
         if: steps.apply_fixes.outputs.fixes_applied == true
         command: '{{steps.context.outputs.test_command}}'
+        allow_failure: true
 
       - id: fix_regressions
         type: agent

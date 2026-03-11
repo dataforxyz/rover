@@ -27,6 +27,7 @@ import rebaseCmd from './commands/rebase.js';
 import colors from 'ansi-colors';
 import pushCmd from './commands/push.js';
 import stopCmd from './commands/stop.js';
+import buildCmd from './commands/build.js';
 import mcpCmd from './commands/mcp.js';
 import { addWorkflowCommands } from './commands/workflows/index.js';
 import workflowAddCmd from './commands/workflows/add.js';
@@ -64,6 +65,7 @@ const commands: CommandDefinition[] = [
   rebaseCmd,
   pushCmd,
   stopCmd,
+  buildCmd,
   mcpCmd,
   workflowAddCmd,
   workflowListCmd,
@@ -519,6 +521,10 @@ export function createProgram(
       'Max parallel AI conflict resolutions',
       '4'
     )
+    .option(
+      '-b, --base <branch>',
+      'Target branch to rebase onto (defaults to current branch)'
+    )
     .option('-f, --force', 'Force rebase without confirmation')
     .option('--json', 'Output in JSON format')
     .option(
@@ -551,6 +557,19 @@ export function createProgram(
     .command('mcp')
     .description('Start Rover as an MCP server')
     .action(mcpCmd.action);
+
+  program.commandsGroup(colors.cyan('Container management:'));
+
+  program
+    .command('build')
+    .description('Build the container cache image (install languages, tools, deps)')
+    .option(
+      '-a, --agent <agent>',
+      `AI agent to build for (default: project default). Available: ${Object.values(AI_AGENT).join(', ')}`
+    )
+    .option('-f, --force', 'Rebuild even if a cached image already exists')
+    .option('--json', 'Output in JSON format')
+    .action(buildCmd.action);
 
   program.commandsGroup(colors.cyan('Rover store:'));
   program

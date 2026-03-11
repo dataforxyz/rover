@@ -36,6 +36,10 @@ COPY --from=agent-builder /rover-agent.tgz /rover-agent.tgz
 RUN npm install -g mcp-remote@0.1.37
 RUN npm install -g /rover-agent.tgz
 
+# Set default git identity for agent commits
+RUN git config --system user.email "rover-agent@rover.dev" && \
+    git config --system user.name "Rover Agent"
+
 COPY ./images/agent/assets/1-sudoers-setup /etc/sudoers.d/1-agent-setup
 COPY ./images/agent/assets/2-sudoers-cleanup /etc/sudoers.d/2-agent-cleanup
 COPY ./images/agent/assets/rover-agent-install /usr/local/bin/rover-agent-install

@@ -62,6 +62,7 @@ export const resolveRebaseConflicts = async (
 
 interface RebaseOptions {
   agent?: string;
+  base?: string;
   concurrency?: string;
   contextLines?: string;
   sendFullFile?: boolean;
@@ -233,8 +234,8 @@ export const rebaseCommand = async (
       return;
     }
 
-    // Get current branch name
-    const currentBranch = git.getCurrentBranch();
+    // Determine target branch: explicit --base flag, or fall back to current checkout
+    const currentBranch = options.base || git.getCurrentBranch();
     jsonOutput.currentBranch = currentBranch;
 
     // Check if worktree has uncommitted changes (before squashing)
