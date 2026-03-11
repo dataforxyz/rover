@@ -10,6 +10,27 @@ import { UserSettingsManager, AI_AGENT, launchSync } from 'rover-core';
 import type { WorkflowInput } from 'rover-schemas';
 import { getProjectPath } from '../context.js';
 
+const AGENT_DEFAULT_MODELS: Partial<Record<AI_AGENT, string>> = {
+  [AI_AGENT.Claude]: 'sonnet',
+};
+
+/**
+ * Get the hardcoded default model for an agent.
+ */
+export function getAgentDefaultModel(agent: AI_AGENT): string | undefined {
+  return AGENT_DEFAULT_MODELS[agent];
+}
+
+/**
+ * Resolve the model for an agent: explicit model → user setting → hardcoded default.
+ */
+export function resolveModel(
+  agent: AI_AGENT,
+  model?: string
+): string | undefined {
+  return model ?? getUserDefaultModel(agent) ?? getAgentDefaultModel(agent);
+}
+
 export const findKeychainCredentials = (key: string): string => {
   const result = launchSync(
     'security',

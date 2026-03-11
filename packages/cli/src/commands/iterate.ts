@@ -19,7 +19,7 @@ import { TaskNotFoundError } from 'rover-schemas';
 import {
   getAIAgentTool,
   getUserAIAgent,
-  getUserDefaultModel,
+  resolveModel,
   type AIAgentTool,
 } from '../lib/agents/index.js';
 import { parseAgentString } from '../utils/agent-parser.js';
@@ -308,7 +308,7 @@ const iterateCommand = async (
       if (options.agent) {
         const parsed = parseAgentString(options.agent);
         selectedAiAgent = parsed.agent;
-        selectedModel = parsed.model ?? getUserDefaultModel(parsed.agent);
+        selectedModel = resolveModel(parsed.agent, parsed.model);
         task.setAgent(selectedAiAgent, selectedModel);
       } else if (task.agent) {
         selectedAiAgent = task.agent;
