@@ -562,7 +562,9 @@ export function createProgram(
 
   program
     .command('build')
-    .description('Build the container cache image (install languages, tools, deps)')
+    .description(
+      'Build the container cache image (install languages, tools, deps)'
+    )
     .option(
       '-a, --agent <agent>',
       `AI agent to build for (default: project default). Available: ${Object.values(AI_AGENT).join(', ')}`

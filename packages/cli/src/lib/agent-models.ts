@@ -85,7 +85,8 @@ export const AGENT_MODELS: Record<AI_AGENT, AgentModelConfig[]> = {
     },
     {
       name: 'gpt-5.2',
-      description: 'Frontier model with improvements across knowledge, reasoning and coding',
+      description:
+        'Frontier model with improvements across knowledge, reasoning and coding',
     },
     {
       name: 'gpt-5.1-codex-mini',

@@ -2,16 +2,25 @@ import colors from 'ansi-colors';
 import { writeFileSync, chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { ProjectConfigManager, showProperties, showTitle, launch } from 'rover-core';
+import {
+  ProjectConfigManager,
+  showProperties,
+  showTitle,
+  launch,
+} from 'rover-core';
 import { getProjectPath, isJsonMode } from '../lib/context.js';
 import { getAvailableSandboxBackend } from '../lib/sandbox/index.js';
-import { ContainerBackend, resolveAgentImage } from '../lib/sandbox/container-common.js';
+import {
+  ContainerBackend,
+  resolveAgentImage,
+} from '../lib/sandbox/container-common.js';
 import {
   checkImageCache,
   waitForInitAndCommit,
 } from '../lib/sandbox/container-image-cache.js';
 import { exitWithError, exitWithSuccess } from '../utils/exit.js';
 import type { CommandDefinition } from '../types.js';
+import type { BuildOutput } from '../output-types.js';
 import { getTelemetry } from '../lib/telemetry.js';
 import { getUserAIAgent } from '../lib/agents/index.js';
 import { getAIAgentTool } from '../lib/agents/index.js';
@@ -91,7 +100,7 @@ function getPackages(projectConfig: ProjectConfigManager): SandboxPackage[] {
 
 function generateBuildEntrypoint(
   agent: string,
-  projectConfig: ProjectConfigManager,
+  projectConfig: ProjectConfigManager
 ): string {
   const allPackages = getPackages(projectConfig);
 
@@ -184,14 +193,10 @@ exec "$@"
 }
 
 const buildCommand = async (
-  options: {
-    json?: boolean;
-    agent?: string;
-    force?: boolean;
-  } = {}
+  options: { json?: boolean; agent?: string; force?: boolean } = {}
 ) => {
   const telemetry = getTelemetry();
-  const jsonOutput: Record<string, unknown> = { success: true };
+  const jsonOutput: BuildOutput = { success: true };
 
   try {
     const projectPath = getProjectPath() || process.cwd();
@@ -201,10 +206,11 @@ const buildCommand = async (
     if (!isJsonMode()) {
       showTitle('Build Cache Image');
       showProperties({
-        'Project': projectPath,
-        'Agent': agent,
-        'Languages': (projectConfig.allLanguages ?? []).join(', ') || '-',
-        'Package managers': (projectConfig.allPackageManagers ?? []).join(', ') || '-',
+        Project: projectPath,
+        Agent: agent,
+        Languages: (projectConfig.allLanguages ?? []).join(', ') || '-',
+        'Package managers':
+          (projectConfig.allPackageManagers ?? []).join(', ') || '-',
       });
       console.log();
     }
@@ -213,14 +219,16 @@ const buildCommand = async (
     const backendName = await getAvailableSandboxBackend();
     if (!backendName) {
       jsonOutput.success = false;
-      jsonOutput.error = 'No container backend available. Install Docker or Podman.';
+      jsonOutput.error =
+        'No container backend available. Install Docker or Podman.';
       await exitWithError(jsonOutput, { telemetry });
       return;
     }
 
-    const backend = backendName === 'docker'
-      ? ContainerBackend.Docker
-      : ContainerBackend.Podman;
+    const backend =
+      backendName === 'docker'
+        ? ContainerBackend.Docker
+        : ContainerBackend.Podman;
 
     // 2. Resolve agent image
     const agentImage = resolveAgentImage(projectConfig, undefined);
@@ -230,12 +238,14 @@ const buildCommand = async (
       backend,
       projectConfig,
       agentImage,
-      agent,
+      agent
     );
 
     if (hasCachedImage && !options.force) {
       if (!isJsonMode()) {
-        console.log(colors.green('Cache image already exists: ') + colors.cyan(cacheTag));
+        console.log(
+          colors.green('Cache image already exists: ') + colors.cyan(cacheTag)
+        );
         console.log(colors.gray('Use --force to rebuild'));
       }
       jsonOutput.cacheTag = cacheTag;
@@ -259,7 +269,10 @@ const buildCommand = async (
     const tmpDir = join(tmpdir(), `rover-build-${Date.now()}`);
     mkdirSync(tmpDir, { recursive: true });
     const entrypointPath = join(tmpDir, 'entrypoint.sh');
-    writeFileSync(entrypointPath, generateBuildEntrypoint(agent, projectConfig));
+    writeFileSync(
+      entrypointPath,
+      generateBuildEntrypoint(agent, projectConfig)
+    );
     chmodSync(entrypointPath, 0o755);
 
     // 5. Create init-only container
@@ -276,11 +289,17 @@ const buildCommand = async (
     }
 
     const dockerArgs = [
-      'create', '--name', containerName,
-      '-v', `${projectPath}:/workspace:Z,ro`,
-      '-v', `${entrypointPath}:/entrypoint.sh:Z,ro`,
-      '-w', '/workspace',
-      '--entrypoint', '/entrypoint.sh',
+      'create',
+      '--name',
+      containerName,
+      '-v',
+      `${projectPath}:/workspace:Z,ro`,
+      '-v',
+      `${entrypointPath}:/entrypoint.sh:Z,ro`,
+      '-w',
+      '/workspace',
+      '--entrypoint',
+      '/entrypoint.sh',
     ];
 
     // Add agent-specific mounts (credential files)
@@ -307,7 +326,9 @@ const buildCommand = async (
     await launch(backendName, dockerArgs);
 
     if (!isJsonMode()) {
-      console.log('Running setup (installing languages, tools, dependencies)...');
+      console.log(
+        'Running setup (installing languages, tools, dependencies)...'
+      );
     }
 
     await launch(backendName, ['start', '-a', containerName]);
@@ -318,7 +339,7 @@ const buildCommand = async (
       containerName,
       cacheTag,
       projectPath,
-      agent,
+      agent
     );
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -336,7 +357,11 @@ const buildCommand = async (
         console.log(colors.green(`Cache image built in ${elapsed}s`));
         console.log(colors.cyan(`  Tag: ${cacheTag}`));
         console.log();
-        console.log(colors.gray('Future tasks will use this cached image for faster startup.'));
+        console.log(
+          colors.gray(
+            'Future tasks will use this cached image for faster startup.'
+          )
+        );
       }
       jsonOutput.cacheTag = cacheTag;
       jsonOutput.elapsed = parseFloat(elapsed);
