@@ -310,9 +310,23 @@ const buildCommand = async (
       // Agent tool not found — skip mounts
     }
 
-    // Add extra args from project config (cache volumes, etc.)
+    // Add extra args from project config, but NOT volume mounts.
+    // Volume mounts are excluded during build so that all installed content
+    // (languages, package caches) is baked into the committed image rather
+    // than going into named volumes that docker commit ignores.
+    // This way the cache image is self-contained and works without volumes.
     const configExtraArgs = projectConfig.sandboxExtraArgs ?? [];
-    for (const arg of configExtraArgs) {
+    for (let i = 0; i < configExtraArgs.length; i++) {
+      const arg = configExtraArgs[i];
+      if (arg === '-v' || arg === '--volume') {
+        // Skip -v and its value
+        i++;
+        continue;
+      }
+      // Skip --volume=... form
+      if (arg.startsWith('--volume=') || arg.startsWith('-v=')) {
+        continue;
+      }
       dockerArgs.push(arg);
     }
 
