@@ -262,6 +262,82 @@ sudo chown -R $(id -u):$(id -g) /workspace
 source $HOME/.profile`;
     }
 
+    // --- workspace dependency resolution (runs even with cached images) ---
+    // Some package managers (uv, poetry, pip -e) create virtualenvs in /workspace
+    // which can't be done during image build (/workspace is read-only).
+    // Resolve deps here since /workspace is now read-write.
+    let workspaceDeps = '';
+    if (useCachedImage) {
+      const depCmds: string[] = [];
+      const pms = this.projectConfig.allPackageManagers ?? [];
+      if (pms.includes('uv')) {
+        depCmds.push(
+          'if [ -f /workspace/pyproject.toml ]; then',
+          '  echo "📦 Resolving Python dependencies (uv)..."',
+          '  cd /workspace && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true',
+          '  # Add venv to PATH so python/pytest are available without "uv run"',
+          '  if [ -d /workspace/.venv/bin ]; then',
+          '    export PATH="/workspace/.venv/bin:$PATH"',
+          '    echo \'export PATH="/workspace/.venv/bin:$PATH"\' >> $HOME/.profile',
+          '  fi',
+          'fi'
+        );
+      }
+      if (pms.includes('poetry')) {
+        depCmds.push(
+          'if [ -f /workspace/pyproject.toml ]; then',
+          '  echo "📦 Resolving Python dependencies (poetry)..."',
+          '  cd /workspace && poetry install --no-interaction 2>/dev/null || true',
+          'fi'
+        );
+      }
+      if (pms.includes('pub')) {
+        depCmds.push(
+          'if [ -f /workspace/pubspec.yaml ]; then',
+          '  echo "📦 Resolving Dart dependencies..."',
+          '  cd /workspace && flutter pub get 2>/dev/null || dart pub get 2>/dev/null || true',
+          'fi'
+        );
+      }
+      if (pms.includes('pnpm')) {
+        depCmds.push(
+          'if [ -f /workspace/pnpm-lock.yaml ]; then',
+          '  echo "📦 Resolving Node dependencies (pnpm)..."',
+          '  cd /workspace && pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true',
+          'fi'
+        );
+      }
+      if (pms.includes('npm')) {
+        depCmds.push(
+          'if [ -f /workspace/package-lock.json ]; then',
+          '  echo "📦 Resolving Node dependencies (npm)..."',
+          '  cd /workspace && npm ci 2>/dev/null || npm install 2>/dev/null || true',
+          'fi'
+        );
+      }
+      if (pms.includes('yarn')) {
+        depCmds.push(
+          'if [ -f /workspace/yarn.lock ]; then',
+          '  echo "📦 Resolving Node dependencies (yarn)..."',
+          '  cd /workspace && yarn install --frozen-lockfile 2>/dev/null || yarn install 2>/dev/null || true',
+          'fi'
+        );
+      }
+      if (pms.includes('gomod')) {
+        depCmds.push(
+          'if [ -f /workspace/go.mod ]; then',
+          '  echo "📦 Resolving Go dependencies..."',
+          '  cd /workspace && go mod download 2>/dev/null || true',
+          'elif [ -f /workspace/src/go.mod ]; then',
+          '  cd /workspace/src && go mod download 2>/dev/null || true',
+          'fi'
+        );
+      }
+      if (depCmds.length > 0) {
+        workspaceDeps = depCmds.join('\n');
+      }
+    }
+
     // --- package installation ---
     let installAllPackages = '';
     if (!useCachedImage) {
@@ -712,6 +788,7 @@ echo "======================================="
       aptGetUpdate,
       homeSetup,
       installAllPackages,
+      workspaceDeps,
       agentInstallSection,
       credentialInstallSection,
       mcpConfigSection,
