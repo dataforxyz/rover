@@ -2,6 +2,12 @@ import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
+  define: {
+    __BUILD_CONFIG__: JSON.stringify({
+      apiKey: 'test-api-key',
+      host: 'https://example.test',
+    }),
+  },
   resolve: {
     alias: {
       'rover-core': fileURLToPath(
