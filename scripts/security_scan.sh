@@ -21,7 +21,7 @@ WORKTREE="${1:-$ROVER_WORKTREE}"
 
 cd "$WORKTREE"
 
-echo "=== Security scan for task $ROVER_TASK_ID ==="
+echo "=== Security scan for task ${ROVER_TASK_ID:-unknown} ==="
 FAILED=false
 
 # ── Check for dangerous patterns ─────────────────────────────
