@@ -7,11 +7,13 @@ import type {
   TelemetryStatusSchema,
   GlobalProjectSchema,
   GlobalConfigSchema,
+  GlobalDefaultsSchema,
   AttributionStatusSchema,
 } from './schema.js';
 
 // Inferred types from Zod schemas
 export type TelemetryStatus = z.infer<typeof TelemetryStatusSchema>;
 export type AttributionStatus = z.infer<typeof AttributionStatusSchema>;
+export type GlobalDefaults = z.infer<typeof GlobalDefaultsSchema>;
 export type GlobalProject = z.infer<typeof GlobalProjectSchema>;
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;

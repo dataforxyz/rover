@@ -17,6 +17,7 @@ import {
   PROJECT_CONFIG_FILENAME,
   type AttributionStatus,
   type GlobalConfig,
+  type GlobalDefaults,
   type GlobalProject,
   type TelemetryStatus,
 } from 'rover-schemas';
@@ -164,8 +165,12 @@ export class GlobalConfigManager {
       return data as GlobalConfig;
     }
 
-    // Future migrations will be added here
-    // For now, return as-is since this is the first version
+    // v1.0 -> v1.1: add optional defaults field
+    if (data.version === '1.0') {
+      data.version = '1.1';
+      // defaults is optional, no need to set it
+    }
+
     return data as GlobalConfig;
   }
 
@@ -232,6 +237,14 @@ export class GlobalConfigManager {
     return this.data.updatedAt;
   }
 
+  get defaults(): GlobalDefaults | undefined {
+    return this.data.defaults;
+  }
+
+  get agentImage(): string | undefined {
+    return this.data.defaults?.agentImage;
+  }
+
   get projects(): GlobalProject[] {
     return this.data.projects;
   }
@@ -259,6 +272,17 @@ export class GlobalConfigManager {
    */
   setAttribution(status: AttributionStatus): void {
     this.data.attribution = status;
+    this.save();
+  }
+
+  /**
+   * Set the default agent image for all projects
+   */
+  setAgentImage(image: string | undefined): void {
+    if (!this.data.defaults) {
+      this.data.defaults = {};
+    }
+    this.data.defaults.agentImage = image;
     this.save();
   }
 

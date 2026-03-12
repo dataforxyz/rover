@@ -185,6 +185,7 @@ export {
 export type {
   AttributionStatus,
   TelemetryStatus,
+  GlobalDefaults,
   GlobalProject,
   GlobalConfig,
 } from './global-config/types.js';
@@ -199,6 +200,7 @@ export {
   CURRENT_GLOBAL_CONFIG_VERSION,
   GLOBAL_CONFIG_FILENAME,
   GlobalConfigSchema,
+  GlobalDefaultsSchema,
 } from './global-config/schema.js';
 
 // JSONL Log library

@@ -1,4 +1,4 @@
-import { launch, ProjectConfigManager } from 'rover-core';
+import { launch, ProjectConfigManager, GlobalConfigManager } from 'rover-core';
 import colors from 'ansi-colors';
 import {
   existsSync,
@@ -51,8 +51,9 @@ export function getDefaultAgentImage(): string {
  * Resolves the agent image to use, with precedence:
  * 1. ROVER_AGENT_IMAGE environment variable
  * 2. storedImage from task (if provided)
- * 3. agentImage from ProjectConfig
- * 4. Default image based on CLI version
+ * 3. agentImage from ProjectConfig (rover.json)
+ * 4. agentImage from GlobalConfig (~/.rover/config/rover.json defaults)
+ * 5. Default image based on CLI version
  */
 export function resolveAgentImage(
   projectConfig?: ProjectConfigManager,
@@ -72,6 +73,16 @@ export function resolveAgentImage(
   // Check project config if available
   if (projectConfig?.agentImage) {
     return projectConfig.agentImage;
+  }
+
+  // Check global config defaults
+  try {
+    const globalConfig = GlobalConfigManager.load();
+    if (globalConfig.agentImage) {
+      return globalConfig.agentImage;
+    }
+  } catch {
+    // Global config may not exist or be corrupt — fall through
   }
 
   // Fall back to default image

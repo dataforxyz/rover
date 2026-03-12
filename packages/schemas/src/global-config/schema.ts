@@ -11,7 +11,7 @@ import {
 } from '../project-config/schema.js';
 
 // Current schema version
-export const CURRENT_GLOBAL_CONFIG_VERSION = '1.0';
+export const CURRENT_GLOBAL_CONFIG_VERSION = '1.1';
 
 // Filename constant
 export const GLOBAL_CONFIG_FILENAME = 'rover.json';
@@ -56,6 +56,14 @@ export const GlobalProjectSchema = z.object({
 });
 
 /**
+ * Global defaults that apply to all projects unless overridden
+ */
+export const GlobalDefaultsSchema = z.object({
+  /** Default Docker/Podman agent image for all projects */
+  agentImage: z.string().optional(),
+});
+
+/**
  * Complete global configuration schema
  * Defines the structure of the global config.json file
  */
@@ -74,6 +82,8 @@ export const GlobalConfigSchema = z.object({
   createdAt: z.iso.datetime(),
   /** Timestamp when the configuration was last updated */
   updatedAt: z.iso.datetime(),
+  /** Global defaults that apply to all projects */
+  defaults: GlobalDefaultsSchema.optional(),
   /** List of projects available in the system */
   projects: z.array(GlobalProjectSchema),
 });
