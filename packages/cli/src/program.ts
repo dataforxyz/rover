@@ -26,6 +26,7 @@ import mergeCmd from './commands/merge.js';
 import rebaseCmd from './commands/rebase.js';
 import colors from 'ansi-colors';
 import pushCmd from './commands/push.js';
+import pauseCmd from './commands/pause.js';
 import stopCmd from './commands/stop.js';
 import buildCmd from './commands/build.js';
 import mcpCmd from './commands/mcp.js';
@@ -61,6 +62,7 @@ const commands: CommandDefinition[] = [
   resetCmd,
   restartCmd,
   resumeCmd,
+  pauseCmd,
   deleteCmd,
   mergeCmd,
   rebaseCmd,
@@ -364,8 +366,18 @@ export function createProgram(
     .command('resume')
     .description('Resume a paused or failed task from checkpoint')
     .argument('<taskId>', 'Task ID to resume')
+    .option('-a, --agent <agent>', 'Override agent (e.g., claude:opus, codex:spark)')
     .option('--json', 'Output the result in JSON format')
     .action(resumeCmd.action);
+
+  // Pause a running task (preserves state for resume)
+  program
+    .command('pause')
+    .description('Gracefully pause a running task (preserves checkpoint for resume)')
+    .argument('<taskId>', 'Task ID to pause')
+    .option('-r, --reason <reason>', 'Reason for pausing the task')
+    .option('--json', 'Output the result in JSON format')
+    .action(pauseCmd.action);
 
   // Stop a running task
   program

@@ -194,12 +194,12 @@ describe('claude-usage', () => {
   });
 
   describe('analyzeUsage', () => {
-    it('detects exhaustion when utilization >= 95%', () => {
+    it('detects exhaustion when utilization >= 99%', () => {
       const usage: ClaudeUsageResponse = {
         five_hour: {
           limit: 1000,
-          remaining: 30,
-          utilization: 0.97,
+          remaining: 5,
+          utilization: 0.995,
           resets_at: '2026-01-15T19:00:00Z',
           expires_at: '2026-01-15T19:00:00Z',
         },
@@ -216,7 +216,7 @@ describe('claude-usage', () => {
       expect(result.isExhausted).toBe(true);
       expect(result.limitingBucket).toBe('five_hour');
       expect(result.resetsAt).toEqual(new Date('2026-01-15T19:00:00Z'));
-      expect(result.utilization).toBe(0.97);
+      expect(result.utilization).toBe(0.995);
     });
 
     it('returns not exhausted when all buckets are below threshold', () => {
@@ -286,12 +286,12 @@ describe('claude-usage', () => {
       expect(result.utilization).toBe(0);
     });
 
-    it('detects exhaustion at exactly 95% threshold', () => {
+    it('detects exhaustion at exactly 99% threshold', () => {
       const usage: ClaudeUsageResponse = {
         five_hour: {
           limit: 1000,
-          remaining: 50,
-          utilization: 0.95,
+          remaining: 10,
+          utilization: 0.99,
           resets_at: '2026-01-15T19:00:00Z',
           expires_at: '2026-01-15T19:00:00Z',
         },
@@ -299,6 +299,21 @@ describe('claude-usage', () => {
 
       const result = analyzeUsage(usage);
       expect(result.isExhausted).toBe(true);
+    });
+
+    it('does not trigger at 97% (below 99% threshold)', () => {
+      const usage: ClaudeUsageResponse = {
+        five_hour: {
+          limit: 1000,
+          remaining: 30,
+          utilization: 0.97,
+          resets_at: '2026-01-15T19:00:00Z',
+          expires_at: '2026-01-15T19:00:00Z',
+        },
+      };
+
+      const result = analyzeUsage(usage);
+      expect(result.isExhausted).toBe(false);
     });
   });
 

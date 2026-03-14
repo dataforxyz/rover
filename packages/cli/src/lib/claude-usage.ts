@@ -15,11 +15,22 @@ export interface UsageBucket {
   expires_at: string;
 }
 
+export interface ExtraUsageBucket {
+  is_enabled: boolean;
+  monthly_limit: number | null;
+  used_credits: number | null;
+  utilization: number | null;
+}
+
 export interface ClaudeUsageResponse {
   five_hour?: UsageBucket | null;
   seven_day?: UsageBucket | null;
   seven_day_sonnet?: UsageBucket | null;
   seven_day_opus?: UsageBucket | null;
+  seven_day_oauth_apps?: UsageBucket | null;
+  seven_day_cowork?: UsageBucket | null;
+  iguana_necktie?: UsageBucket | null;
+  extra_usage?: ExtraUsageBucket | null;
 }
 
 export interface UsageCheckResult {
@@ -171,7 +182,9 @@ export function getRelevantBuckets(
 // Usage analysis
 // ---------------------------------------------------------------------------
 
-const EXHAUSTION_THRESHOLD = 0.95;
+// Pipeline handles usage gating at configurable thresholds (default 10% reserve).
+// Rover only self-pauses as a last-resort safety net at 1% remaining.
+const EXHAUSTION_THRESHOLD = 0.99;
 
 const ALL_BUCKET_NAMES: (keyof ClaudeUsageResponse)[] = [
   'five_hour',

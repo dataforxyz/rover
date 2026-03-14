@@ -196,6 +196,9 @@ export interface ResumeOptions {
   quiet?: boolean;
   /** Keep the persisted auto-retry counter when the scheduler is resuming. */
   preserveAutoRetryCount?: boolean;
+  /** Override the agent (e.g. "claude") and optionally model (e.g. "opus"). */
+  agent?: string;
+  agentModel?: string;
 }
 
 export async function resumeTask(
@@ -542,6 +545,11 @@ async function resumeTaskLocked(
     );
     restoreResumableStatus('Resume failed: iteration initialization error');
     return { status: 'failed', error: errorMsg };
+  }
+
+  // Apply agent/model override if provided via options
+  if (options.agent) {
+    task.setAgent(options.agent, options.agentModel);
   }
 
   // Check if user provided a custom agent image via environment variable

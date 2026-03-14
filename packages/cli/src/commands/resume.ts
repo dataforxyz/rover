@@ -10,6 +10,7 @@ import {
   requireProjectContext,
 } from '../lib/context.js';
 import { resumeTask } from '../lib/resume-helper.js';
+import { parseAgentString } from '../utils/agent-parser.js';
 import type { CommandDefinition } from '../types.js';
 import type { TaskResumeOutput } from '../output-types.js';
 
@@ -27,7 +28,7 @@ import type { TaskResumeOutput } from '../output-types.js';
  */
 const resumeCommand = async (
   taskId: string,
-  options: { json?: boolean } = {}
+  options: { json?: boolean; agent?: string } = {}
 ) => {
   if (options.json !== undefined) {
     setJsonMode(options.json);
@@ -84,6 +85,27 @@ const resumeCommand = async (
         telemetry,
       });
       return;
+    }
+
+    // Apply agent override if provided
+    if (options.agent) {
+      try {
+        const parsed = parseAgentString(options.agent);
+        const previousAgent = task.agent;
+        const previousModel = task.agentModel;
+        task.setAgent(parsed.agent, parsed.model);
+        if (!isJsonMode()) {
+          console.log(
+            colors.yellow(
+              `⚡ Switching agent: ${previousAgent}${previousModel ? ':' + previousModel : ''} → ${parsed.agent}${parsed.model ? ':' + parsed.model : ''}`
+            )
+          );
+        }
+      } catch (error) {
+        jsonOutput.error = error instanceof Error ? error.message : String(error);
+        await exitWithError(jsonOutput, { telemetry });
+        return;
+      }
     }
 
     // Display resume info
