@@ -557,6 +557,17 @@ async function resumeTaskLocked(
     task.setAgentImage(process.env.ROVER_AGENT_IMAGE);
   }
 
+  // Remove stale .pause-requested file so the resumed agent doesn't
+  // immediately re-pause from a previous pause request.
+  const pauseRequestFile = join(iterationPath, '.pause-requested');
+  if (existsSync(pauseRequestFile)) {
+    try {
+      unlinkSync(pauseRequestFile);
+    } catch {
+      // Non-fatal — the agent will still try to run
+    }
+  }
+
   // Start sandbox container for task execution
   try {
     const sandbox = await createSandbox(task, undefined, {
