@@ -317,6 +317,7 @@ steps:
       3. Make the tests pass — this is your primary goal
       4. Make minimal, maintainable changes that fit existing patterns
       5. Do not modify the test files unless absolutely necessary
+      6. **Scope discipline**: Only modify files directly related to the task. Do not refactor, clean up, or "improve" surrounding code. Do not delete or modify tests, mocks, or files unrelated to the task. If you find yourself editing a file that isn't mentioned in the plan, stop and reconsider.
 
       ### Phase 3: Output
 
@@ -381,38 +382,20 @@ steps:
 
           ---
 
-          Task:
           Title: {{inputs.title}}
           Description:
           {{inputs.description}}
 
-          Build output (stdout):
-          ```
-          {{steps.build.outputs.stdout}}
-          ```
-
+          Build exit code: {{steps.build.outputs.exit_code}}
           Build errors (stderr):
           ```
           {{steps.build.outputs.stderr}}
           ```
 
-          Build exit code: {{steps.build.outputs.exit_code}}
-
-          Test command output (stdout):
-          ```
-          {{steps.run_tests.outputs.stdout}}
-          ```
-
-          Test command errors (stderr):
+          Test exit code: {{steps.run_tests.outputs.exit_code}}
+          Test errors (stderr):
           ```
           {{steps.run_tests.outputs.stderr}}
-          ```
-
-          Test exit code: {{steps.run_tests.outputs.exit_code}}
-
-          Previous implementation changes:
-          ```
-          {{steps.implement.outputs.changes_file}}
           ```
           ---
 
@@ -423,8 +406,9 @@ steps:
           3. Identify the root cause of each failure
           4. Fix the implementation code (NOT the tests) to make tests pass
           5. Only modify tests if they have genuine bugs (not just because they're failing)
-          6. Make minimal, targeted fixes
-          7. After making fixes, verify your changes are consistent with the project patterns
+          6. Make minimal, targeted fixes — only touch files related to the task
+          7. Do not delete, modify, or "clean up" tests, mocks, or code in files unrelated to the task
+          8. After making fixes, verify your changes are consistent with the project patterns
         outputs:
           - name: fixes_description
             description: 'Description of fixes applied'
@@ -472,20 +456,14 @@ steps:
           Description:
           {{inputs.description}}
 
-          Plan:
-          ```
-          {{steps.plan.outputs.plan_file}}
-          ```
-
           Git diff (all changes for this task):
           ```diff
           {{steps.git_diff.outputs.stdout}}
           ```
 
           Previous test results (if any):
-          stdout: {{steps.run_tests_after_review.outputs.stdout}}
-          stderr: {{steps.run_tests_after_review.outputs.stderr}}
           exit_code: {{steps.run_tests_after_review.outputs.exit_code}}
+          stderr: {{steps.run_tests_after_review.outputs.stderr}}
           ---
 
           ### Review Instructions
@@ -495,16 +473,17 @@ steps:
 
           Go through every hunk in the diff and check ALL of the following:
 
-          1. **Correctness**: logic errors, off-by-one errors, null/undefined access, race conditions, incorrect operator precedence, wrong comparisons, missing return statements
-          2. **Naming**: variable/function/class names that are vague, misleading, inconsistent with surrounding code, or violate project conventions
-          3. **Style**: formatting inconsistencies, unnecessary comments, missing comments where logic is non-obvious, inconsistent patterns within the changed code
-          4. **Tests**: missing edge cases, weak assertions (e.g. only checking truthiness when exact values matter), test names that don't describe the behavior being tested, missing negative/error path tests
-          5. **Error handling**: swallowed errors, missing validation at boundaries, unhelpful error messages, catch blocks that silently continue
-          6. **Dead code**: unused imports, unreachable branches, commented-out code, variables assigned but never read
-          7. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets, overly permissive permissions
-          8. **Plan adherence**: requirements from the plan that were missed, partially implemented, or implemented differently than specified
-          9. If previous test results show failures, check whether they were addressed
-          10. Read specific source files when you need more context around the changed lines
+          1. **Scope check (do this first)**: List every file in the diff. For each file, determine if the change is directly required by the task title and description. Flag ANY file that is not directly related to the task as an out-of-scope change that must be reverted (`git checkout <base> -- <file>`). Common violations: deleting unrelated tests, modifying unrelated mocks, reformatting untouched code, adding/removing comments in files not related to the fix. This is the highest priority issue.
+          2. **Correctness**: logic errors, off-by-one errors, null/undefined access, race conditions, incorrect operator precedence, wrong comparisons, missing return statements
+          3. **Naming**: variable/function/class names that are vague, misleading, inconsistent with surrounding code, or violate project conventions
+          4. **Style**: formatting inconsistencies, unnecessary comments, missing comments where logic is non-obvious, inconsistent patterns within the changed code
+          5. **Tests**: missing edge cases, weak assertions (e.g. only checking truthiness when exact values matter), test names that don't describe the behavior being tested, missing negative/error path tests
+          6. **Error handling**: swallowed errors, missing validation at boundaries, unhelpful error messages, catch blocks that silently continue
+          7. **Dead code**: unused imports, unreachable branches, commented-out code, variables assigned but never read
+          8. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets, overly permissive permissions
+          9. **Plan adherence**: requirements from the plan that were missed, partially implemented, or implemented differently than specified
+          10. If previous test results show failures, check whether they were addressed
+          11. Read specific source files when you need more context around the changed lines
 
           ### Output
 
@@ -551,11 +530,6 @@ steps:
           Description:
           {{inputs.description}}
 
-          Git diff (current state of all changes):
-          ```diff
-          {{steps.git_diff.outputs.stdout}}
-          ```
-
           Review:
           ```
           {{steps.code_review.outputs.review_file}}
@@ -563,25 +537,22 @@ steps:
 
           Test command: {{steps.context.outputs.test_command}}
 
-          Context:
-          ```
-          {{steps.context.outputs.context_file}}
-          ```
-
           ---
 
           ### Instructions
 
           Fix every issue in the review — bugs, nits, style, naming, everything. But stay in scope: only modify code that was changed for this task. Do not refactor, improve, or touch code outside the scope of the review.
 
-          1. Read all issues in Review
-          2. Fix every single one. Do not skip any issue regardless of size
-          3. Follow review recommendations exactly — do not invent alternative solutions
-          4. Only modify files and lines relevant to the review issues — do not make unrelated changes
-          5. Ensure fixes preserve existing functionality and do not introduce regressions
-          6. Reference Context for consistency
-          7. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
-          8. Do not leave unused variables, missing imports, or dead code — clean up after yourself
+          1. **Scope reverts first**: If the review flagged out-of-scope files, revert them immediately using `git checkout $(git merge-base HEAD main 2>/dev/null || echo HEAD~1) -- <file>` before doing anything else
+          2. Read all remaining issues in Review
+          3. Fix every single one. Do not skip any issue regardless of size
+          4. Follow review recommendations exactly — do not invent alternative solutions
+          5. Only modify files and lines relevant to the review issues — do not make unrelated changes
+          6. Ensure fixes preserve existing functionality and do not introduce regressions
+          7. Reference Context for consistency
+          8. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
+          9. Do not leave unused variables, missing imports, or dead code — clean up after yourself
+          10. Do not create documentation files (review.md, review_fixes.md, etc.) in the repository root — only write to the output directory
         outputs:
           - name: fixes_applied
             description: 'Whether fixes were applied (true/false)'
@@ -610,42 +581,22 @@ steps:
         name: 'Fix Review Regressions'
         if: steps.run_tests_after_review.outputs.exit_code != 0
         prompt: |
-          Review fixes broke the build or tests. Your job is to fix the regressions while preserving the review improvements.
+          Review fixes broke the build or tests. Fix the regressions while preserving valid review improvements.
 
           ---
 
-          Task:
           Title: {{inputs.title}}
-          Description:
-          {{inputs.description}}
 
-          Build output (stdout):
-          ```
-          {{steps.build_after_review.outputs.stdout}}
-          ```
-
-          Build errors (stderr):
+          Build exit code: {{steps.build_after_review.outputs.exit_code}}
+          Build errors:
           ```
           {{steps.build_after_review.outputs.stderr}}
           ```
 
-          Build exit code: {{steps.build_after_review.outputs.exit_code}}
-
-          Test command output (stdout):
-          ```
-          {{steps.run_tests_after_review.outputs.stdout}}
-          ```
-
-          Test command errors (stderr):
+          Test exit code: {{steps.run_tests_after_review.outputs.exit_code}}
+          Test errors:
           ```
           {{steps.run_tests_after_review.outputs.stderr}}
-          ```
-
-          Test exit code: {{steps.run_tests_after_review.outputs.exit_code}}
-
-          Review that was applied:
-          ```
-          {{steps.code_review.outputs.review_file}}
           ```
           ---
 
@@ -691,11 +642,6 @@ steps:
       {{inputs.description}}
       Task Complexity: {{steps.context.outputs.complexity}}
 
-      Context:
-      ```
-      {{steps.context.outputs.context_file}}
-      ```
-
       Changes:
       ```
       {{steps.implement.outputs.changes_file}}
@@ -707,7 +653,7 @@ steps:
 
       ### Phase 1: Triage task complexity
 
-      Check the context to identify the task complexity: {{steps.context.outputs.complexity}}
+      Check the task complexity: {{steps.context.outputs.complexity}}
 
       - Simple task: skip the "Technical decisions" and "Notes" sections in phase 3.
       - Complex task: complete the full template in phase 3.
