@@ -364,7 +364,20 @@ export async function executeStep(
             continue;
           }
           acpRunner.closeSession();
-          throw err;
+          // Convert thrown ACP errors into a failed StepResult so they flow
+          // through the retryable/pause logic below instead of bubbling up
+          // as an unhandled exception (which causes FAILED instead of PAUSED).
+          result = {
+            id: step.id,
+            success: false,
+            error: errorMsg,
+            duration: 0,
+            outputs: new Map([
+              ['error', errorMsg],
+              ['error_code', 'ACP_ERROR'],
+              ['error_retryable', String(isRetryableError(errorMsg))],
+            ]),
+          };
         }
 
         if (managesSessionLifecycle) {
