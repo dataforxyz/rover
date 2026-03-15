@@ -9,6 +9,10 @@ import {
   removeCacheImage,
   type CacheImageInfo,
 } from '../lib/sandbox/container-image-cache.js';
+import {
+  listDownloadCacheVolumes,
+  removeDownloadCacheVolumes,
+} from '../lib/sandbox/download-cache.js';
 import { getTelemetry } from '../lib/telemetry.js';
 import type {
   CleanupCommandOutput,
@@ -282,13 +286,27 @@ const cleanupCommand = async (
 
     jsonOutput.removedCount = removedImages.length;
 
+    // When --all is used, also remove download cache volumes
+    let removedVolumes: string[] = [];
+    if (options.all) {
+      for (const dockerHost of dockerHosts) {
+        const metadata = dockerHost ? { dockerHost } : undefined;
+        const vols = await removeDownloadCacheVolumes(backend, metadata);
+        removedVolumes.push(...vols);
+      }
+    }
+
     if (!isJsonMode()) {
       showTitle('Cleanup Results');
 
-      showProperties({
+      const props: Record<string, string> = {
         'Images removed': removedImages.length.toString(),
         'Images kept': jsonOutput.keptCount.toString(),
-      });
+      };
+      if (removedVolumes.length > 0) {
+        props['Download caches cleared'] = removedVolumes.length.toString();
+      }
+      showProperties(props);
 
       const toKeep = classified.filter(i => i.kept);
 
@@ -299,6 +317,12 @@ const cleanupCommand = async (
             title: 'Removed',
           }
         );
+      }
+
+      if (removedVolumes.length > 0) {
+        showList(removedVolumes.map(v => colors.cyan(v)), {
+          title: 'Download caches removed',
+        });
       }
 
       if (toKeep.length > 0) {

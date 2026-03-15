@@ -84,6 +84,19 @@ export interface TaskStopOutput extends CLIJsonOutput {
 }
 
 // ---------------------------------------------------------------------------
+// pause command
+// ---------------------------------------------------------------------------
+
+export interface TaskPauseOutput extends CLIJsonOutput {
+  taskId?: number;
+  title?: string;
+  status?: string;
+  pausedAt?: string;
+  reason?: string;
+  hasCheckpoint?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // restart command
 // ---------------------------------------------------------------------------
 
@@ -207,6 +220,8 @@ export interface TaskInspectionOutput {
     uri: string;
     description: string;
   }>;
+  operatingTimeMs?: number;
+  runSegments?: Array<{ start: string; end?: string }>;
 }
 
 export interface RawFileOutput {

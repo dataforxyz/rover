@@ -525,7 +525,7 @@ export class Runner {
    */
   private async extractStringOutputs(
     responseContent: string,
-    stringOutputs: Array<{ name: string; description: string }>,
+    stringOutputs: WorkflowOutput[],
     outputs: Map<string, string>
   ): Promise<void> {
     // Try to parse JSON from the response content if it looks like JSON
@@ -576,6 +576,27 @@ export class Runner {
         );
         outputs.set(output.name, '[Not found in response]');
       }
+    }
+
+    // Validate required outputs — if any required output has a failure
+    // sentinel value, the step must fail so it won't be checkpointed as
+    // "completed" with broken outputs (which would cause all subsequent
+    // iterations to skip re-extraction and loop forever).
+    const FAILURE_SENTINELS = [
+      '[Could not extract from response]',
+      '[Not found in response]',
+    ];
+    const missingRequired = stringOutputs.filter(
+      (o) =>
+        o.required === true &&
+        FAILURE_SENTINELS.includes(outputs.get(o.name) ?? '')
+    );
+    if (missingRequired.length > 0) {
+      const names = missingRequired.map((o) => o.name).join(', ');
+      throw new Error(
+        `Required output(s) could not be extracted: ${names}. ` +
+          `The agent's response did not include valid values for these fields.`
+      );
     }
   }
 
@@ -639,7 +660,7 @@ export class Runner {
    * Get the command line arguments for the specific AI tool
    */
   private toolArguments(): string[] {
-    return this.agent.toolArguments();
+    return this.agent.directArguments();
   }
 
   /**

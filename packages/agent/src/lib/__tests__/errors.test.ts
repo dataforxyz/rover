@@ -106,7 +106,7 @@ describe('parseAgentError', () => {
       });
       const error = parseAgentError(jsonError, '', 1, 'claude');
       expect(error).toBeInstanceOf(AuthenticationError);
-      expect(error.isRetryable).toBe(false);
+      expect(error.isRetryable).toBe(true);
     });
 
     it('should classify standard auth error as AuthenticationError', () => {
@@ -118,7 +118,7 @@ describe('parseAgentError', () => {
       });
       const error = parseAgentError(jsonError, '', 1, 'claude');
       expect(error).toBeInstanceOf(AuthenticationError);
-      expect(error.isRetryable).toBe(false);
+      expect(error.isRetryable).toBe(true);
     });
 
     it('should NOT reclassify "billing is not configured" as RateLimitError', () => {
@@ -130,7 +130,7 @@ describe('parseAgentError', () => {
       });
       const error = parseAgentError(jsonError, '', 1, 'claude');
       expect(error).toBeInstanceOf(AuthenticationError);
-      expect(error.isRetryable).toBe(false);
+      expect(error.isRetryable).toBe(true);
     });
 
     it('should NOT reclassify "account balance" without insufficiency as RateLimitError', () => {
@@ -142,7 +142,7 @@ describe('parseAgentError', () => {
       });
       const error = parseAgentError(jsonError, '', 1, 'claude');
       expect(error).toBeInstanceOf(AuthenticationError);
-      expect(error.isRetryable).toBe(false);
+      expect(error.isRetryable).toBe(true);
     });
   });
 

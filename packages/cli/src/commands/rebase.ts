@@ -215,18 +215,7 @@ export const rebaseCommand = async (
       return;
     }
 
-    if (task.isPaused()) {
-      jsonOutput.error = `Task ${taskId} is paused — cannot rebase while paused`;
-      await exitWithError(jsonOutput, {
-        tips: [
-          'Use ' +
-            colors.cyan(`rover resume ${taskId}`) +
-            ' to resume the task first',
-        ],
-        telemetry,
-      });
-      return;
-    }
+    // Paused tasks are safe to rebase — no running agent, worktree is idle.
 
     if (!task.worktreePath || !existsSync(task.worktreePath)) {
       jsonOutput.error = 'No worktree found for this task';
@@ -405,7 +394,7 @@ export const rebaseCommand = async (
           if (resolution.success) {
             jsonOutput.conflictsResolved = true;
 
-            if (!isJsonMode()) {
+            if (!isJsonMode() && !options.force) {
               showRoverChat([
                 'The rebase conflicts are fixed. You can check the file content to confirm it.',
               ]);

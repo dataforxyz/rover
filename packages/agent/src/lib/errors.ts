@@ -20,7 +20,7 @@ export abstract class AgentError extends Error {
  */
 export class AuthenticationError extends AgentError {
   readonly code = 'AUTHENTICATION_ERROR';
-  readonly isRetryable = false;
+  readonly isRetryable = true;
 
   constructor(
     message: string,

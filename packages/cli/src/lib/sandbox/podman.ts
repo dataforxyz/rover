@@ -20,6 +20,10 @@ import {
   checkImageCache,
   waitForInitAndCommit,
 } from './container-image-cache.js';
+import {
+  getDownloadCacheMounts,
+  ensureDownloadCacheVolumes,
+} from './download-cache.js';
 import { isContainerMissingInspectError } from './inspect-errors.js';
 import { mergeNetworkConfig } from '../network-config.js';
 import { isJsonMode } from '../context.js';
@@ -237,6 +241,11 @@ export class PodmanSandbox extends Sandbox {
         `${workspaceDescPath}:/workspace/.rover-workspace.json:Z,ro`
       );
     }
+
+    // Mount download cache volumes (apt, pub, npm, etc.) to avoid
+    // re-downloading the same packages across container runs.
+    ensureDownloadCacheVolumes(ContainerBackend.Podman, projectConfig);
+    podmanArgs.push(...getDownloadCacheMounts(projectConfig));
 
     // Get extra args from CLI options and project config, merge them
     const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);
@@ -534,6 +543,10 @@ export class PodmanSandbox extends Sandbox {
         `${workspaceDescPath}:/workspace/.rover-workspace.json:Z,ro`
       );
     }
+
+    // Mount download cache volumes for interactive mode too
+    ensureDownloadCacheVolumes(ContainerBackend.Podman, projectConfig);
+    podmanArgs.push(...getDownloadCacheMounts(projectConfig));
 
     // Get extra args from CLI options and project config, merge them
     const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);

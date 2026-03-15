@@ -51,6 +51,12 @@ export interface Agent {
    * CLI flags that enable ACP mode.
    */
   toolArguments(): string[];
+  /**
+   * Returns arguments for the direct CLI invocation (`binary`).
+   * Used by the Runner (non-ACP mode) to invoke the agent directly.
+   * Defaults to toolArguments() for agents where ACP and direct args are the same.
+   */
+  directArguments(): string[];
   toolInteractiveArguments(
     precontext: string,
     initialPrompt?: string

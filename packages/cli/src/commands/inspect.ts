@@ -263,6 +263,8 @@ const inspectCommand = async (
         uuid: task.uuid,
         workflowName: task.workflowName,
         worktreePath: task.worktreePath,
+        operatingTimeMs: task.getOperatingTime() ?? undefined,
+        runSegments: task.runSegments,
         source: task.source,
         context:
           iteration.context.length > 0
@@ -313,6 +315,23 @@ const inspectCommand = async (
         ).toLocaleString();
       } else if (task.failedAt) {
         properties['Failed At'] = new Date(task.failedAt).toLocaleString();
+      }
+
+      // Show operating time if run segments are available
+      const operatingMs = task.getOperatingTime();
+      if (operatingMs != null) {
+        const secs = Math.floor(operatingMs / 1000);
+        const mins = Math.floor(secs / 60);
+        const hrs = Math.floor(mins / 60);
+        let opStr: string;
+        if (hrs > 0) {
+          opStr = `${hrs}h ${mins % 60}m`;
+        } else if (mins > 0) {
+          opStr = `${mins}m ${secs % 60}s`;
+        } else {
+          opStr = `${secs}s`;
+        }
+        properties['Operating Time'] = opStr;
       }
 
       // Show error if failed

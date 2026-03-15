@@ -608,7 +608,7 @@ describe('run command: pause/resume integration', () => {
       expect(status.status).toBe('paused');
     });
 
-    it('Test 8: non-retryable error → exit 1, status failed', async () => {
+    it('Test 8: auth error → exit 2 (retryable), status paused', async () => {
       writeWorkflow('claude');
 
       mockACPRunStep.mockResolvedValueOnce(
@@ -619,15 +619,15 @@ describe('run command: pause/resume integration', () => {
 
       const exitCode = await runAndCapture();
 
-      expect(exitCode).toBe(1);
+      expect(exitCode).toBe(2);
 
       const checkpoint = readCheckpointFile(outputDir);
       expect(checkpoint).not.toBeNull();
-      expect(checkpoint!.isRetryable).toBe(false);
+      expect(checkpoint!.isRetryable).toBe(true);
       expect(checkpoint!.failedStepId).toBe('step1');
 
       const status = readStatusFile(statusPath);
-      expect(status.status).toBe('failed');
+      expect(status.status).toBe('paused');
     });
 
     it('Test 9: resume in ACP mode skips completed steps', async () => {

@@ -6,7 +6,8 @@ import {
   lstatSync,
   cpSync,
 } from 'node:fs';
-import path, { basename, join } from 'node:path';
+import { execSync } from 'node:child_process';
+import path, { basename, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import colors from 'ansi-colors';
 import { AgentCredentialFile, AgentUsageStats } from './types.js';
@@ -88,17 +89,43 @@ export class ClaudeAgent extends BaseAgent {
 
         // For .claude.json, we need to edit the projects section
         if (cred.path.includes('.claude.json')) {
-          // Read the config and clear the projects object
-          const config = JSON.parse(readFileSync(cred.path, 'utf-8'));
-          config.projects = {};
-
           // Write to targetDir instead of targetClaudeDir.
           // The .claude.json file is located at $HOME
-          writeFileSync(
-            join(targetDir, filename),
-            JSON.stringify(config, null, 2)
-          );
-          copiedItems.push(colors.cyan('.claude.json (projects cleared)'));
+          const destPath = join(targetDir, filename);
+
+          // Guard: never overwrite the source (e.g. if HOME='/')
+          if (resolve(destPath) === resolve(cred.path)) {
+            console.log(
+              colors.yellow(
+                `  ⚠ Skipping .claude.json copy: target path equals source (${destPath}). Check $HOME.`
+              )
+            );
+          } else {
+            // Copy first, then modify the local copy. This avoids EROFS
+            // errors when the source is on a read-only bind mount (the
+            // :Z SELinux relabel flag can interfere with Node.js open).
+            try {
+              copyFileSync(cred.path, destPath);
+            } catch {
+              // Fallback: use shell cp (works around Node.js open flags
+              // triggering EROFS on some overlay/bind mount configurations)
+              execSync(`cp -f '${cred.path}' '${destPath}'`);
+            }
+            // Now read and modify the local (writable) copy
+            try {
+              const config = JSON.parse(readFileSync(destPath, 'utf-8'));
+              config.projects = {};
+              writeFileSync(destPath, JSON.stringify(config, null, 2));
+            } catch (e) {
+              // If we can't strip projects, the copied file still works
+              console.log(
+                colors.yellow(
+                  `  ⚠ Could not clear projects from .claude.json: ${e instanceof Error ? e.message : e}`
+                )
+              );
+            }
+            copiedItems.push(colors.cyan('.claude.json (projects cleared)'));
+          }
         } else if (cred.path.includes('gcloud')) {
           // Copy the entire folder
           cpSync(cred.path, join(targetDir, '.config', 'gcloud'), {
@@ -111,7 +138,13 @@ export class ClaudeAgent extends BaseAgent {
           copiedItems.push(colors.cyan('settings.json'));
         } else {
           // Copy file right away
-          copyFileSync(cred.path, join(targetClaudeDir, filename));
+          try {
+            copyFileSync(cred.path, join(targetClaudeDir, filename));
+          } catch {
+            execSync(
+              `cp -f '${cred.path}' '${join(targetClaudeDir, filename)}'`
+            );
+          }
           copiedItems.push(colors.cyan(cred.path));
         }
       }
@@ -182,6 +215,18 @@ export class ClaudeAgent extends BaseAgent {
 
   toolArguments(): string[] {
     return ['-y', '@zed-industries/claude-agent-acp'];
+  }
+
+  override directArguments(): string[] {
+    const args = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    if (this.model) {
+      args.push('--model', this.model);
+    }
+    if (VERBOSE) {
+      args.push('--verbose');
+    }
+    args.push('-p');
+    return args;
   }
 
   toolInteractiveArguments(

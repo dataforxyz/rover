@@ -8,6 +8,8 @@
 
 import colors from 'ansi-colors';
 import { createHash } from 'node:crypto';
+import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   WorkflowManager,
   type IterationStatusManager,
@@ -74,14 +76,80 @@ export function isRetryableError(
   errorRetryableFlag?: string
 ): boolean {
   if (errorRetryableFlag === 'true') return true;
+  if (errorRetryableFlag === 'false') return false;
   if (isTransientError(errorMsg)) return true;
-  return /rate[_\s-]limit|credit[_\s-](limit|exhaust)|billing[_\s-](limit|error)|quota[_\s-](exhaust|exceeded|limit)|hit your limit|usage limit|plan limit|connection[_\s-]timeout/i.test(
+  if (isAuthError(errorMsg)) return true;
+  return /rate[_\s-]limit|credit[_\s-](limit|exhaust)|billing[_\s-](limit|error)|quota[_\s-](exhaust|exceeded|limit)|hit your limit|usage limit|plan limit|connection[_\s-]timeout|authentication[_\s-](required|error|failed)|invalid[_\s-](api[_\s-]key|bearer[_\s-]token|credentials)|\b401\b.*unauthori[sz]ed/i.test(
     errorMsg
   );
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Detect authentication errors (expired tokens, invalid credentials)
+ * as distinct from usage/rate-limit errors.
+ */
+export function isAuthError(errorMsg: string): boolean {
+  return /authentication[_\s-]error|oauth[_\s]token[_\s]has[_\s]expired|invalid[_\s-]bearer[_\s-]token|\b401\b|unauthorized|token[_\s]expired|does not have access.*login|please login again/i.test(
+    errorMsg
+  );
+}
+
+/**
+ * Re-copy credentials from bind-mount source (/) to $HOME.
+ * Container entrypoint mounts host credentials read-only at /;
+ * rover-agent-install copies them to $HOME once at startup.
+ * If the host token refreshed mid-run, this picks up the new one.
+ *
+ * Returns true if any credentials were refreshed.
+ */
+function refreshCredentials(): boolean {
+  const home = process.env.HOME || '/home/agent';
+  let refreshed = false;
+
+  // Claude: /.credentials.json -> $HOME/.claude/.credentials.json
+  const claudeSrc = '/.credentials.json';
+  const claudeDir = join(home, '.claude');
+  const claudeDst = join(claudeDir, '.credentials.json');
+  if (existsSync(claudeSrc)) {
+    try {
+      mkdirSync(claudeDir, { recursive: true });
+      copyFileSync(claudeSrc, claudeDst);
+      refreshed = true;
+    } catch {
+      // best-effort
+    }
+  }
+
+  // Codex: /.codex/auth.json -> $HOME/.codex/auth.json
+  const codexSrc = '/.codex/auth.json';
+  const codexDir = join(home, '.codex');
+  const codexDst = join(codexDir, 'auth.json');
+  if (existsSync(codexSrc)) {
+    try {
+      mkdirSync(codexDir, { recursive: true });
+      copyFileSync(codexSrc, codexDst);
+      refreshed = true;
+    } catch {
+      // best-effort
+    }
+  }
+
+  // Codex config.toml
+  const codexCfgSrc = '/.codex/config.toml';
+  const codexCfgDst = join(codexDir, 'config.toml');
+  if (existsSync(codexCfgSrc)) {
+    try {
+      copyFileSync(codexCfgSrc, codexCfgDst);
+    } catch {
+      // best-effort
+    }
+  }
+
+  return refreshed;
 }
 
 export interface StepTreeNode {
@@ -266,6 +334,21 @@ export async function executeStep(
           // Without this, thrown exceptions (e.g. JSON-RPC connection errors)
           // would bypass the retry loop entirely.
           const errorMsg = err instanceof Error ? err.message : String(err);
+          if (isAuthError(errorMsg) && attempt < MAX_TRANSIENT_RETRIES) {
+            const didRefresh = refreshCredentials();
+            acpRunner.closeSession();
+            if (!managesSessionLifecycle) {
+              await acpRunner.createSession();
+            }
+            const delayMs = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+            console.log(
+              colors.yellow(
+                `\n⚠ ACP authentication error.${didRefresh ? ' Credentials refreshed from host.' : ''} Retrying in ${delayMs / 1000}s (attempt ${attempt + 1}/${MAX_TRANSIENT_RETRIES})...`
+              )
+            );
+            await sleep(delayMs);
+            continue;
+          }
           if (isTransientError(errorMsg) && attempt < MAX_TRANSIENT_RETRIES) {
             acpRunner.closeSession();
             if (!managesSessionLifecycle) {
@@ -308,6 +391,20 @@ export async function executeStep(
       }
 
       const errorMsg = result.error || '';
+
+      // Auth errors: refresh credentials from bind mount and retry
+      if (isAuthError(errorMsg) && attempt < MAX_TRANSIENT_RETRIES) {
+        const didRefresh = refreshCredentials();
+        const delayMs = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        console.log(
+          colors.yellow(
+            `\n⚠ Authentication error detected.${didRefresh ? ' Credentials refreshed from host.' : ''} Retrying in ${delayMs / 1000}s (attempt ${attempt + 1}/${MAX_TRANSIENT_RETRIES})...`
+          )
+        );
+        await sleep(delayMs);
+        continue;
+      }
+
       if (isTransientError(errorMsg) && attempt < MAX_TRANSIENT_RETRIES) {
         const delayMs = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
         console.log(

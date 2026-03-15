@@ -1,7 +1,7 @@
 import colors from 'ansi-colors';
 import { writeFileSync, chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import {
   ProjectConfigManager,
   showProperties,
@@ -14,6 +14,10 @@ import {
   ContainerBackend,
   resolveAgentImage,
 } from '../lib/sandbox/container-common.js';
+import {
+  getDownloadCacheMounts,
+  ensureDownloadCacheVolumes,
+} from '../lib/sandbox/download-cache.js';
 import {
   checkImageCache,
   waitForInitAndCommit,
@@ -100,7 +104,9 @@ function getPackages(projectConfig: ProjectConfigManager): SandboxPackage[] {
 
 function generateBuildEntrypoint(
   agent: string,
-  projectConfig: ProjectConfigManager
+  projectConfig: ProjectConfigManager,
+  targetUid?: number,
+  targetGid?: number
 ): string {
   const allPackages = getPackages(projectConfig);
 
@@ -178,10 +184,20 @@ done
 
 ${mcpSection}
 
+# Pre-chown HOME to the target container user so the runtime entrypoint
+# can skip the expensive recursive chown (saves 1-3+ minutes per start).
+${targetUid != null ? `chown -R ${targetUid}:${targetGid ?? targetUid} $HOME 2>/dev/null || true` : '# No target UID specified — skip pre-chown'}
+
 # Make HOME world-writable so the image works with any --user UID:GID.
 # The actual task entrypoint does chown, but we set permissive defaults
 # so the image is immediately usable (e.g. by verify, shell, etc.)
 chmod -R a+rwX $HOME 2>/dev/null || true
+
+# Make download cache volumes world-writable so non-root task containers
+# can reuse cached downloads (apt debs, pub/npm/go packages, etc.)
+for _dlcache_dir in /var/cache/apt; do
+  [ -d "$_dlcache_dir" ] && chmod -R a+rwX "$_dlcache_dir" 2>/dev/null || true
+done
 
 # Mark all directories as git-safe so they work with any UID
 git config --system --add safe.directory '*' 2>/dev/null || true
@@ -269,9 +285,10 @@ const buildCommand = async (
     const tmpDir = join(tmpdir(), `rover-build-${Date.now()}`);
     mkdirSync(tmpDir, { recursive: true });
     const entrypointPath = join(tmpDir, 'entrypoint.sh');
+    const hostUser = userInfo();
     writeFileSync(
       entrypointPath,
-      generateBuildEntrypoint(agent, projectConfig)
+      generateBuildEntrypoint(agent, projectConfig, hostUser.uid, hostUser.gid)
     );
     chmodSync(entrypointPath, 0o755);
 
@@ -309,6 +326,14 @@ const buildCommand = async (
     } catch {
       // Agent tool not found — skip mounts
     }
+
+    // Mount download cache volumes so apt/pub/npm/go downloads are cached
+    // across builds. These are named volumes — their content is NOT captured
+    // by docker commit, which is intentional: the installed artifacts end up
+    // in the image filesystem, while the download caches persist in volumes
+    // for subsequent builds to reuse.
+    ensureDownloadCacheVolumes(backend, projectConfig);
+    dockerArgs.push(...getDownloadCacheMounts(projectConfig));
 
     // Add extra args from project config, but NOT volume mounts.
     // Volume mounts are excluded during build so that all installed content

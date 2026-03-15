@@ -240,6 +240,9 @@ export class TaskDescriptionManager {
     // Preserve baseCommit field
     migrated.baseCommit = data.baseCommit;
 
+    // Preserve runSegments (operating time tracking)
+    migrated.runSegments = data.runSegments;
+
     // Preserve task source (and migrate from old githubIssue if present)
     if (data.source) {
       migrated.source = data.source;
@@ -333,9 +336,13 @@ export class TaskDescriptionManager {
    * Set task status with optional metadata
    */
   setStatus(status: TaskStatus, metadata?: StatusMetadata): void {
+    const previousStatus = this.data.status;
     this.data.status = status;
 
     const timestamp = metadata?.timestamp || new Date().toISOString();
+
+    // Track run segments for operating time
+    this.updateRunSegments(previousStatus, status, timestamp);
 
     switch (status) {
       case 'NEW':
@@ -825,6 +832,9 @@ export class TaskDescriptionManager {
   get source(): TaskDescription['source'] {
     return this.data.source;
   }
+  get runSegments(): TaskDescription['runSegments'] {
+    return this.data.runSegments;
+  }
   get onCompleteHookFiredAt(): TaskDescription['onCompleteHookFiredAt'] {
     return this.data.onCompleteHookFiredAt;
   }
@@ -1019,7 +1029,7 @@ export class TaskDescriptionManager {
   }
 
   /**
-   * Get task duration in milliseconds
+   * Get task duration in milliseconds (wall-clock time from start to end)
    */
   getDuration(): number | null {
     if (!this.data.startedAt) return null;
@@ -1031,6 +1041,62 @@ export class TaskDescriptionManager {
     const end = new Date(endTime);
 
     return end.getTime() - start.getTime();
+  }
+
+  /**
+   * Get actual operating time in milliseconds.
+   * Sums completed run segments and adds elapsed time for any open segment.
+   * Returns null if no segments have been recorded.
+   */
+  getOperatingTime(): number | null {
+    const segments = this.data.runSegments;
+    if (!segments || segments.length === 0) return null;
+
+    let totalMs = 0;
+    for (const seg of segments) {
+      const start = new Date(seg.start).getTime();
+      const end = seg.end ? new Date(seg.end).getTime() : Date.now();
+      totalMs += end - start;
+    }
+    return totalMs;
+  }
+
+  // ============================================================
+  // Run Segment Tracking (Private)
+  // ============================================================
+
+  private static isActiveStatus(status: TaskStatus): boolean {
+    return status === 'IN_PROGRESS' || status === 'ITERATING';
+  }
+
+  /**
+   * Open or close a run segment when the task transitions between active and
+   * inactive states. Called from setStatus() before the status-specific logic.
+   */
+  private updateRunSegments(
+    previousStatus: TaskStatus,
+    newStatus: TaskStatus,
+    timestamp: string
+  ): void {
+    const wasActive = TaskDescriptionManager.isActiveStatus(previousStatus);
+    const isActive = TaskDescriptionManager.isActiveStatus(newStatus);
+
+    if (!wasActive && isActive) {
+      // Entering an active state — open a new segment
+      if (!this.data.runSegments) {
+        this.data.runSegments = [];
+      }
+      this.data.runSegments.push({ start: timestamp });
+    } else if (wasActive && !isActive) {
+      // Leaving an active state — close the open segment
+      if (this.data.runSegments && this.data.runSegments.length > 0) {
+        const last = this.data.runSegments[this.data.runSegments.length - 1];
+        if (!last.end) {
+          last.end = timestamp;
+        }
+      }
+    }
+    // active → active or inactive → inactive: no segment change needed
   }
 
   // ============================================================

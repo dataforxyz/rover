@@ -160,6 +160,38 @@ export async function waitForInitAndCommit(
       commitArgs.push(containerName, cacheTag);
       await launch(backend, commitArgs, opts);
       await launch(backend, ['rm', '-f', containerName], opts);
+
+      // Post-commit fixup: download cache volumes are mounted during build,
+      // so `chmod -R a+rwX $HOME` in the entrypoint only affects the volume
+      // contents (which docker commit ignores), not the underlying directories.
+      // Run a quick fixup container (without volumes) to set correct permissions.
+      const fixupName = `${containerName}-fixup`;
+      try {
+        await launch(backend, [
+          'run', '--name', fixupName,
+          '--entrypoint', '/bin/bash',
+          cacheTag,
+          '-c', 'chmod -R a+rwX /home/agent 2>/dev/null || true',
+        ], opts);
+        const fixupCommitArgs = ['commit'];
+        if (projectPath) {
+          fixupCommitArgs.push('--change', `LABEL rover.project.path=${projectPath}`);
+        }
+        if (agent) {
+          fixupCommitArgs.push('--change', `LABEL rover.agent=${agent}`);
+        }
+        fixupCommitArgs.push(fixupName, cacheTag);
+        await launch(backend, fixupCommitArgs, opts);
+        await launch(backend, ['rm', '-f', fixupName], opts);
+      } catch {
+        // Best-effort — if fixup fails, the original image is still usable
+        try {
+          await launch(backend, ['rm', '-f', fixupName], opts);
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+
       return true;
     }
 

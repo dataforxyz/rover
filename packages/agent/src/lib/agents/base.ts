@@ -34,6 +34,13 @@ export abstract class BaseAgent implements Agent {
     headers: string[]
   ): Promise<void>;
   abstract toolArguments(): string[];
+  /**
+   * Default: direct args = tool args (works for agents where ACP and direct use same flags).
+   * Override in agents like Claude where ACP uses a different command (npx).
+   */
+  directArguments(): string[] {
+    return this.toolArguments();
+  }
   abstract toolInteractiveArguments(
     precontext: string,
     initialPrompt?: string

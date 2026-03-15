@@ -11,6 +11,14 @@ export class DartSandboxPackage extends SandboxPackage {
     return `
 # Linux desktop build toolchain (required for flutter test integration_test/)
 sudo apt-get update -qq && sudo apt-get install -y -qq cmake clang ninja-build pkg-config libgtk-3-dev 2>/dev/null || true
+# systemd postinst creates systemd-network (UID 998) which can conflict
+# with the container runtime user. Remove it to avoid HOME resolution issues.
+if getent passwd systemd-network >/dev/null 2>&1; then
+  sudo userdel systemd-network 2>/dev/null || sudo sed -i '/^systemd-network:/d' /etc/passwd
+fi
+if getent group systemd-network >/dev/null 2>&1; then
+  sudo groupdel systemd-network 2>/dev/null || sudo sed -i '/^systemd-network:/d' /etc/group
+fi
 
 FLUTTER_VERSION="stable"
 if [ -f /workspace/.fvmrc ]; then

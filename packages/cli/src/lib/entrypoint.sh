@@ -7,16 +7,37 @@
 # @see https://github.com/sindresorhus/pupa
 
 # Define the agent user home
-if [[ -z "$\{HOME\}" ]]; then
+# HOME may be unset, empty, or "/" (common in cached images where the original
+# user was removed by docker commit). All three cases need a real home dir.
+if [[ -z "$\{HOME\}" || "$\{HOME\}" = "/" ]]; then
   export HOME=/home/$(id -u)
 fi
 
 # Ensure the runtime HOME exists even when starting from a cached image where
 # the container user is remapped to the host UID.
-sudo mkdir -p "$HOME"
-sudo mkdir -p "$HOME/.config"
-sudo mkdir -p "$HOME/.local/bin"
-sudo chown -R "$(id -u):$(id -g)" "$HOME"
+# Use sudo when available; fall back gracefully when sudo is broken (e.g.
+# setuid bit lost in cached images committed by docker commit).
+#
+# Performance: skip the expensive recursive chown if HOME already belongs to
+# the current user (e.g. cached images built with chmod a+rwX or pre-chowned).
+# The full recursive chown can take 1-3+ minutes on large HOME trees (40-90k files).
+_NEED_CHOWN=0
+if [[ -d "$HOME" ]] && [[ -w "$HOME" ]] && [[ "$(stat -c %u "$HOME" 2>/dev/null)" = "$(id -u)" ]]; then
+  # HOME exists, is writable, and owned by us — just ensure subdirs exist
+  mkdir -p "$HOME/.config" "$HOME/.local/bin" 2>/dev/null || true
+else
+  _NEED_CHOWN=1
+fi
+
+if [[ $_NEED_CHOWN -eq 1 ]]; then
+  if sudo -n true 2>/dev/null; then
+    sudo mkdir -p "$HOME" "$HOME/.config" "$HOME/.local/bin"
+    sudo chown -R "$(id -u):$(id -g)" "$HOME"
+  else
+    mkdir -p "$HOME" "$HOME/.config" "$HOME/.local/bin" 2>/dev/null || true
+    chown -R "$(id -u):$(id -g)" "$HOME" 2>/dev/null || true
+  fi
+fi
 
 # Some tools might be installed under /root/local/.bin conditionally
 # depending on the chosen agent and requirements, make this directory

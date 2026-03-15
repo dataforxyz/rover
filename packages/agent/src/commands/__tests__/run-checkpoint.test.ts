@@ -729,8 +729,11 @@ describe('isRetryableError', () => {
     expect(isRetryableError('step execution timeout after 300s')).toBe(false);
   });
 
-  it('should NOT detect auth errors as retryable', () => {
-    expect(isRetryableError('invalid api key')).toBe(false);
+  it('should detect auth errors as retryable', () => {
+    expect(isRetryableError('invalid api key')).toBe(true);
+    expect(isRetryableError('Authentication required')).toBe(true);
+    expect(isRetryableError('authentication error')).toBe(true);
+    expect(isRetryableError('invalid credentials')).toBe(true);
   });
 
   it('should NOT detect empty string as retryable', () => {

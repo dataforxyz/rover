@@ -417,14 +417,29 @@ echo -e "\\n📦 Done installing agent"`;
     // so that fresh credentials are available even when the image was cached.
     const credentialInstallSection = `# Copy credentials (runs on every start, including cached images)
 echo -e "\\n📦 Copying agent credentials"
-sudo rover-agent-install $AGENT
+# Try with sudo first; fall back to non-sudo if sudo is broken (e.g. setuid
+# bit lost in cached images). Credential files are mounted read-only at /
+# and just need to be copied to $HOME — no root required for that.
+if sudo -n true 2>/dev/null; then
+  sudo rover-agent-install $AGENT
+  _CRED_RC=$?
+else
+  rover-agent-install $AGENT
+  _CRED_RC=$?
+fi
 # Only fix ownership of credential directories — avoid recursing the entire
 # HOME tree which includes large SDK caches (Flutter, pub-cache, etc.) and
 # can take 4+ minutes on every container start.
 for _cred_dir in $HOME/.codex $HOME/.claude $HOME/.config/github-copilot $HOME/.gemini $HOME/.qwen $HOME/.opencode; do
-  [ -d "$_cred_dir" ] && sudo chown -R $(id -u):$(id -g) "$_cred_dir"
+  if [ -d "$_cred_dir" ]; then
+    sudo chown -R $(id -u):$(id -g) "$_cred_dir" 2>/dev/null || chown -R $(id -u):$(id -g) "$_cred_dir" 2>/dev/null || true
+  fi
 done
-echo "✅ Credentials copied successfully"`;
+if [ $_CRED_RC -ne 0 ]; then
+  echo "⚠️  Credential install exited with code $_CRED_RC — agent may lack fresh credentials"
+else
+  echo "✅ Credentials copied successfully"
+fi`;
 
     // --- MCP config section ---
     let mcpConfigSection = '';

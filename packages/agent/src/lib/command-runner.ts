@@ -98,6 +98,21 @@ export async function runCommandStep(
     inputs,
     stepsOutput
   );
+
+  // Guard: if placeholder resolution produced a failure sentinel (e.g. a
+  // prior step failed to extract the command), fail immediately with a
+  // clear message instead of running a broken command that returns 127.
+  if (/\[Could not extract from response\]|\[Not found in response\]/.test(resolvedCommand)) {
+    const duration = (performance.now() - start) / 1000;
+    const errMsg = `Command contains unresolved output placeholder: ${resolvedCommand}`;
+    console.log(`✗ ${step.name || step.id}: ${errMsg}`);
+    outputs.set('exit_code', '1');
+    outputs.set('stdout', '');
+    outputs.set('stderr', errMsg);
+    outputs.set('success', 'false');
+    return { id: step.id, success: false, error: errMsg, duration, outputs };
+  }
+
   const resolvedArgs = (step.args ?? []).map(arg =>
     resolvePlaceholders(arg, inputs, stepsOutput)
   );

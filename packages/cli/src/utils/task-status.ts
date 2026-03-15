@@ -2,9 +2,9 @@ import colors, { type StyleFunction } from 'ansi-colors';
 
 /**
  * Format task status for user-friendly display.
- * When a provider is given for PAUSED status, includes it for context (e.g., "Paused (claude)").
+ * When a pauseReason is given for PAUSED status, includes it for context (e.g., "Paused (rate limit)").
  */
-export const formatTaskStatus = (status: string, provider?: string): string => {
+export const formatTaskStatus = (status: string, pauseReason?: string): string => {
   switch (status.toUpperCase()) {
     case 'NEW':
       return 'New';
@@ -23,7 +23,7 @@ export const formatTaskStatus = (status: string, provider?: string): string => {
     case 'PUSHED':
       return 'Pushed';
     case 'PAUSED':
-      return provider ? `Paused (${provider})` : 'Paused';
+      return pauseReason ? `Paused (${pauseReason})` : 'Paused';
     default:
       return status;
   }

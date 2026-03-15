@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { NetworkConfigSchema } from '../project-config/schema.js';
 
 // Schema version for migrations
-export const CURRENT_TASK_DESCRIPTION_SCHEMA_VERSION = '1.6';
+export const CURRENT_TASK_DESCRIPTION_SCHEMA_VERSION = '1.7';
 
 // Task status schema
 export const TaskStatusSchema = z.enum([
@@ -98,6 +98,17 @@ export const TaskDescriptionSchema = z.object({
    * @deprecated Use iteration context instead. Will be removed in a future version.
    */
   source: TaskSourceSchema.optional(),
+
+  // Operating time tracking — records intervals when the task was actively running.
+  // Each segment has a start timestamp and an optional end timestamp (open = currently running).
+  runSegments: z
+    .array(
+      z.object({
+        start: z.string().datetime(),
+        end: z.string().datetime().optional(),
+      })
+    )
+    .optional(),
 
   // Hook tracking - stores the lastStatusCheck timestamp when onComplete hook was last fired
   // Compared against lastStatusCheck to detect new terminal status transitions

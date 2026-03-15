@@ -29,17 +29,9 @@ import { detectOrphanedTasks } from '../lib/orphan-detector.js';
 import { RetryScheduler } from '../lib/retry-scheduler.js';
 
 /**
- * Format duration from start to now or completion
+ * Format a duration in milliseconds to a human-readable string
  */
-const formatDuration = (startTime?: string, endTime?: string): string => {
-  if (!startTime) {
-    return 'never';
-  }
-
-  const start = new Date(startTime);
-  const end = endTime ? new Date(endTime) : new Date();
-  const diffMs = end.getTime() - start.getTime();
-
+const formatDurationMs = (diffMs: number): string => {
   const seconds = Math.floor(diffMs / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
@@ -51,6 +43,19 @@ const formatDuration = (startTime?: string, endTime?: string): string => {
   } else {
     return `${seconds}s`;
   }
+};
+
+/**
+ * Format duration from start to now or completion
+ */
+const formatDuration = (startTime?: string, endTime?: string): string => {
+  if (!startTime) {
+    return 'never';
+  }
+
+  const start = new Date(startTime);
+  const end = endTime ? new Date(endTime) : new Date();
+  return formatDurationMs(end.getTime() - start.getTime());
 };
 
 /**
@@ -90,8 +95,8 @@ interface TaskRow {
   currentStep: string;
   duration: string;
   error?: string;
-  /** AI provider that caused the pause (for display purposes) */
-  provider?: string;
+  /** Human-readable reason the task is paused (for display purposes) */
+  pauseReason?: string;
   /** Group ID for grouped rendering (project ID in global mode) */
   groupId?: string;
 }
@@ -115,6 +120,45 @@ const maybeIterationStatus = (
   } catch {
     return undefined;
   }
+};
+
+/**
+ * Derive a short, human-readable pause reason from the task error and iteration provider.
+ * - Rate/credit limit errors → "rate limit"
+ * - Manual pause via `rover pause` → "by user"
+ * - Orphan detection → "orphaned"
+ * - Auth errors → "auth error"
+ * - Unknown → undefined (displays as plain "Paused")
+ */
+const derivePauseReason = (
+  error?: string,
+  provider?: string
+): string | undefined => {
+  if (!error) return undefined;
+  const e = error.toLowerCase();
+  if (e.includes('paused by user')) return 'by user';
+  if (e.includes('orphan')) return 'orphaned';
+  if (
+    e.includes('rate') ||
+    e.includes('credit') ||
+    e.includes('quota') ||
+    e.includes('billing') ||
+    e.includes('usage limit') ||
+    e.includes('hit your limit') ||
+    e.includes('plan limit')
+  ) {
+    return provider ? `rate limit: ${provider}` : 'rate limit';
+  }
+  if (
+    e.includes('auth') ||
+    e.includes('unauthorized') ||
+    e.includes('401') ||
+    e.includes('token') ||
+    e.includes('login')
+  ) {
+    return 'auth error';
+  }
+  return undefined;
 };
 
 /**
@@ -148,14 +192,15 @@ const buildTaskRow = (
     agentDisplay = `${task.agent}:${task.agentModel}`;
   }
 
-  // Resolve provider for paused tasks
-  const pauseProvider =
+  // Resolve human-readable pause reason for paused tasks
+  const pauseReason =
     taskStatus === 'PAUSED'
-      ? iterationStatus?.provider || task.agent || undefined
+      ? derivePauseReason(task.error, iterationStatus?.provider)
       : undefined;
 
   // For paused tasks, show retry time instead of step name
   let currentStepDisplay = iterationStatus?.currentStep || '-';
+  const pauseProvider = iterationStatus?.provider || task.agent;
   if (taskStatus === 'PAUSED' && retryScheduler && pauseProvider) {
     // Only show the task-specific retry time; don't fall back to provider-wide
     // time which could show another task's scheduled retry.
@@ -171,6 +216,19 @@ const buildTaskRow = (
     }
   }
 
+  // Format duration: show operating time if available, with wall-clock in parentheses
+  let durationDisplay = '-';
+  if (iterationStatus) {
+    const wallClock = formatDuration(startedAt, endTime);
+    const operatingMs = task.getOperatingTime();
+    if (operatingMs != null) {
+      const opTime = formatDurationMs(operatingMs);
+      durationDisplay = opTime !== wallClock ? `${opTime} (${wallClock})` : opTime;
+    } else {
+      durationDisplay = wallClock;
+    }
+  }
+
   return {
     id: task.id.toString(),
     title: task.title || 'Unknown Task',
@@ -179,9 +237,9 @@ const buildTaskRow = (
     status: taskStatus,
     progress: iterationStatus?.progress || 0,
     currentStep: currentStepDisplay,
-    duration: iterationStatus ? formatDuration(startedAt, endTime) : '-',
+    duration: durationDisplay,
     error: task.error,
-    provider: pauseProvider,
+    pauseReason,
     groupId,
   };
 };
@@ -483,7 +541,7 @@ const listCommand = async (
         width: 20,
         format: (value: string, row: TaskRow) => {
           const colorFunc = statusColor(value);
-          return colorFunc(formatTaskStatus(value, row.provider));
+          return colorFunc(formatTaskStatus(value, row.pauseReason));
         },
       },
       {
@@ -504,7 +562,8 @@ const listCommand = async (
       {
         header: 'Duration',
         key: 'duration',
-        width: 10,
+        minWidth: 10,
+        maxWidth: 20,
         format: (value: string) => colors.gray(value),
       },
     ];
@@ -543,8 +602,11 @@ const listCommand = async (
     }
 
     // Watch mode (configurable refresh interval, default 3 seconds)
-    if (options.watch && !options._retryScheduler) {
-      // Create a retry scheduler for auto-resuming paused tasks (only once, on the initial watch call)
+    // Auto-retry is opt-in: set ROVER_AUTO_RETRY=1 to enable
+    const autoRetryEnabled =
+      process.env.ROVER_AUTO_RETRY === '1' ||
+      process.env.ROVER_AUTO_RETRY === 'true';
+    if (options.watch && !options._retryScheduler && autoRetryEnabled) {
       options._retryScheduler = new RetryScheduler({ quiet: isJsonMode() });
     }
 
@@ -581,8 +643,10 @@ const listCommand = async (
 
       console.log(
         colors.gray(
-          `\n⏱️  Watching for changes every ${intervalSeconds}s (Ctrl+C to exit)...\n` +
-            `    Paused tasks will auto-retry when credits reset (up to 5 attempts).`
+          `\n⏱️  Watching for changes every ${intervalSeconds}s (Ctrl+C to exit)...` +
+            (autoRetryEnabled
+              ? `\n    Paused tasks will auto-retry when credits reset (up to 5 attempts).`
+              : '')
         )
       );
 

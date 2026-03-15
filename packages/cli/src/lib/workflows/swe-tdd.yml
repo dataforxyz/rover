@@ -124,6 +124,7 @@ steps:
       - name: test_command
         description: 'The command to run tests for this project'
         type: string
+        required: true
       - name: context_file
         description: 'Technical context analysis file'
         type: file

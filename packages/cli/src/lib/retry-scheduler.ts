@@ -1,6 +1,10 @@
 import type { ProjectManager } from 'rover-core';
 import { resumeTask } from './resume-helper.js';
 import { checkClaudeUsage, invalidateUsageCache } from './claude-usage.js';
+import {
+  checkCodexUsage,
+  invalidateCodexUsageCache,
+} from './codex-usage.js';
 import colors from 'ansi-colors';
 
 /**
@@ -149,48 +153,15 @@ export class RetryScheduler {
     const blindScheduledAt = calculateNextRetryWindow(new Date(), retryCount);
     let scheduledAt = blindScheduledAt;
 
-    // For Claude tasks, try to use usage API for smarter scheduling
-    if (provider.toLowerCase() === 'claude') {
-      try {
-        const taskModel = project.getTask(taskId)?.agentModel;
-        const usageResult = await checkClaudeUsage(taskModel);
-        if (usageResult) {
-          if (usageResult.isExhausted && usageResult.resetsAt) {
-            // Schedule at reset time + 2-5 min jitter, but only if it
-            // differs meaningfully from blind backoff. If blind backoff
-            // would fire *before* reset, use the reset time to avoid
-            // wasting an attempt.
-            const jitterMs = (2 + Math.random() * 3) * 60 * 1000;
-            const resetBased = new Date(
-              usageResult.resetsAt.getTime() + jitterMs
-            );
-            if (
-              resetBased.getTime() > Date.now() &&
-              (resetBased.getTime() < blindScheduledAt.getTime() ||
-                blindScheduledAt.getTime() < usageResult.resetsAt.getTime())
-            ) {
-              scheduledAt = resetBased;
-              this.log(
-                colors.gray(
-                  `  📊 Usage exhausted (${usageResult.limitingBucket} ${Math.round(usageResult.utilization * 100)}%), scheduling after reset`
-                )
-              );
-            }
-          } else {
-            // Not exhausted — credits may have restored since the pause.
-            // Use a conservative 5-minute delay.
-            const shortDelay = new Date(Date.now() + 5 * 60 * 1000);
-            scheduledAt = shortDelay;
-            this.log(
-              colors.gray(
-                `  📊 Usage available (${Math.round(usageResult.utilization * 100)}%), retrying in 5 minutes`
-              )
-            );
-          }
-        }
-      } catch {
-        // Usage check failed — fall through to blind backoff
-      }
+    // Smart scheduling: query usage API to avoid wasting retry attempts
+    const usageSmartSchedule = await this.queryUsageForScheduling(
+      provider,
+      project,
+      taskId,
+      blindScheduledAt
+    );
+    if (usageSmartSchedule) {
+      scheduledAt = usageSmartSchedule;
     }
 
     const delayMs = Math.max(0, scheduledAt.getTime() - Date.now());
@@ -294,6 +265,123 @@ export class RetryScheduler {
   }
 
   /**
+   * Query the usage API and return a smarter schedule time, or null to
+   * fall through to blind backoff.  Works for both Claude and Codex.
+   */
+  private async queryUsageForScheduling(
+    provider: string,
+    project: ProjectManager,
+    taskId: number,
+    blindScheduledAt: Date
+  ): Promise<Date | null> {
+    const prov = provider.toLowerCase();
+    if (prov !== 'claude' && prov !== 'codex') return null;
+
+    try {
+      const taskModel = project.getTask(taskId)?.agentModel;
+
+      const usageResult =
+        prov === 'claude'
+          ? await checkClaudeUsage(taskModel)
+          : await checkCodexUsage(taskModel);
+
+      if (!usageResult) return null;
+
+      if (usageResult.isExhausted && usageResult.resetsAt) {
+        const jitterMs = (2 + Math.random() * 3) * 60 * 1000;
+        const resetBased = new Date(usageResult.resetsAt.getTime() + jitterMs);
+        if (
+          resetBased.getTime() > Date.now() &&
+          (resetBased.getTime() < blindScheduledAt.getTime() ||
+            blindScheduledAt.getTime() < usageResult.resetsAt.getTime())
+        ) {
+          this.log(
+            colors.gray(
+              `  📊 ${provider} usage exhausted (${usageResult.limitingBucket} ${Math.round(usageResult.utilization)}%), scheduling after reset`
+            )
+          );
+          return resetBased;
+        }
+      } else {
+        // Not exhausted — credits may have restored since the pause.
+        const shortDelay = new Date(Date.now() + 5 * 60 * 1000);
+        this.log(
+          colors.gray(
+            `  📊 ${provider} usage available (${Math.round(usageResult.utilization)}%), retrying in 5 minutes`
+          )
+        );
+        return shortDelay;
+      }
+    } catch {
+      // Usage check failed — fall through to blind backoff
+    }
+
+    return null;
+  }
+
+  /**
+   * Pre-fire usage check: if still exhausted, defer the retry without
+   * burning a retry attempt.  Returns true if the retry was deferred.
+   */
+  private async preFireUsageCheck(
+    provider: string,
+    task: any,
+    taskKey: string,
+    taskId: number,
+    project: ProjectManager
+  ): Promise<boolean> {
+    const prov = provider.toLowerCase();
+    if (prov !== 'claude' && prov !== 'codex') return false;
+
+    try {
+      // Invalidate caches so we get fresh data
+      if (prov === 'claude') invalidateUsageCache();
+      else invalidateCodexUsageCache();
+
+      const taskModel = task?.agentModel;
+      const usageResult =
+        prov === 'claude'
+          ? await checkClaudeUsage(taskModel)
+          : await checkCodexUsage(taskModel);
+
+      if (usageResult?.isExhausted && usageResult.resetsAt) {
+        const jitterMs = (2 + Math.random() * 3) * 60 * 1000;
+        const deferUntil = new Date(usageResult.resetsAt.getTime() + jitterMs);
+        if (deferUntil.getTime() > Date.now()) {
+          this.log(
+            colors.yellow(
+              `  ⏳ ${provider} usage still exhausted (${usageResult.limitingBucket}), deferring task ${taskId} to ${deferUntil.toLocaleTimeString()} without counting as retry`
+            )
+          );
+
+          const deferMs = deferUntil.getTime() - Date.now();
+          const deferTimer = setTimeout(() => {
+            void this.fireRetry(taskKey).catch(err => {
+              console.warn(
+                `Retry failed for ${taskKey}: ${err instanceof Error ? err.message : String(err)}`
+              );
+            });
+          }, deferMs);
+          deferTimer.unref();
+
+          this.taskTimers.set(taskKey, {
+            provider,
+            taskId,
+            project,
+            timer: deferTimer,
+            scheduledAt: deferUntil,
+          });
+          return true;
+        }
+      }
+    } catch {
+      // Usage check failed — proceed with normal resume
+    }
+
+    return false;
+  }
+
+  /**
    * Internal: fires when an individual task's timer expires.
    */
   private async fireRetry(taskKey: string): Promise<void> {
@@ -319,49 +407,9 @@ export class RetryScheduler {
       return;
     }
 
-    // Pre-fire usage check for Claude tasks: if still exhausted,
-    // defer to reset time without burning a retry attempt.
-    if (provider.toLowerCase() === 'claude') {
-      try {
-        invalidateUsageCache();
-        const taskModel = task?.agentModel;
-        const usageResult = await checkClaudeUsage(taskModel);
-        if (usageResult?.isExhausted && usageResult.resetsAt) {
-          const jitterMs = (2 + Math.random() * 3) * 60 * 1000;
-          const deferUntil = new Date(
-            usageResult.resetsAt.getTime() + jitterMs
-          );
-          if (deferUntil.getTime() > Date.now()) {
-            this.log(
-              colors.yellow(
-                `  ⏳ Claude usage still exhausted (${usageResult.limitingBucket}), deferring task ${taskId} to ${deferUntil.toLocaleTimeString()} without counting as retry`
-              )
-            );
-
-            const deferMs = deferUntil.getTime() - Date.now();
-            const deferTimer = setTimeout(() => {
-              void this.fireRetry(taskKey).catch(err => {
-                console.warn(
-                  `Retry failed for ${taskKey}: ${err instanceof Error ? err.message : String(err)}`
-                );
-              });
-            }, deferMs);
-            deferTimer.unref();
-
-            this.taskTimers.set(taskKey, {
-              provider,
-              taskId,
-              project,
-              timer: deferTimer,
-              scheduledAt: deferUntil,
-            });
-            return;
-          }
-        }
-      } catch {
-        // Usage check failed — proceed with normal resume
-      }
-    }
+    // Pre-fire usage check: if still exhausted, defer without burning a retry.
+    const deferResult = await this.preFireUsageCheck(provider, task, taskKey, taskId, project);
+    if (deferResult) return;
 
     this.log(
       colors.cyan(`\n🔄 Auto-retrying paused ${provider} task ${taskId}...`)

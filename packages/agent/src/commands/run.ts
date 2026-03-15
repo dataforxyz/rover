@@ -882,6 +882,8 @@ export const runCommand = async (
       resolvedAgentTool = tool;
 
       // ACP usage decision: use ACP mode only for tools with ACP support.
+      // Set ROVER_NO_ACP=1 to force direct runner mode (bypasses ACP auth issues).
+      const acpDisabled = process.env.ROVER_NO_ACP === '1' || process.env.ROVER_NO_ACP === 'true';
       const acpEnabledTools = [
         'claude',
         'gemini',
@@ -889,7 +891,7 @@ export const runCommand = async (
         'opencode',
         'qwen',
       ];
-      const useACPMode = acpEnabledTools.includes(tool.toLowerCase());
+      const useACPMode = !acpDisabled && acpEnabledTools.includes(tool.toLowerCase());
 
       // Build the agent step executor based on mode
       if (useACPMode) {
@@ -927,6 +929,8 @@ export const runCommand = async (
         }
       }
 
+      const pauseRequestFile = join(options.output, '.pause-requested');
+
       const runStepImpl = async (
         step: WorkflowStep,
         stepIndex: number,
@@ -937,6 +941,22 @@ export const runCommand = async (
             'Workflow interrupted by shutdown signal'
           );
         }
+
+        // Check for external pause request (written by `rover pause`).
+        // This check runs between steps so the current step finishes
+        // cleanly before the workflow pauses.
+        if (existsSync(pauseRequestFile)) {
+          const reason = (() => {
+            try {
+              return readFileSync(pauseRequestFile, 'utf-8').trim() || 'Paused by external request';
+            } catch {
+              return 'Paused by external request';
+            }
+          })();
+          statusManager?.pause(step.name, reason);
+          throw new PauseWorkflowError(reason);
+        }
+
         const cached = getCachedStepResult(checkpointStore, step, stepsOutput);
         if (cached) return cached;
 

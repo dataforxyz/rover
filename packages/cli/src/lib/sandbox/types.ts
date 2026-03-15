@@ -90,6 +90,27 @@ export abstract class Sandbox {
     return sandboxId;
   }
 
+  /**
+   * Stop the container gracefully without removing it.
+   * Sends SIGTERM, allowing the agent to save a checkpoint before exiting.
+   * The container is NOT removed — use this for pausing tasks.
+   */
+  async stopGracefully(): Promise<string> {
+    let sandboxId = '';
+    this.processManager?.addItem(
+      `Stopping sandbox (${this.backend}) | Name: ${this.sandboxName}`
+    );
+    try {
+      sandboxId = await this.stop();
+      this.processManager?.completeLastItem();
+    } catch (_err: any) {
+      this.processManager?.failLastItem();
+    } finally {
+      this.processManager?.finish();
+    }
+    return sandboxId;
+  }
+
   async stopAndRemove(): Promise<string> {
     let sandboxId = '';
     this.processManager?.addItem(
