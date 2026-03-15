@@ -419,7 +419,8 @@ steps:
         name: 'Checkpoint & Circle Detection'
         if: steps.build.outputs.exit_code != 0 || steps.run_tests.outputs.exit_code != 0
         command: |
-          git add -A
+          git rm --cached --ignore-unmatch -q review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md 2>/dev/null || true
+          git add -A -- . ':!review.md' ':!review_fixes.md' ':!changes.md' ':!context.md' ':!plan.md' ':!test_changes.md' ':!summary.md'
           git diff --cached --quiet && exit 0
           git commit -m "[checkpoint] test-fix"
           TREE_HASH=$(git rev-parse HEAD^{tree})
@@ -439,7 +440,7 @@ steps:
       - id: git_diff
         type: command
         name: 'Capture Git Diff'
-        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1) -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules"'
+        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1) -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules" ":(exclude)review.md" ":(exclude)review_fixes.md" ":(exclude)changes.md" ":(exclude)context.md" ":(exclude)plan.md" ":(exclude)test_changes.md" ":(exclude)summary.md"'
         allow_failure: true
 
       - id: code_review
@@ -618,7 +619,8 @@ steps:
         name: 'Review Checkpoint & Circle Detection'
         if: steps.code_review.outputs.issues_found == true
         command: |
-          git add -A
+          git rm --cached --ignore-unmatch -q review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md 2>/dev/null || true
+          git add -A -- . ':!review.md' ':!review_fixes.md' ':!changes.md' ':!context.md' ':!plan.md' ':!test_changes.md' ':!summary.md'
           git diff --cached --quiet && exit 0
           git commit -m "[checkpoint] review-fix"
           TREE_HASH=$(git rev-parse HEAD^{tree})
