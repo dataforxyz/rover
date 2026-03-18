@@ -48,10 +48,13 @@ steps:
     type: agent
     name: 'Context Analysis'
     prompt: |
-      You are preparing a technical context for this TDD task implementation:
+      You are preparing a technical context for this TDD task implementation.
 
-      Task title: {{inputs.title}}
-      Task description: {{inputs.description}}
+      ┌─────────────────────────────────────────────┐
+      │ GOAL: {{inputs.title}}                       │
+      └─────────────────────────────────────────────┘
+
+      Description: {{inputs.description}}
       User-provided test command override (if empty or not set, auto-detect from project): {{inputs.test_command}}
 
       Follow these steps to complete it. Do not move to the next phase until you complete the previous one.
@@ -134,13 +137,13 @@ steps:
     type: agent
     name: 'TDD Planning'
     prompt: |
-      You are preparing a TDD implementation plan for this task:
+      You are preparing a TDD implementation plan for this task.
 
-      ---
+      ┌─────────────────────────────────────────────┐
+      │ GOAL: {{inputs.title}}                       │
+      └─────────────────────────────────────────────┘
 
-      Title: {{inputs.title}}
-      Description:
-      {{inputs.description}}
+      Description: {{inputs.description}}
       Context: {{steps.context.outputs.context_file}}
 
       ---
@@ -217,6 +220,11 @@ steps:
     prompt: |
       You are in TDD mode — writing tests BEFORE the implementation.
 
+      ┌─────────────────────────────────────────────┐
+      │ GOAL: {{inputs.title}}                       │
+      │ Only write tests for THIS task's behavior.  │
+      └─────────────────────────────────────────────┘
+
       ---
 
       Title: {{inputs.title}}
@@ -277,16 +285,14 @@ steps:
     type: agent
     name: 'Implementation'
     prompt: |
-      You are in implementation mode.
-      Your task is to implement the code to make the tests pass.
-      This is a TDD workflow — tests have already been written.
+      You are in implementation mode. This is a TDD workflow — tests have already been written.
 
-      ---
+      ┌─────────────────────────────────────────────┐
+      │ GOAL: {{inputs.title}}                       │
+      │ You may ONLY modify files needed for this.  │
+      └─────────────────────────────────────────────┘
 
-      Task:
-      Title: {{inputs.title}}
-      Description:
-      {{inputs.description}}
+      Description: {{inputs.description}}
 
       Context:
       ```
@@ -378,13 +384,15 @@ steps:
         name: 'Fix Build or Test Failures'
         if: steps.run_tests.outputs.exit_code != 0
         prompt: |
-          The build or tests are failing. Your job is to fix the implementation so it compiles and all tests pass.
+          The build or tests are failing. Fix ONLY failures related to your task.
 
-          ---
+          ┌─────────────────────────────────────────────┐
+          │ GOAL: {{inputs.title}}                       │
+          │ Only fix failures caused by YOUR changes.   │
+          │ Pre-existing failures are NOT your problem.  │
+          └─────────────────────────────────────────────┘
 
-          Title: {{inputs.title}}
-          Description:
-          {{inputs.description}}
+          Description: {{inputs.description}}
 
           Build exit code: {{steps.build.outputs.exit_code}}
           Build errors (stderr):
@@ -440,7 +448,7 @@ steps:
       - id: git_diff
         type: command
         name: 'Capture Git Diff'
-        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1) -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules" ":(exclude)review.md" ":(exclude)review_fixes.md" ":(exclude)changes.md" ":(exclude)context.md" ":(exclude)plan.md" ":(exclude)test_changes.md" ":(exclude)summary.md"'
+        command: 'DEFAULT_BR=$(grep -oP "^DEFAULT_BRANCH=\\K.*" rover-pipeline.env 2>/dev/null || echo main); BASE=$(git merge-base HEAD "$DEFAULT_BR" 2>/dev/null || git merge-base HEAD main 2>/dev/null || echo HEAD~1); git diff $BASE -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules" ":(exclude)review.md" ":(exclude)review_fixes.md" ":(exclude)changes.md" ":(exclude)context.md" ":(exclude)plan.md" ":(exclude)test_changes.md" ":(exclude)summary.md"'
         allow_failure: true
 
       - id: code_review
@@ -450,6 +458,12 @@ steps:
           You are a senior engineer performing a blocking code review. Your job is to find every issue — you are not a rubber-stamper. Your default stance is that issues exist. Approve only when you genuinely cannot find a single thing wrong.
 
           Do not give the benefit of the doubt. If something looks off, flag it.
+
+          ┌─────────────────────────────────────────────┐
+          │ GOAL: {{inputs.title}}                       │
+          │ Only review changes related to THIS task.   │
+          │ Do NOT request changes to unrelated code.   │
+          └─────────────────────────────────────────────┘
 
           ---
 
@@ -474,7 +488,7 @@ steps:
 
           Go through every hunk in the diff and check ALL of the following:
 
-          1. **Scope check (do this first)**: List every file in the diff. For each file, determine if the change is directly required by the task title and description. Flag ANY file that is not directly related to the task as an out-of-scope change that must be reverted (`git checkout <base> -- <file>`). Common violations: deleting unrelated tests, modifying unrelated mocks, reformatting untouched code, adding/removing comments in files not related to the fix. This is the highest priority issue.
+          1. **Scope check (do this first)**: List every file in the diff. For each file, determine if the change is directly required by the task title and description. Flag ANY file that is not directly related to the task as out-of-scope (it will be automatically reverted). Common violations: deleting unrelated tests, modifying unrelated mocks, reformatting untouched code, adding/removing comments in files not related to the fix. This is the highest priority issue. **NEVER request creating new test helpers, test utilities, mock infrastructure, or fixture files beyond what the task requires. Do NOT request tests for code the task did not change.**
           2. **Correctness**: logic errors, off-by-one errors, null/undefined access, race conditions, incorrect operator precedence, wrong comparisons, missing return statements
           3. **Naming**: variable/function/class names that are vague, misleading, inconsistent with surrounding code, or violate project conventions
           4. **Style**: formatting inconsistencies, unnecessary comments, missing comments where logic is non-obvious, inconsistent patterns within the changed code
@@ -525,6 +539,12 @@ steps:
         prompt: |
           You are in apply-review mode. Your fixes will be tested and re-reviewed, so they must be correct.
 
+          ┌─────────────────────────────────────────────┐
+          │ GOAL: {{inputs.title}}                       │
+          │ Only fix issues flagged in the review.      │
+          │ Do NOT add new files or touch unrelated code.│
+          └─────────────────────────────────────────────┘
+
           ---
 
           Title: {{inputs.title}}
@@ -542,13 +562,13 @@ steps:
 
           ### Instructions
 
-          Fix every issue in the review — bugs, nits, style, naming, everything. But stay in scope: only modify code that was changed for this task. Do not refactor, improve, or touch code outside the scope of the review.
+          Fix every issue in the review — bugs, nits, style, naming, everything. But stay in scope: only modify code that was changed for this task. Do not refactor, improve, or touch code outside the scope of the review. Do NOT create new test helpers, test utilities, mock infrastructure, or fixture files unless the review explicitly requires them for code YOUR task changed. If the review asks for something that would require touching many unrelated files, skip that item and note why.
 
-          1. **Scope reverts first**: If the review flagged out-of-scope files, revert them immediately using `git checkout $(git merge-base HEAD main 2>/dev/null || echo HEAD~1) -- <file>` before doing anything else
-          2. Read all remaining issues in Review
-          3. Fix every single one. Do not skip any issue regardless of size
-          4. Follow review recommendations exactly — do not invent alternative solutions
-          5. Only modify files and lines relevant to the review issues — do not make unrelated changes
+          1. Read all issues in Review
+          2. Fix every single one. Do not skip any issue regardless of size
+          3. Follow review recommendations exactly — do not invent alternative solutions
+          4. Only modify files and lines relevant to the review issues — do not make unrelated changes
+          5. Do NOT revert files or run git checkout — out-of-scope files have already been automatically reverted
           6. Ensure fixes preserve existing functionality and do not introduce regressions
           7. Reference Context for consistency
           8. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
@@ -583,6 +603,12 @@ steps:
         if: steps.run_tests_after_review.outputs.exit_code != 0
         prompt: |
           Review fixes broke the build or tests. Fix the regressions while preserving valid review improvements.
+
+          ┌─────────────────────────────────────────────┐
+          │ GOAL: {{inputs.title}}                       │
+          │ Only fix regressions from review changes.   │
+          │ Do NOT add new files or expand scope.        │
+          └─────────────────────────────────────────────┘
 
           ---
 
@@ -636,6 +662,10 @@ steps:
     name: 'Summary'
     prompt: |
       You are in summary mode.
+
+      ┌─────────────────────────────────────────────┐
+      │ GOAL: {{inputs.title}}                       │
+      └─────────────────────────────────────────────┘
 
       ---
 
