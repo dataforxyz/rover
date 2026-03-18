@@ -244,6 +244,8 @@ fi`;
       // only need to fix bind-mount ownership and load the cached profile.
       homeSetup = `sudo chown -R $(id -u):$(id -g) /workspace
 sudo chown -R $(id -u):$(id -g) /output
+sudo mkdir -p $HOME/.local/share/pnpm/store
+sudo chmod -R a+rwX $HOME/.local/share/pnpm 2>/dev/null || true
 
 source $HOME/.profile`;
     } else {
