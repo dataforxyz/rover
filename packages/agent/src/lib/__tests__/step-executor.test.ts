@@ -145,17 +145,18 @@ describe('executeStep', () => {
       stepsOutput: new Map<string, Map<string, string>>(),
     } as unknown as ACPRunner;
 
-    await expect(
-      executeStep(agentStep, {
-        workflow: createMockWorkflowManager(),
-        inputs: new Map(),
-        stepsOutput: new Map(),
-        totalSteps: 1,
-        currentStepIndex: 0,
-        acpRunner: mockAcpRunner,
-      })
-    ).rejects.toThrow('ACP prompt failed');
+    const result = await executeStep(agentStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput: new Map(),
+      totalSteps: 1,
+      currentStepIndex: 0,
+      acpRunner: mockAcpRunner,
+    });
 
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('ACP prompt failed');
+    expect(result.outputs.get('error_retryable')).toBe('false');
     // closeSession should still be called via finally
     expect(mockAcpRunner.closeSession).toHaveBeenCalledOnce();
   });
@@ -1437,17 +1438,18 @@ describe('executeStep', () => {
       stepsOutput: new Map<string, Map<string, string>>(),
     } as unknown as ACPRunner;
 
-    await expect(
-      executeStep(agentStep, {
-        workflow: createMockWorkflowManager(),
-        inputs: new Map(),
-        stepsOutput: new Map(),
-        totalSteps: 1,
-        currentStepIndex: 0,
-        acpRunner: mockAcpRunner,
-      })
-    ).rejects.toThrow('Invalid API key');
+    const result = await executeStep(agentStep, {
+      workflow: createMockWorkflowManager(),
+      inputs: new Map(),
+      stepsOutput: new Map(),
+      totalSteps: 1,
+      currentStepIndex: 0,
+      acpRunner: mockAcpRunner,
+    });
 
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Invalid API key');
+    expect(result.outputs.get('error_retryable')).toBe('true');
     // Should NOT retry — non-transient error
     expect(mockAcpRunner.runStep).toHaveBeenCalledTimes(1);
   });
@@ -1747,6 +1749,13 @@ describe('isTransientError', () => {
   it('matches rate limit codes', () => {
     expect(isTransientError('too many requests')).toBe(true);
     expect(isTransientError('HTTP 429')).toBe(true);
+  });
+
+  it('matches provider outage codes', () => {
+    expect(isTransientError('API Error: 500 Internal server error')).toBe(
+      true
+    );
+    expect(isTransientError('Service unavailable')).toBe(true);
   });
 
   it('does not match general text containing credit', () => {

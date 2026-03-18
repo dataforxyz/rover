@@ -223,7 +223,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   // Network errors
   {
     pattern:
-      /ECONNREFUSED|ETIMEDOUT|ENETUNREACH|network[_\s]error|connection[_\s]failed/i,
+      /ECONNREFUSED|ETIMEDOUT|ENETUNREACH|network[_\s]error|connection[_\s]failed|\b5(?:00|02|03|04|29)\b|internal[_\s]server[_\s]error|service[_\s]unavailable|temporar(?:ily)?[_\s](?:unavailable|overloaded)|overloaded[_\s]error|server[_\s]error/i,
 
     extractMessage: () => 'Network connection failed',
     createError: message => new NetworkError(message),
@@ -388,6 +388,16 @@ function classifyJsonError(jsonError: any, tool?: string): AgentError {
 
   if (errorType.includes('rate') || errorCode.includes('rate')) {
     return new RateLimitError(message, undefined, tool);
+  }
+
+  if (
+    errorType.includes('overloaded') ||
+    errorCode.includes('overloaded') ||
+    /\b5(?:00|02|03|04|29)\b|internal server error|service unavailable|temporarily unavailable|temporarily overloaded|server error|api error/i.test(
+      message
+    )
+  ) {
+    return new NetworkError(message);
   }
 
   if (errorType.includes('tool') || errorCode.includes('tool')) {

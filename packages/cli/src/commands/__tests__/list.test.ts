@@ -432,6 +432,40 @@ describe('list command', () => {
       expect(detectOptions).toEqual({ suppressWarnings: true });
     });
 
+    it('still passes a task to orphan detection when status refresh throws', async () => {
+      mockJsonMode = true;
+      const task = {
+        id: 2,
+        title: 'Missing Status File',
+        status: 'ITERATING',
+        branchName: 'rover-task-2',
+        rawData: {},
+        updateStatusFromIteration: vi.fn(() => {
+          throw new Error('status.json missing');
+        }),
+        getIterations: vi.fn().mockReturnValue([]),
+        getLastIteration: vi.fn().mockReturnValue(null),
+      };
+
+      mockResolveProjectContext.mockResolvedValue({
+        id: 'test-project-id',
+        path: testDir,
+        repositoryName: 'test-repo',
+        languages: [],
+        packageManagers: [],
+        taskManagers: [],
+        listTasks: () => [task],
+      });
+
+      await listCommand({ json: true });
+
+      expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
+      expect(mockedDetectOrphanedTasks).toHaveBeenCalledTimes(1);
+      const detectArgs = mockedDetectOrphanedTasks.mock.calls[0]?.[0];
+      expect(detectArgs?.[0]?.task.id).toBe(2);
+      expect(detectArgs?.[0]?.task.status).toBe('ITERATING');
+    });
+
     it('clears scheduler state when a refreshed task is no longer paused', async () => {
       mockJsonMode = true;
       const unregisterTask = vi.fn();

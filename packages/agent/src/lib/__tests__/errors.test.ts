@@ -179,6 +179,29 @@ describe('parseAgentError', () => {
       expect(error).toBeInstanceOf(NetworkError);
       expect(error.isRetryable).toBe(true);
     });
+
+    it('should classify provider 500 errors as NetworkError', () => {
+      const error = parseAgentError(
+        'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+        '',
+        1,
+        'claude'
+      );
+      expect(error).toBeInstanceOf(NetworkError);
+      expect(error.isRetryable).toBe(true);
+    });
+
+    it('should classify service unavailable JSON errors as NetworkError', () => {
+      const jsonError = JSON.stringify({
+        error: {
+          type: 'api_error',
+          message: 'Service unavailable',
+        },
+      });
+      const error = parseAgentError(jsonError, '', 1, 'claude');
+      expect(error).toBeInstanceOf(NetworkError);
+      expect(error.isRetryable).toBe(true);
+    });
   });
 
   describe('rate limit errors', () => {

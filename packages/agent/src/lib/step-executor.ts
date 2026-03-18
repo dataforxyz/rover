@@ -66,7 +66,7 @@ export class PauseWorkflowError extends Error {
 }
 
 export function isTransientError(errorMsg: string): boolean {
-  return /ECONNREFUSED|ETIMEDOUT|ENETUNREACH|network[_\s-]error|connection[_\s-](failed|refused|reset)|too[_\s-]many[_\s-]requests|\b429\b/i.test(
+  return /ECONNREFUSED|ETIMEDOUT|ENETUNREACH|network[_\s-]error|connection[_\s-](failed|refused|reset)|too[_\s-]many[_\s-]requests|\b429\b|\b5(?:00|02|03|04|29)\b|internal[_\s-]server[_\s-]error|service[_\s-]unavailable|temporar(?:ily)?[_\s-](?:unavailable|overloaded)|overloaded[_\s-]error|server[_\s-]error/i.test(
     errorMsg
   );
 }
@@ -319,6 +319,7 @@ export async function executeStep(
       if (config.acpRunner) {
         const acpRunner = config.acpRunner;
         const managesSessionLifecycle = !config.reuseAcpSession;
+        let sessionClosed = false;
         if (managesSessionLifecycle) {
           await acpRunner.createSession();
         }
@@ -337,8 +338,10 @@ export async function executeStep(
           if (isAuthError(errorMsg) && attempt < MAX_TRANSIENT_RETRIES) {
             const didRefresh = refreshCredentials();
             acpRunner.closeSession();
+            sessionClosed = true;
             if (!managesSessionLifecycle) {
               await acpRunner.createSession();
+              sessionClosed = false;
             }
             const delayMs = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
             console.log(
@@ -351,8 +354,10 @@ export async function executeStep(
           }
           if (isTransientError(errorMsg) && attempt < MAX_TRANSIENT_RETRIES) {
             acpRunner.closeSession();
+            sessionClosed = true;
             if (!managesSessionLifecycle) {
               await acpRunner.createSession();
+              sessionClosed = false;
             }
             const delayMs = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
             console.log(
@@ -364,6 +369,7 @@ export async function executeStep(
             continue;
           }
           acpRunner.closeSession();
+          sessionClosed = true;
           // Convert thrown ACP errors into a failed StepResult so they flow
           // through the retryable/pause logic below instead of bubbling up
           // as an unhandled exception (which causes FAILED instead of PAUSED).
@@ -380,7 +386,7 @@ export async function executeStep(
           };
         }
 
-        if (managesSessionLifecycle) {
+        if (managesSessionLifecycle && !sessionClosed) {
           acpRunner.closeSession();
         }
       } else {

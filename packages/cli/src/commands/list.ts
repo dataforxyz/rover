@@ -220,7 +220,10 @@ const buildTaskRow = (
   let durationDisplay = '-';
   if (iterationStatus) {
     const wallClock = formatDuration(startedAt, endTime);
-    const operatingMs = task.getOperatingTime();
+    const operatingMs =
+      typeof task.getOperatingTime === 'function'
+        ? task.getOperatingTime()
+        : undefined;
     if (operatingMs != null) {
       const opTime = formatDurationMs(operatingMs);
       durationDisplay = opTime !== wallClock ? `${opTime} (${wallClock})` : opTime;
@@ -354,6 +357,8 @@ const listCommand = async (
         orphanCandidates.push({ task, project: projectData });
         refreshedTasksWithProjects.push({ task, project: projectData });
       } catch (err) {
+        orphanCandidates.push({ task, project: projectData });
+        refreshedTasksWithProjects.push({ task, project: projectData });
         if (!isJsonMode()) {
           console.log(
             `\n${colors.yellow(`⚠ Failed to update the status of task ${task.id}`)}`
@@ -733,7 +738,7 @@ const listCommand = async (
     console.error(colors.red('Error getting task status:'), error);
     // Recursive watch refreshes share one scheduler across refresh cycles.
     // Only destroy it when the outer list command is unwinding.
-    if (!options.watching) {
+    if (!options.watching && typeof options._retryScheduler?.destroy === 'function') {
       options._retryScheduler?.destroy();
     }
   } finally {

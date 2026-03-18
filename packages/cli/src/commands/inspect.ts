@@ -371,13 +371,8 @@ const inspectCommand = async (
         );
         showList(discoveredFiles);
 
-        // Show the summary file by default only when it's available
-        const hasSummary = discoveredFiles.includes(DEFAULT_FILE_CONTENTS);
-        const fileFilter = options.file || [
-          hasSummary
-            ? DEFAULT_FILE_CONTENTS
-            : discoveredFiles[discoveredFiles.length - 1],
-        ];
+        // Show all output files by default
+        const fileFilter = options.file || discoveredFiles;
 
         const iterationFileContents = iteration.getMarkdownFiles(fileFilter);
         if (iterationFileContents.size === 0) {

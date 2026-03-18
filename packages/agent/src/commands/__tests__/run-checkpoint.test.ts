@@ -595,6 +595,16 @@ describe('isTransientError', () => {
     expect(isTransientError('HTTP 429')).toBe(true);
   });
 
+  it('should detect provider 500 status as transient', () => {
+    expect(isTransientError('API Error: 500 Internal server error')).toBe(
+      true
+    );
+  });
+
+  it('should detect service unavailable as transient', () => {
+    expect(isTransientError('Service unavailable from provider')).toBe(true);
+  });
+
   it('should NOT detect credit limit as transient', () => {
     expect(isTransientError("You've hit your limit")).toBe(false);
   });
@@ -708,6 +718,12 @@ describe('isRetryableError', () => {
 
   it('should detect bare 429 as retryable', () => {
     expect(isRetryableError('HTTP 429')).toBe(true);
+  });
+
+  it('should detect provider 500 status as retryable', () => {
+    expect(isRetryableError('API Error: 500 Internal server error')).toBe(
+      true
+    );
   });
 
   it('should NOT match 429 embedded in a larger number', () => {
