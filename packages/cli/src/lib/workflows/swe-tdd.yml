@@ -442,8 +442,8 @@ steps:
   - id: review_loop
     type: loop
     name: 'Review & Fix Loop'
-    until: steps.code_review.outputs.issues_found != true || steps.review_checkpoint.outputs.exit_code != 0
-    maxIterations: 5
+    until: steps.code_review.outputs.issues_found != blocking || steps.review_checkpoint.outputs.exit_code != 0
+    maxIterations: 3
     steps:
       - id: git_diff
         type: command
@@ -455,9 +455,7 @@ steps:
         type: agent
         name: 'Code Review'
         prompt: |
-          You are a senior engineer performing a blocking code review. Your job is to find every issue — you are not a rubber-stamper. Your default stance is that issues exist. Approve only when you genuinely cannot find a single thing wrong.
-
-          Do not give the benefit of the doubt. If something looks off, flag it.
+          You are a senior engineer performing a code review. Focus on correctness, security, and functionality — not style preferences.
 
           ┌─────────────────────────────────────────────┐
           │ GOAL: {{inputs.title}}                       │
@@ -502,9 +500,13 @@ steps:
 
           ### Output
 
-          - Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files
-          - If the implementation is genuinely flawless with zero issues of any kind: output {"issues_found": "false"} and do NOT create any file.
-          - If ANY issues are found — including nits, naming, and style — output {"issues_found": "true"} and create `review.md` with the following template:
+          Classify your findings into one of three outcomes:
+
+          - **No issues at all**: output {"issues_found": "false"} and do NOT create any file.
+          - **Only nits** (style, naming, minor comments — nothing that affects correctness or security): output {"issues_found": "nits"}. Create `review.md` with the nits noted, but these will NOT block shipping.
+          - **Blocking issues** (bugs, logic errors, security flaws, missing error handling, compile errors, broken tests, out-of-scope files): output {"issues_found": "blocking"} and create `review.md`. These MUST be fixed before shipping.
+
+          Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files. Use `review.md` with the following template:
 
           <template>
           # Code Review
@@ -521,7 +523,7 @@ steps:
           **Fix**: [Exact actionable fix — what to change and where]
           **Code location**: [Line numbers or function names]
 
-          (Repeat for every issue found in the changed code. Include everything: bugs, logic errors, compile errors, unused variables, missing imports, naming, style, nits, test gaps, security concerns, plan deviations. Do not flag issues in code the task did not change.)
+          (Repeat for every issue. Mark each as **[blocking]** or **[nit]**. Do not flag issues in code the task did not change.)
           </template>
         outputs:
           - name: issues_found
@@ -535,9 +537,9 @@ steps:
       - id: apply_fixes
         type: agent
         name: 'Apply Review Fixes'
-        if: steps.code_review.outputs.issues_found == true
+        if: steps.code_review.outputs.issues_found == blocking
         prompt: |
-          You are in apply-review mode. Your fixes will be tested and re-reviewed, so they must be correct.
+          You are in apply-review mode. Your fixes will be tested and re-reviewed, so they must be correct. Only fix BLOCKING issues — ignore nits.
 
           ┌─────────────────────────────────────────────┐
           │ GOAL: {{inputs.title}}                       │
@@ -643,7 +645,7 @@ steps:
       - id: review_checkpoint
         type: command
         name: 'Review Checkpoint & Circle Detection'
-        if: steps.code_review.outputs.issues_found == true
+        if: steps.code_review.outputs.issues_found == blocking
         command: |
           git rm --cached --ignore-unmatch -q review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md 2>/dev/null || true
           git add -A -- . ':!review.md' ':!review_fixes.md' ':!changes.md' ':!context.md' ':!plan.md' ':!test_changes.md' ':!summary.md'
