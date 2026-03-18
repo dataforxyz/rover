@@ -346,7 +346,10 @@ describe('run command: pause/resume integration', () => {
           expect.stringContaining('Workflow paused due to retryable error'),
           expect.objectContaining({
             taskId: 'test-task-1',
-            metadata: { reason: 'retryable_error' },
+            metadata: {
+              reason: 'retryable_error',
+              reasonCode: 'retryable_error',
+            },
           })
         );
       } finally {

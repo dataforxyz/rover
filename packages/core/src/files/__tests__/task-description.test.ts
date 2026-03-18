@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TaskDescriptionManager } from '../task-description.js';
@@ -24,6 +24,15 @@ describe('TaskDescriptionManager', () => {
     // Clean up temp directory
     rmSync(testDir, { recursive: true, force: true });
   });
+
+  const readLifecycleEvents = () => {
+    const logPath = join(testDir, '.rover', 'logs', 'task-status-history.jsonl');
+    const raw = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    return raw.map(line => JSON.parse(line));
+  };
 
   describe('agent and sourceBranch fields', () => {
     it('should store agent and sourceBranch when creating task', () => {
@@ -239,6 +248,146 @@ describe('TaskDescriptionManager', () => {
       const reloaded = TaskDescriptionManager.load(taskPath, 6);
       expect(reloaded.status).toBe('COMPLETED');
       expect(reloaded.error).toBeUndefined();
+    });
+  });
+
+  describe('lifecycle observability log', () => {
+    it('writes an append-only status transition log outside the task directory', () => {
+      const taskPath = getTaskPath(41);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 41,
+        title: 'Observable Task',
+        description: 'Tracks state changes',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress('2026-03-18T10:00:00.000Z');
+      task.markIterating('2026-03-18T10:01:00.000Z');
+      task.markPaused('Credit limit reached');
+      task.markInProgress('2026-03-18T10:15:00.000Z');
+      task.markFailed('Container exited unexpectedly');
+
+      const events = readLifecycleEvents();
+
+      expect(events.map(event => [event.changeKind, event.status])).toEqual([
+        ['created', 'NEW'],
+        ['transition', 'IN_PROGRESS'],
+        ['transition', 'ITERATING'],
+        ['transition', 'PAUSED'],
+        ['transition', 'IN_PROGRESS'],
+        ['transition', 'FAILED'],
+      ]);
+      expect(events[3].reason).toBe('Credit limit reached');
+      expect(events[3].reasonCode).toBe('credit_limit');
+      expect(events[3].source).toBe('host');
+      expect(events[5].reason).toBe('Container exited unexpectedly');
+    });
+
+    it('does not log duplicate events when the same status is re-saved', () => {
+      const taskPath = getTaskPath(42);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 42,
+        title: 'Duplicate Guard',
+        description: 'Avoids noisy logging',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress('2026-03-18T10:00:00.000Z');
+      task.markIterating('2026-03-18T10:01:00.000Z');
+      task.setStatus('ITERATING', { timestamp: '2026-03-18T10:05:00.000Z' });
+      task.setStatus('ITERATING', { timestamp: '2026-03-18T10:06:00.000Z' });
+
+      const events = readLifecycleEvents();
+
+      expect(events.map(event => event.status)).toEqual([
+        'NEW',
+        'IN_PROGRESS',
+        'ITERATING',
+      ]);
+    });
+
+    it('keeps lifecycle events after the task directory is deleted', () => {
+      const taskPath = getTaskPath(43);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 43,
+        title: 'Deleted Task',
+        description: 'Still visible in history',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress('2026-03-18T10:00:00.000Z');
+      task.markFailed('Intermittent error');
+      task.delete();
+
+      const events = readLifecycleEvents();
+
+      expect(events.at(-1)?.changeKind).toBe('deleted');
+      expect(events.at(-1)?.taskId).toBe(43);
+      expect(events.at(-1)?.reason).toBe('task deleted');
+    });
+
+    it('logs execution-status failures through the task lifecycle history', () => {
+      const taskPath = getTaskPath(44);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 44,
+        title: 'Execution Status Failure',
+        description: 'Tracks host-side failure transitions',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress('2026-03-18T10:00:00.000Z');
+      task.updateExecutionStatus('failed', {
+        exitCode: 1,
+        error: 'Workflow stopped due to step failure: failing for observability test',
+      });
+
+      const events = readLifecycleEvents();
+
+      expect(events.at(-1)?.status).toBe('FAILED');
+      expect(events.at(-1)?.reason).toBe(
+        'Workflow stopped due to step failure: failing for observability test'
+      );
+      expect(task.status).toBe('FAILED');
+      expect(task.executionStatus).toBe('failed');
+    });
+
+    it('repairs missing terminal lifecycle events when loading an existing task', () => {
+      const taskPath = getTaskPath(45);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 45,
+        title: 'Reconcile Missing Event',
+        description: 'Repairs lifecycle history on load',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress('2026-03-18T10:00:00.000Z');
+
+      const rawTask = JSON.parse(
+        readFileSync(join(taskPath, 'description.json'), 'utf8')
+      ) as Record<string, unknown>;
+      rawTask.status = 'FAILED';
+      rawTask.error =
+        'Workflow stopped due to step failure: failing for observability test';
+      rawTask.failedAt = '2026-03-18T10:10:00.000Z';
+      rawTask.lastStatusCheck = '2026-03-18T10:10:00.000Z';
+      writeFileSync(
+        join(taskPath, 'description.json'),
+        JSON.stringify(rawTask, null, 2)
+      );
+
+      const reloaded = TaskDescriptionManager.load(taskPath, 45);
+      const events = readLifecycleEvents();
+
+      expect(reloaded.status).toBe('FAILED');
+      expect(events.at(-1)?.status).toBe('FAILED');
+      expect(events.at(-1)?.reason).toBe(
+        'Workflow stopped due to step failure: failing for observability test'
+      );
     });
   });
 
@@ -465,6 +614,25 @@ describe('TaskDescriptionManager', () => {
       expect(reloaded.pausedAt).toBeDefined();
     });
 
+    it('should clear stale terminal timestamps when transitioning to PAUSED', () => {
+      const taskPath = getTaskPath(141);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 141,
+        title: 'Pause Clears Terminal Metadata',
+        description: 'Test description',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress();
+      task.markFailed('Transient failure');
+      expect(task.failedAt).toBeDefined();
+
+      task.markPaused('Retry later');
+      expect(task.failedAt).toBeUndefined();
+      expect(task.completedAt).toBeUndefined();
+    });
+
     it('should clear error and pausedAt when resuming to IN_PROGRESS', () => {
       const taskPath = getTaskPath(15);
       const task = TaskDescriptionManager.create(taskPath, {
@@ -492,6 +660,25 @@ describe('TaskDescriptionManager', () => {
       expect(reloaded.pausedAt).toBeUndefined();
     });
 
+    it('should clear stale terminal timestamps when resuming to IN_PROGRESS', () => {
+      const taskPath = getTaskPath(151);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 151,
+        title: 'Resume Clears Terminal Metadata',
+        description: 'Test description',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress();
+      task.markFailed('Previous failure');
+      expect(task.failedAt).toBeDefined();
+
+      task.markInProgress();
+      expect(task.failedAt).toBeUndefined();
+      expect(task.completedAt).toBeUndefined();
+    });
+
     it('should clear error and pausedAt when transitioning to ITERATING', () => {
       const taskPath = getTaskPath(16);
       const task = TaskDescriptionManager.create(taskPath, {
@@ -509,6 +696,25 @@ describe('TaskDescriptionManager', () => {
       expect(task.status).toBe('ITERATING');
       expect(task.error).toBeUndefined();
       expect(task.pausedAt).toBeUndefined();
+    });
+
+    it('should clear stale terminal timestamps when transitioning to ITERATING', () => {
+      const taskPath = getTaskPath(161);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 161,
+        title: 'Iterating Clears Terminal Metadata',
+        description: 'Test description',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markInProgress();
+      task.markCompleted();
+      expect(task.completedAt).toBeDefined();
+
+      task.markIterating();
+      expect(task.completedAt).toBeUndefined();
+      expect(task.failedAt).toBeUndefined();
     });
 
     it('should report isActive() as false for PAUSED', () => {

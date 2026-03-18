@@ -57,6 +57,30 @@ const EXIT_SUCCESS = AGENT_EXIT_CODE.SUCCESS;
 const EXIT_FAILED = AGENT_EXIT_CODE.FAILED;
 const EXIT_PAUSED = AGENT_EXIT_CODE.PAUSED;
 
+function workflowReasonCode(error?: string): string {
+  const text = String(error || '').toLowerCase();
+  if (!text) return 'workflow_failed';
+  if (text.includes('credit limit') || text.includes('usage limit')) {
+    return 'credit_limit';
+  }
+  if (text.includes('rate limit') || text.includes('too many requests')) {
+    return 'rate_limit';
+  }
+  if (text.includes('auth') || text.includes('login') || text.includes('sign in')) {
+    return 'auth_required';
+  }
+  if (text.includes('timeout') || text.includes('timed out') || text.includes('network')) {
+    return 'network_timeout';
+  }
+  if (text.includes('step failure') || text.includes('step failed')) {
+    return 'workflow_step_failed';
+  }
+  if (text.includes('signal')) {
+    return 'signal_interrupt';
+  }
+  return 'workflow_failed';
+}
+
 /**
  * Helper function to display step results consistently
  */
@@ -830,7 +854,10 @@ export const runCommand = async (
           output.error || 'Workflow paused by signal',
           {
             taskId: options.taskId,
-            metadata: { signal },
+            metadata: {
+              signal,
+              reasonCode: 'signal_interrupt',
+            },
           }
         );
         // IMPORTANT: process.exit() intentionally bypasses the normal cleanup
@@ -1061,6 +1088,7 @@ export const runCommand = async (
               successfulSteps,
               failedSteps,
               skippedSteps,
+              reasonCode: workflowReasonCode(runResult.error),
             },
           });
         } else {
@@ -1102,7 +1130,10 @@ export const runCommand = async (
           checkpointStore.persist();
           logger?.info('workflow_pause', output.error, {
             taskId: options.taskId,
-            metadata: { reason: 'retryable_error' },
+            metadata: {
+              reason: 'retryable_error',
+              reasonCode: 'retryable_error',
+            },
           });
         } else {
           throw err;
@@ -1132,6 +1163,9 @@ export const runCommand = async (
         taskId: options.taskId,
         error: output.error,
         duration: totalDuration,
+        metadata: {
+          reasonCode: workflowReasonCode(output.error),
+        },
       });
 
       console.log(colors.red(`\n✗ ${output.error}`));

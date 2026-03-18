@@ -6,6 +6,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -14,7 +15,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   CURRENT_TASK_DESCRIPTION_SCHEMA_VERSION,
   TaskDescriptionSchema,
@@ -94,6 +95,12 @@ export class TaskDescriptionManager {
 
     const instance = new TaskDescriptionManager(schema, taskData.id, basePath);
     instance.save();
+    instance.appendLifecycleEvent({
+      timestamp: now,
+      status: 'NEW',
+      previousStatus: undefined,
+      changeKind: 'created',
+    });
     return instance;
   }
 
@@ -131,6 +138,7 @@ export class TaskDescriptionManager {
         instance.save();
       }
 
+      instance.reconcileLifecycleHistory();
       return instance;
     } catch (error) {
       if (error instanceof TaskNotFoundError) {
@@ -320,6 +328,13 @@ export class TaskDescriptionManager {
    */
   delete(): void {
     try {
+      this.appendLifecycleEvent({
+        timestamp: new Date().toISOString(),
+        status: this.data.status,
+        previousStatus: this.data.status,
+        reason: 'task deleted',
+        changeKind: 'deleted',
+      });
       if (existsSync(this.filePath)) {
         rmSync(this.filePath);
       }
@@ -337,6 +352,7 @@ export class TaskDescriptionManager {
    */
   setStatus(status: TaskStatus, metadata?: StatusMetadata): void {
     const previousStatus = this.data.status;
+    const previousError = this.data.error;
     this.data.status = status;
 
     const timestamp = metadata?.timestamp || new Date().toISOString();
@@ -349,6 +365,8 @@ export class TaskDescriptionManager {
         // Clear stale metadata from a previous PAUSED, FAILED, or IN_PROGRESS state
         this.data.error = undefined;
         this.data.pausedAt = undefined;
+        this.data.completedAt = undefined;
+        this.data.failedAt = undefined;
         break;
       case 'IN_PROGRESS':
         if (!this.data.startedAt) {
@@ -357,12 +375,16 @@ export class TaskDescriptionManager {
         // Clear stale error and pausedAt from a previous PAUSED or FAILED state on resume
         this.data.error = undefined;
         this.data.pausedAt = undefined;
+        this.data.completedAt = undefined;
+        this.data.failedAt = undefined;
         break;
       case 'ITERATING':
         this.data.lastIterationAt = timestamp;
         // Clear stale error and pausedAt from a previous PAUSED or FAILED state on resume
         this.data.error = undefined;
         this.data.pausedAt = undefined;
+        this.data.completedAt = undefined;
+        this.data.failedAt = undefined;
         break;
       case 'COMPLETED':
         this.data.completedAt = timestamp;
@@ -381,6 +403,8 @@ export class TaskDescriptionManager {
         // Intentionally clears error when metadata.error is undefined so that
         // stale errors from a previous status don't persist.
         this.data.error = metadata?.error;
+        this.data.completedAt = undefined;
+        this.data.failedAt = undefined;
         break;
       case 'MERGED':
       case 'PUSHED':
@@ -394,6 +418,13 @@ export class TaskDescriptionManager {
 
     this.data.lastStatusCheck = timestamp;
     this.save();
+    this.appendLifecycleEvent({
+      timestamp,
+      status,
+      previousStatus,
+      reason: metadata?.error,
+      previousReason: previousError,
+    });
   }
 
   /**
@@ -931,6 +962,7 @@ export class TaskDescriptionManager {
     status: string,
     metadata?: { exitCode?: number; error?: string }
   ): void {
+    const timestamp = new Date().toISOString();
     this.data.executionStatus = status;
 
     if (metadata?.exitCode !== undefined) {
@@ -938,16 +970,20 @@ export class TaskDescriptionManager {
     }
 
     if (metadata?.error) {
-      this.data.error = metadata.error;
-      this.data.errorAt = new Date().toISOString();
+      this.data.errorAt = timestamp;
     }
 
     if (status === 'completed') {
-      this.data.completedAt = new Date().toISOString();
+      this.setStatus('COMPLETED', { timestamp });
+      return;
     } else if (status === 'failed') {
-      this.data.failedAt = new Date().toISOString();
+      this.setStatus('FAILED', { timestamp, error: metadata?.error });
+      return;
     } else if (status === 'paused') {
-      this.data.pausedAt = new Date().toISOString();
+      this.setStatus('PAUSED', { timestamp, error: metadata?.error });
+      return;
+    } else if (metadata?.error) {
+      this.data.error = metadata.error;
     }
 
     this.save();
@@ -969,6 +1005,211 @@ export class TaskDescriptionManager {
    */
   isCompleted(): boolean {
     return this.data.status === 'COMPLETED';
+  }
+
+  private roverDir(): string {
+    const tasksDir = dirname(this.basePath);
+    const maybeRoverDir = dirname(tasksDir);
+    if (
+      basename(tasksDir) === 'tasks' &&
+      basename(maybeRoverDir) === '.rover'
+    ) {
+      return maybeRoverDir;
+    }
+    return join(dirname(dirname(this.basePath)), '.rover');
+  }
+
+  private lifecycleLogPath(): string {
+    return join(this.roverDir(), 'logs', 'task-status-history.jsonl');
+  }
+
+  private deriveLifecycleReasonCode(reason?: string, changeKind?: string): string {
+    const text = String(reason || '').toLowerCase();
+    if (changeKind === 'deleted') return 'task_deleted';
+    if (!text) return '';
+    if (text.includes('credit limit') || text.includes('usage limit')) {
+      return 'credit_limit';
+    }
+    if (text.includes('rate limit') || text.includes('too many requests')) {
+      return 'rate_limit';
+    }
+    if (text.includes('auth') || text.includes('login') || text.includes('sign in')) {
+      return 'auth_required';
+    }
+    if (text.includes('network') || text.includes('timeout') || text.includes('timed out')) {
+      return 'network_timeout';
+    }
+    if (text.includes('step failure') || text.includes('step failed')) {
+      return 'workflow_step_failed';
+    }
+    if (text.includes('signal')) {
+      return 'signal_interrupt';
+    }
+    if (text.includes('task deleted')) {
+      return 'task_deleted';
+    }
+    return 'unknown_reason';
+  }
+
+  private appendLifecycleEvent(params: {
+    timestamp: string;
+    status: string;
+    previousStatus?: string;
+    reason?: string;
+    previousReason?: string;
+    changeKind?: 'created' | 'transition' | 'reason_update' | 'deleted';
+  }): void {
+    const {
+      timestamp,
+      status,
+      previousStatus,
+      reason,
+      previousReason,
+      changeKind,
+    } = params;
+
+    const kind =
+      changeKind ??
+      (previousStatus === status ? 'reason_update' : 'transition');
+
+    if (
+      kind === 'transition' &&
+      previousStatus === status
+    ) {
+      return;
+    }
+
+    if (
+      kind === 'reason_update' &&
+      (!reason || reason === previousReason)
+    ) {
+      return;
+    }
+
+    const payload = {
+      ts: timestamp,
+      event: 'task_status',
+      changeKind: kind,
+      source: 'host',
+      actor: 'system',
+      taskId: this.data.id,
+      taskUuid: this.data.uuid,
+      title: this.data.title,
+      branchName: this.data.branchName,
+      workflowName: this.data.workflowName,
+      status,
+      previousStatus: previousStatus ?? null,
+      reason: reason || '',
+      reasonCode: this.deriveLifecycleReasonCode(reason, kind),
+      iteration: this.data.iterations,
+      agent: this.data.agent || '',
+      agentModel: this.data.agentModel || '',
+    };
+
+    try {
+      const path = this.lifecycleLogPath();
+      mkdirSync(dirname(path), { recursive: true });
+      appendFileSync(path, `${JSON.stringify(payload)}\n`, 'utf8');
+    } catch (error) {
+      if (VERBOSE) {
+        console.error(
+          `Failed to append lifecycle event for task ${this.taskId}: ${error}`
+        );
+      }
+    }
+  }
+
+  private latestLifecycleEventForTask():
+    | {
+        status?: string;
+        reason?: string;
+      }
+    | undefined {
+    const path = this.lifecycleLogPath();
+    if (!existsSync(path)) {
+      return undefined;
+    }
+
+    try {
+      const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean);
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const line = lines[index];
+        if (!line) continue;
+        const parsed = JSON.parse(line) as {
+          taskId?: number;
+          taskUuid?: string;
+          status?: string;
+          reason?: string;
+        };
+        if (
+          parsed.taskId === this.data.id &&
+          parsed.taskUuid === this.data.uuid
+        ) {
+          return parsed;
+        }
+      }
+    } catch (error) {
+      if (VERBOSE) {
+        console.error(
+          `Failed to read lifecycle events for task ${this.taskId}: ${error}`
+        );
+      }
+    }
+
+    return undefined;
+  }
+
+  private currentLifecycleTimestamp(): string {
+    return (
+      this.data.lastStatusCheck ||
+      this.data.failedAt ||
+      this.data.pausedAt ||
+      this.data.completedAt ||
+      this.data.lastIterationAt ||
+      this.data.startedAt ||
+      this.data.createdAt ||
+      new Date().toISOString()
+    );
+  }
+
+  private reconcileLifecycleHistory(): void {
+    const latestEvent = this.latestLifecycleEventForTask();
+    const currentStatus = this.data.status;
+    const currentReason = this.data.error || '';
+    const timestamp = this.currentLifecycleTimestamp();
+
+    if (!latestEvent) {
+      this.appendLifecycleEvent({
+        timestamp,
+        status: currentStatus,
+        previousStatus: undefined,
+        reason: currentReason,
+        changeKind: currentStatus === 'NEW' ? 'created' : 'transition',
+      });
+      return;
+    }
+
+    if (latestEvent.status !== currentStatus) {
+      this.appendLifecycleEvent({
+        timestamp,
+        status: currentStatus,
+        previousStatus: latestEvent.status,
+        reason: currentReason,
+        previousReason: latestEvent.reason,
+      });
+      return;
+    }
+
+    if (currentReason && currentReason !== (latestEvent.reason || '')) {
+      this.appendLifecycleEvent({
+        timestamp,
+        status: currentStatus,
+        previousStatus: latestEvent.status,
+        reason: currentReason,
+        previousReason: latestEvent.reason,
+        changeKind: 'reason_update',
+      });
+    }
   }
 
   /**

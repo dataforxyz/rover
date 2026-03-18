@@ -163,6 +163,7 @@ export class ProjectManager {
     // Check central store first
     const centralPath = this.getTaskPath(task.id);
     if (TaskDescriptionManager.exists(centralPath)) {
+      task.delete();
       rmSync(centralPath, { recursive: true });
       deletedTask = true;
     }
