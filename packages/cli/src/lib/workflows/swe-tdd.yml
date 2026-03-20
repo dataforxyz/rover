@@ -449,7 +449,7 @@ steps:
       - id: git_diff
         type: command
         name: 'Capture Git Diff'
-        command: 'DEFAULT_BR=$(grep -oP "^DEFAULT_BRANCH=\\K.*" rover-pipeline.env 2>/dev/null || echo main); BASE=$(git merge-base HEAD "$DEFAULT_BR" 2>/dev/null || git merge-base HEAD main 2>/dev/null || echo HEAD~1); git diff $BASE -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules" ":(exclude)review.md" ":(exclude)review_fixes.md" ":(exclude)changes.md" ":(exclude)context.md" ":(exclude)plan.md" ":(exclude)test_changes.md" ":(exclude)summary.md"'
+        command: 'DEFAULT_BR=$(grep -oP "^DEFAULT_BRANCH=\\K.*" rover-pipeline.env 2>/dev/null || echo main); BASE=$(git merge-base HEAD "$DEFAULT_BR" 2>/dev/null || git merge-base HEAD main 2>/dev/null || echo HEAD~1); git diff $BASE -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules" ":(exclude).gitignore" ":(exclude)review.md" ":(exclude)review_fixes.md" ":(exclude)changes.md" ":(exclude)context.md" ":(exclude)plan.md" ":(exclude)test_changes.md" ":(exclude)summary.md"'
         allow_failure: true
 
       - id: code_review
