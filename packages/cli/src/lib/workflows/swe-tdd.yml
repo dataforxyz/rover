@@ -427,6 +427,9 @@ steps:
         name: 'Checkpoint & Circle Detection'
         if: steps.build.outputs.exit_code != 0 || steps.run_tests.outputs.exit_code != 0
         command: |
+          for f in review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md; do
+            grep -qxF "$f" .gitignore 2>/dev/null || echo "$f" >> .gitignore
+          done
           git rm --cached --ignore-unmatch -q review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md 2>/dev/null || true
           git add -A -- . ':!review.md' ':!review_fixes.md' ':!changes.md' ':!context.md' ':!plan.md' ':!test_changes.md' ':!summary.md'
           git diff --cached --quiet && exit 0
@@ -647,6 +650,9 @@ steps:
         name: 'Review Checkpoint & Circle Detection'
         if: steps.code_review.outputs.issues_found == blocking
         command: |
+          for f in review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md; do
+            grep -qxF "$f" .gitignore 2>/dev/null || echo "$f" >> .gitignore
+          done
           git rm --cached --ignore-unmatch -q review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md 2>/dev/null || true
           git add -A -- . ':!review.md' ':!review_fixes.md' ':!changes.md' ':!context.md' ':!plan.md' ':!test_changes.md' ':!summary.md'
           git diff --cached --quiet && exit 0
