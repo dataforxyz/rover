@@ -1,0 +1,127 @@
+# Rebase Fix Workflow
+# Fixes test failures caused by rebasing onto the default branch.
+# The agent gets the rebase diff, test failures, and loops until tests pass.
+version: '1.0'
+name: 'rebase-fix'
+description: 'Fix test failures caused by rebase conflicts with upstream changes'
+
+inputs:
+  - name: description
+    description: 'What upstream changes conflicted and what tests are failing'
+    type: string
+    required: true
+  - name: test_command
+    description: 'The test command to run'
+    type: string
+    required: true
+  - name: build_command
+    description: 'The build command (or "none")'
+    type: string
+    required: false
+  - name: rebase_diff
+    description: 'The diff stat showing what upstream changes were merged'
+    type: string
+    required: false
+  - name: test_failures
+    description: 'The current test failure output'
+    type: string
+    required: true
+
+outputs:
+  - name: summary
+    description: 'Summary of fixes applied'
+    type: file
+    filename: summary.md
+
+defaults:
+  tool: claude
+  model: haiku
+
+config:
+  timeout: 1800
+  continueOnError: false
+  loopLimit: 5
+
+steps:
+  - id: fix_loop
+    type: loop
+    name: 'Build & Test Fix Loop'
+    until: steps.run_tests.outputs.exit_code == 0
+    maxIterations: 5
+    steps:
+      - id: fix_code
+        type: agent
+        name: 'Fix Rebase Conflicts'
+        prompt: |
+          You are fixing test failures caused by rebasing onto the default branch.
+
+          ┌─────────────────────────────────────────────┐
+          │ GOAL: Fix tests broken by upstream changes  │
+          │ Only fix what the rebase broke.             │
+          │ Do NOT refactor or add features.            │
+          └─────────────────────────────────────────────┘
+
+          ## What happened
+          {{inputs.description}}
+
+          ## Upstream changes (rebase diff)
+          ```
+          {{inputs.rebase_diff}}
+          ```
+
+          ## Current test failures
+          ```
+          {{inputs.test_failures}}
+          ```
+
+          ## Previous test output (if retrying)
+          ```
+          Exit code: {{steps.run_tests.outputs.exit_code}}
+          {{steps.run_tests.outputs.stderr}}
+          ```
+
+          ## Instructions
+
+          1. Read the test failures carefully
+          2. Identify which upstream changes conflict with the task's code
+          3. Fix ONLY the conflicts — do not modify unrelated code
+          4. Make minimal changes to get tests passing
+          5. If a test is testing old behavior that was intentionally changed upstream, update the test to match the new behavior
+
+      - id: build
+        type: command
+        name: 'Build'
+        if: inputs.build_command != none
+        command: '{{inputs.build_command}}'
+        allow_failure: true
+
+      - id: run_tests
+        type: command
+        name: 'Run Tests'
+        command: '{{inputs.test_command}}'
+        allow_failure: true
+
+      - id: checkpoint
+        type: command
+        name: 'Checkpoint'
+        if: steps.run_tests.outputs.exit_code != 0
+        command: |
+          git add -A -- . ':!review.md' ':!changes.md' ':!context.md' ':!plan.md' ':!summary.md'
+          git diff --cached --quiet && exit 0
+          git commit -m "[checkpoint] rebase-fix"
+
+  - id: summary
+    type: agent
+    name: 'Summary'
+    prompt: |
+      Summarize what you fixed to resolve the rebase conflicts.
+
+      Write to `summary.md`:
+      - What upstream changes caused the conflict
+      - What files you modified
+      - What the fix was
+    outputs:
+      - name: summary_file
+        description: 'Summary of fixes'
+        type: file
+        filename: summary.md
