@@ -773,7 +773,13 @@ export class ACPRunner {
       fileOutputs.forEach(output => {
         instructions += `- **${output.name}**: ${output.description}\n`;
 
-        if (this.tool === 'gemini' || this.tool === 'qwen') {
+        if (this.outputDir) {
+          // Write directly to the output directory so workflow files
+          // don't leak into the worktree / git history.
+          const outputPath = join(this.outputDir, output.filename!);
+          instructions += `  - Write this file to the output directory, NOT the working directory\n`;
+          instructions += `  - Filename: \`${outputPath}\`\n\n`;
+        } else if (this.tool === 'gemini' || this.tool === 'qwen') {
           // Gemini refuses to write files using relative paths, so we must
           // provide an absolute path in the prompt.
           const absolutePath = resolve(output.filename!);
