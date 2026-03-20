@@ -60,6 +60,20 @@ const EXIT_PAUSED = AGENT_EXIT_CODE.PAUSED;
 function workflowReasonCode(error?: string): string {
   const text = String(error || '').toLowerCase();
   if (!text) return 'workflow_failed';
+  if (text.includes('at capacity') || text.includes('waiting for slot')) {
+    return 'capacity_wait';
+  }
+  if (text.includes('blocked (resets in') || text.includes(' blocked')) {
+    return 'provider_blocked';
+  }
+  if (
+    text.includes('five_hour') ||
+    text.includes('seven_day') ||
+    text.includes('threshold=') ||
+    text.includes('save=')
+  ) {
+    return 'quota_guard';
+  }
   if (text.includes('credit limit') || text.includes('usage limit')) {
     return 'credit_limit';
   }
@@ -74,6 +88,9 @@ function workflowReasonCode(error?: string): string {
   }
   if (text.includes('step failure') || text.includes('step failed')) {
     return 'workflow_step_failed';
+  }
+  if (text.includes('container') && (text.includes('exit') || text.includes('crash'))) {
+    return 'container_crashed';
   }
   if (text.includes('signal')) {
     return 'signal_interrupt';
