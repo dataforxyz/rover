@@ -483,11 +483,15 @@ const iterateCommand = async (
         if (error instanceof ContextFetchError) {
           if (!isJsonMode()) {
             console.error(
-              colors.red(`Error fetching context: ${error.message}`)
+              colors.yellow(`⚠ Could not fetch context: ${error.message}`)
+            );
+            console.error(
+              colors.gray(`  Continuing without updated context.`)
             );
           }
+        } else {
+          throw error;
         }
-        throw error;
       }
 
       // AI expansion with context content

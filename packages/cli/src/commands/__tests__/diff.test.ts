@@ -24,6 +24,10 @@ vi.mock('../../lib/context.js', () => ({
     // Return a ProjectManager-like object directly (not wrapped in { project, projectPath })
     return Promise.resolve({
       path: testDir,
+      getWorkspacePath: (taskId: number) =>
+        join(testDir, '.rover', 'tasks', taskId.toString(), 'workspace'),
+      getTaskLogsPath: (taskId: number) =>
+        join(testDir, '.rover', 'logs', 'tasks', taskId.toString()),
       getTask: (taskId: number) => {
         const taskPath = join(testDir, '.rover', 'tasks', taskId.toString());
         if (TaskDescriptionManager.exists(taskPath)) {
@@ -88,6 +92,7 @@ describe('diff command', () => {
 
     // Create .rover directory structure
     mkdirSync('.rover/tasks', { recursive: true });
+    mkdirSync('.rover/logs/tasks', { recursive: true });
 
     // Create rover.json to indicate this is a Rover project
     writeFileSync(
@@ -154,6 +159,21 @@ describe('diff command', () => {
 
       expect(consoleSpy.log).toHaveBeenCalledWith(
         expect.stringContaining('✗ Task 999 not found')
+      );
+    });
+
+    it('should explain orphaned task artifacts when description is missing', async () => {
+      mkdirSync(join(testDir, '.rover', 'tasks', '999', 'workspace'), {
+        recursive: true,
+      });
+      mkdirSync(join(testDir, '.rover', 'logs', 'tasks', '999'), {
+        recursive: true,
+      });
+
+      await diffCommand('999');
+
+      expect(consoleSpy.log).toHaveBeenCalledWith(
+        expect.stringContaining('Found orphaned workspace and logs')
       );
     });
 

@@ -81,11 +81,13 @@ $DIFF
 \`\`\`"
 
 # ── Run AI review ─────────────────────────────────────────────
-echo "Running AI review..." >&2
-if [[ "${AI_PROVIDER:-claude}" == "codex" ]]; then
-    REVIEW=$(codex --model gpt5.3 -p "$PROMPT" 2>/dev/null || echo '{"verdict": "approve", "comments": "review unavailable"}')
+REVIEW_CLI="${ROVER_REVIEW_CLI:-claude}"
+REVIEW_MODEL="${ROVER_REVIEW_MODEL:-opus}"
+echo "Running AI review ($REVIEW_CLI:$REVIEW_MODEL)..." >&2
+if [[ "$REVIEW_CLI" == "codex" ]]; then
+    REVIEW=$(codex --model "$REVIEW_MODEL" -p "$PROMPT" 2>/dev/null || echo '{"verdict": "approve", "comments": "review unavailable"}')
 else
-    REVIEW=$(claude -p "$PROMPT" 2>/dev/null || echo '{"verdict": "approve", "comments": "review unavailable"}')
+    REVIEW=$($REVIEW_CLI --model "$REVIEW_MODEL" -p "$PROMPT" 2>/dev/null || echo '{"verdict": "approve", "comments": "review unavailable"}')
 fi
 
 # Claude sometimes wraps JSON in markdown fences; strip them before parsing.

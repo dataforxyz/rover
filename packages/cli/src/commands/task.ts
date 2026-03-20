@@ -484,10 +484,14 @@ const createTaskForAgent = async (
     processManager?.failLastItem();
     if (error instanceof ContextFetchError) {
       if (!jsonMode) {
-        console.error(colors.red(`Error fetching context: ${error.message}`));
+        console.error(colors.yellow(`⚠ Could not fetch context: ${error.message}`));
+        console.error(colors.gray(`  Continuing without issue context — task description will be used instead.`));
       }
+      // Continue without context rather than crashing the entire task.
+      // The task description already contains the issue content from intake.
+    } else {
+      throw error;
     }
-    throw error;
   }
 
   // AI expansion with context content

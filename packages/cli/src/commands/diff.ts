@@ -13,6 +13,32 @@ import {
 import type { TaskDiffOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
 
+const buildMissingTaskError = (project: any, taskId: number): string => {
+  const details: string[] = [];
+
+  if (
+    typeof project?.getWorkspacePath === 'function' &&
+    existsSync(project.getWorkspacePath(taskId))
+  ) {
+    details.push('workspace');
+  }
+
+  if (
+    typeof project?.getTaskLogsPath === 'function' &&
+    existsSync(project.getTaskLogsPath(taskId))
+  ) {
+    details.push('logs');
+  }
+
+  if (details.length === 0) {
+    return new TaskNotFoundError(taskId).message;
+  }
+
+  return `${new TaskNotFoundError(taskId).message} Found orphaned ${details.join(
+    ' and '
+  )} for this task ID, but the task description is missing.`;
+};
+
 /**
  * Display git diff for changes made by a Rover task.
  *
@@ -76,7 +102,14 @@ const diffCommand = async (
     // Load task using ProjectManager
     const task = project.getTask(numericTaskId);
     if (!task) {
-      throw new TaskNotFoundError(numericTaskId);
+      await exitWithError(
+        {
+          success: false,
+          error: buildMissingTaskError(project, numericTaskId),
+        },
+        { telemetry }
+      );
+      return;
     }
 
     // Check if worktree exists
@@ -368,12 +401,7 @@ const diffCommand = async (
     await exitWithSuccess(null, { success: true }, { telemetry });
     return;
   } catch (error) {
-    if (error instanceof TaskNotFoundError) {
-      await exitWithError(
-        { success: false, error: error.message },
-        { telemetry }
-      );
-    } else {
+    if (!(error instanceof TaskNotFoundError)) {
       await exitWithError(
         { success: false, error: `Error showing task diff: ${error}` },
         { telemetry }
