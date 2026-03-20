@@ -21,6 +21,10 @@ vi.mock('../../lib/context.js', () => ({
   requireProjectContext: vi.fn().mockImplementation(() => {
     return Promise.resolve({
       path: testDir,
+      getWorkspacePath: (taskId: number) =>
+        join(testDir, '.rover', 'tasks', taskId.toString(), 'workspace'),
+      getTaskLogsPath: (taskId: number) =>
+        join(testDir, '.rover', 'logs', 'tasks', taskId.toString()),
       getTask: (taskId: number) => {
         const taskPath = join(testDir, '.rover', 'tasks', taskId.toString());
         if (TaskDescriptionManager.exists(taskPath)) {
@@ -83,6 +87,7 @@ describe('inspect command', () => {
 
     // Create .rover directory structure
     mkdirSync('.rover/tasks', { recursive: true });
+    mkdirSync('.rover/logs/tasks', { recursive: true });
 
     // Create rover.json to indicate this is a Rover project
     writeFileSync(
@@ -168,6 +173,20 @@ describe('inspect command', () => {
 
       const output = capturedOutput.join('\n');
       expect(output).toContain('Task 999 not found');
+    });
+
+    it('should explain orphaned task artifacts when description is missing', async () => {
+      mkdirSync(join(testDir, '.rover', 'tasks', '999', 'workspace'), {
+        recursive: true,
+      });
+      mkdirSync(join(testDir, '.rover', 'logs', 'tasks', '999'), {
+        recursive: true,
+      });
+
+      await inspectCommand('999');
+
+      const output = capturedOutput.join('\n');
+      expect(output).toContain('Found orphaned workspace and logs');
     });
   });
 

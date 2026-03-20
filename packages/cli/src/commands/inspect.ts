@@ -1,4 +1,5 @@
 import colors from 'ansi-colors';
+import { existsSync } from 'node:fs';
 import { formatTaskStatus, statusColor } from '../utils/task-status.js';
 import {
   Git,
@@ -28,6 +29,32 @@ import type {
 import type { CommandDefinition } from '../types.js';
 
 const DEFAULT_FILE_CONTENTS = 'summary.md';
+
+const buildMissingTaskError = (project: any, taskId: number): string => {
+  const details: string[] = [];
+
+  if (
+    typeof project?.getWorkspacePath === 'function' &&
+    existsSync(project.getWorkspacePath(taskId))
+  ) {
+    details.push('workspace');
+  }
+
+  if (
+    typeof project?.getTaskLogsPath === 'function' &&
+    existsSync(project.getTaskLogsPath(taskId))
+  ) {
+    details.push('logs');
+  }
+
+  if (details.length === 0) {
+    return new TaskNotFoundError(taskId).message;
+  }
+
+  return `${new TaskNotFoundError(taskId).message} Found orphaned ${details.join(
+    ' and '
+  )} for this task ID, but the task description is missing.`;
+};
 
 /**
  * Build the error JSON output with consistent TaskInspectionOutput shape
@@ -144,7 +171,12 @@ const inspectCommand = async (
     // Load task using ProjectManager
     const task = project.getTask(numericTaskId);
     if (!task) {
-      throw new TaskNotFoundError(numericTaskId);
+      const errorOutput = jsonErrorOutput(
+        buildMissingTaskError(project, numericTaskId),
+        numericTaskId
+      );
+      await exitWithError(errorOutput, { telemetry });
+      return;
     }
 
     if (iterationNumber === undefined) {
