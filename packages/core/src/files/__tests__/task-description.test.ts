@@ -282,6 +282,31 @@ describe('TaskDescriptionManager', () => {
       expect(events[3].reasonCode).toBe('credit_limit');
       expect(events[3].source).toBe('host');
       expect(events[5].reason).toBe('Container exited unexpectedly');
+      expect(events[5].reasonCode).toBe('container_crashed');
+    });
+
+    it('classifies common scheduler and usage pause reasons in lifecycle history', () => {
+      const taskPath = getTaskPath(46);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 46,
+        title: 'Classifier Task',
+        description: 'Covers common pause reasons',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      task.markPaused('auto-iterate at capacity — waiting for slot');
+      task.markPaused('claude opus blocked (resets in 467s)');
+      task.markPaused('Claude opus five_hour at 55% (save=50%, threshold=50%)');
+
+      const events = readLifecycleEvents();
+      const pauseEvents = events.filter(event => event.status === 'PAUSED');
+
+      expect(pauseEvents.map(event => event.reasonCode)).toEqual([
+        'capacity_wait',
+        'provider_blocked',
+        'quota_guard',
+      ]);
     });
 
     it('does not log duplicate events when the same status is re-saved', () => {
