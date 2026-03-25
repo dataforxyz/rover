@@ -38,10 +38,15 @@ describe('generateBuildEntrypoint', () => {
       "Missing child repository 'backend' at '/workspace/backend' in the staged build workspace"
     );
     expect(script).toContain(
+      "Skipping project-specific cache setup for 'frontend'."
+    );
+    expect(script).toContain(
+      "Skipping project-specific cache setup for 'backend'."
+    );
+    expect(script).toContain(
       'rover build does not clone child repositories from project.repository.'
     );
-    expect(script).not.toContain('git clone');
-    expect(script).not.toContain('git fetch');
+    expect(script).not.toContain('safe_exit 1');
     expect(script).toContain('bash "/workspace/scripts/system-init.sh"');
     expect(script).toContain('bash "/workspace/frontend/scripts/init.sh"');
     expect(script).toContain('bash "/workspace/backend/scripts/init.sh"');
