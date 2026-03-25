@@ -731,9 +731,19 @@ export class PodmanSandbox extends Sandbox {
       if (!output) return null;
       const [status, exitCodeStr] = output.split('|');
       const exitCode = exitCodeStr ? parseInt(exitCodeStr, 10) : undefined;
-      return status
-        ? { status, exitCode: Number.isNaN(exitCode) ? undefined : exitCode }
-        : null;
+      if (!status) {
+        return null;
+      }
+
+      const containerState = {
+        status,
+        exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
+      };
+      if (status !== 'running') {
+        await this.teardownServicesIfConfigured();
+      }
+
+      return containerState;
     } catch (error) {
       if (isContainerMissingInspectError(error)) {
         return null;

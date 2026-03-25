@@ -114,6 +114,20 @@ export abstract class Sandbox {
     return undefined;
   }
 
+  protected async teardownServicesIfConfigured(): Promise<void> {
+    const serviceContext = this.resolveServiceContext();
+    if (!serviceContext) {
+      return;
+    }
+
+    await teardownServiceContainers(
+      this.getContainerBackend(),
+      serviceContext,
+      this.getServiceEnvironment()
+    );
+    this.serviceContext = undefined;
+  }
+
   async createAndStart(): Promise<string> {
     let sandboxId = '';
     this.processManager?.addItem(
@@ -156,15 +170,7 @@ export abstract class Sandbox {
     }
 
     // Tear down service containers when the task is paused/stopped
-    const serviceContext = this.resolveServiceContext();
-    if (serviceContext) {
-      await teardownServiceContainers(
-        this.getContainerBackend(),
-        serviceContext,
-        this.getServiceEnvironment()
-      );
-      this.serviceContext = undefined;
-    }
+    await this.teardownServicesIfConfigured();
 
     return sandboxId;
   }
@@ -197,15 +203,7 @@ export abstract class Sandbox {
     }
 
     // Tear down service containers and network after the task container is gone
-    const serviceContext = this.resolveServiceContext();
-    if (serviceContext) {
-      await teardownServiceContainers(
-        this.getContainerBackend(),
-        serviceContext,
-        this.getServiceEnvironment()
-      );
-      this.serviceContext = undefined;
-    }
+    await this.teardownServicesIfConfigured();
 
     return sandboxId;
   }

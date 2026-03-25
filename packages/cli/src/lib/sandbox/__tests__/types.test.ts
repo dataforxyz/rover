@@ -69,6 +69,10 @@ class TestSandbox extends Sandbox {
   async runInteractive(): Promise<any> {
     return {};
   }
+
+  async cleanupServicesForTest(): Promise<void> {
+    await this.teardownServicesIfConfigured();
+  }
 }
 
 describe('Sandbox service cleanup', () => {
@@ -145,5 +149,37 @@ describe('Sandbox service cleanup', () => {
         DOCKER_HOST: 'tcp://remote:2375',
       })
     );
+  });
+
+  it('reuses an existing service context without reloading project config', async () => {
+    const sandbox = new TestSandbox(
+      {
+        id: 12,
+        iterations: 3,
+      } as any,
+      undefined,
+      { projectPath: '/repo' }
+    );
+    (sandbox as any).serviceContext = {
+      networkName: 'rover-services-12-3',
+      containerNames: ['rover-svc-12-3-postgres'],
+      taskId: 12,
+      iteration: 3,
+    };
+
+    await sandbox.cleanupServicesForTest();
+
+    expect(mockProjectConfigLoad).not.toHaveBeenCalled();
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+      'docker',
+      {
+        networkName: 'rover-services-12-3',
+        containerNames: ['rover-svc-12-3-postgres'],
+        taskId: 12,
+        iteration: 3,
+      },
+      undefined
+    );
+    expect((sandbox as any).serviceContext).toBeUndefined();
   });
 });
