@@ -206,4 +206,32 @@ describe('rebase command', () => {
     });
     expect(mockExitWithSuccess).toHaveBeenCalled();
   });
+
+  it('rebases each workspace repository onto its configured ref by default', async () => {
+    mockGetWorkspaceRepositories.mockReturnValue([
+      {
+        name: 'frontend',
+        relativePath: 'frontend',
+        worktreePath: '/tmp/task-1/frontend',
+        repository: 'https://example.com/frontend.git',
+        ref: 'release/1.0',
+      },
+    ]);
+    mockGitInstance.getCurrentBranch.mockImplementation(({ worktreePath } = {}) =>
+      worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
+    );
+
+    await rebaseCommand('1', {
+      json: true,
+      force: true,
+    });
+
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('main', {
+      worktreePath: '/tmp/task-1',
+    });
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('release/1.0', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+    expect(mockExitWithSuccess).toHaveBeenCalled();
+  });
 });

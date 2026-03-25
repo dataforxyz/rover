@@ -253,7 +253,7 @@ export const rebaseCommand = async (
         label: repo.name,
         branchName: task.branchName,
         worktreePath: repo.worktreePath,
-        baseBranch: currentBranch,
+        baseBranch: options.base || repo.ref || currentBranch,
       })),
     ];
 
