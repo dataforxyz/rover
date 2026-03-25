@@ -546,184 +546,206 @@ export class DockerSandbox extends Sandbox {
       projectConfig
     );
 
-    // Start service containers for interactive mode
-    const services = projectConfig.services;
-    if (services && services.length > 0 && !this.serviceContext) {
-      const dockerEnv = this.getDockerEnv();
-      const networkName = await createServiceNetwork(
-        ContainerBackend.Docker,
-        this.task.id,
-        this.task.iterations,
-        dockerEnv
-      );
-      const containerNames = await startServiceContainers(
-        ContainerBackend.Docker,
-        services,
-        networkName,
-        this.task.id,
-        this.task.iterations,
-        dockerEnv
-      );
-      this.serviceContext = {
-        networkName,
-        containerNames,
-        taskId: this.task.id,
-        iteration: this.task.iterations,
+    let startedInteractiveServices = false;
+
+    try {
+      // Start service containers for interactive mode
+      const services = projectConfig.services;
+      if (services && services.length > 0 && !this.serviceContext) {
+        const dockerEnv = this.getDockerEnv();
+        const networkName = await createServiceNetwork(
+          ContainerBackend.Docker,
+          this.task.id,
+          this.task.iterations,
+          dockerEnv
+        );
+        this.serviceContext = {
+          networkName,
+          containerNames: [],
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
+        startedInteractiveServices = true;
+        const containerNames = await startServiceContainers(
+          ContainerBackend.Docker,
+          services,
+          networkName,
+          this.task.id,
+          this.task.iterations,
+          dockerEnv
+        );
+        this.serviceContext = {
+          networkName,
+          containerNames,
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
+        await waitForServicesReady(
+          ContainerBackend.Docker,
+          services,
+          containerNames,
+          dockerEnv
+        );
+      }
+
+      const interactiveName = `${this.sandboxName}-i`;
+      const dockerArgs = ['run', '--name', interactiveName, '-it', '--rm'];
+
+      // Attach to service network
+      if (this.serviceContext) {
+        dockerArgs.push(
+          ...getServiceNetworkArgs(this.serviceContext.networkName)
+        );
+      }
+
+      const rawUserInfoInteractive = userInfo();
+      const userInfo_ = {
+        ...rawUserInfoInteractive,
+        uid:
+          rawUserInfoInteractive.uid === -1 ? 1000 : rawUserInfoInteractive.uid,
+        gid:
+          rawUserInfoInteractive.gid === -1 ? 1000 : rawUserInfoInteractive.gid,
       };
-      await waitForServicesReady(
+
+      // Warn if using a custom agent image
+      warnIfCustomImage(projectConfig);
+
+      const {
+        etcPasswd,
+        etcGroup,
+        cleanup: cleanupTmpFiles,
+      } = await tmpUserGroupFiles(
         ContainerBackend.Docker,
-        services,
-        containerNames,
-        dockerEnv
+        effectiveImage,
+        userInfo_
       );
-    }
+      this._tmpCleanups.push(cleanupTmpFiles);
 
-    const interactiveName = `${this.sandboxName}-i`;
-    const dockerArgs = ['run', '--name', interactiveName, '-it', '--rm'];
-
-    // Attach to service network
-    if (this.serviceContext) {
-      dockerArgs.push(
-        ...getServiceNetworkArgs(this.serviceContext.networkName)
+      // Add NET_ADMIN capability if network filtering is configured
+      const effectiveNetworkConfigInteractive = mergeNetworkConfig(
+        projectConfig.network,
+        this.task.networkConfig
       );
-    }
-
-    const rawUserInfoInteractive = userInfo();
-    const userInfo_ = {
-      ...rawUserInfoInteractive,
-      uid:
-        rawUserInfoInteractive.uid === -1 ? 1000 : rawUserInfoInteractive.uid,
-      gid:
-        rawUserInfoInteractive.gid === -1 ? 1000 : rawUserInfoInteractive.gid,
-    };
-
-    // Warn if using a custom agent image
-    warnIfCustomImage(projectConfig);
-
-    const {
-      etcPasswd,
-      etcGroup,
-      cleanup: cleanupTmpFiles,
-    } = await tmpUserGroupFiles(
-      ContainerBackend.Docker,
-      effectiveImage,
-      userInfo_
-    );
-    this._tmpCleanups.push(cleanupTmpFiles);
-
-    // Add NET_ADMIN capability if network filtering is configured
-    const effectiveNetworkConfigInteractive = mergeNetworkConfig(
-      projectConfig.network,
-      this.task.networkConfig
-    );
-    if (
-      effectiveNetworkConfigInteractive &&
-      effectiveNetworkConfigInteractive.mode !== 'allowall'
-    ) {
-      dockerArgs.push('--cap-add=NET_ADMIN');
-    }
-
-    dockerArgs.push(
-      '-v',
-      `${etcPasswd}:/etc/passwd:Z,ro`,
-      '-v',
-      `${etcGroup}:/etc/group:Z,ro`,
-      '--user',
-      `${userInfo_.uid}:${userInfo_.gid}`,
-      '-v',
-      `${worktreePath}:/workspace:Z,rw`,
-      ...getWorktreeGitMounts(worktreePath),
-      '-v',
-      `${iteration.iterationPath}:/output:Z,rw`,
-      ...dockerMounts,
-      '-v',
-      `${entrypointScriptPath}:/entrypoint.sh:Z,ro`
-    );
-
-    // Mount context directory if available (read-only)
-    const contextDir = join(iteration.iterationPath, 'context');
-    const hasContext = existsSync(contextDir);
-    if (hasContext) {
-      dockerArgs.push('-v', `${contextDir}:/context:Z,ro`);
-    }
-
-    // Mount init scripts (root + per-project)
-    const allInitScripts = projectConfig.allInitScripts;
-    for (let i = 0; i < allInitScripts.length; i++) {
-      const entry = allInitScripts[i];
-      if (entry.path) {
-        continue;
+      if (
+        effectiveNetworkConfigInteractive &&
+        effectiveNetworkConfigInteractive.mode !== 'allowall'
+      ) {
+        dockerArgs.push('--cap-add=NET_ADMIN');
       }
-      const initScriptAbsPath = resolveInitScriptPath(
-        projectConfig.projectRoot,
-        entry.script,
-        entry.path
-      );
-      if (existsSync(initScriptAbsPath)) {
-        const mountPath =
-          allInitScripts.length === 1 && !entry.path
-            ? '/init-script.sh'
-            : `/init-script-${i}.sh`;
-        dockerArgs.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
-      }
-    }
 
-    // Mount workspace description if projects are configured
-    const workspaceDescPath = setupBuilder.generateWorkspaceDescription();
-    if (workspaceDescPath) {
       dockerArgs.push(
         '-v',
-        `${workspaceDescPath}:/workspace/.rover-workspace.json:Z,ro`
+        `${etcPasswd}:/etc/passwd:Z,ro`,
+        '-v',
+        `${etcGroup}:/etc/group:Z,ro`,
+        '--user',
+        `${userInfo_.uid}:${userInfo_.gid}`,
+        '-v',
+        `${worktreePath}:/workspace:Z,rw`,
+        ...getWorktreeGitMounts(worktreePath),
+        '-v',
+        `${iteration.iterationPath}:/output:Z,rw`,
+        ...dockerMounts,
+        '-v',
+        `${entrypointScriptPath}:/entrypoint.sh:Z,ro`
       );
+
+      // Mount context directory if available (read-only)
+      const contextDir = join(iteration.iterationPath, 'context');
+      const hasContext = existsSync(contextDir);
+      if (hasContext) {
+        dockerArgs.push('-v', `${contextDir}:/context:Z,ro`);
+      }
+
+      // Mount init scripts (root + per-project)
+      const allInitScripts = projectConfig.allInitScripts;
+      for (let i = 0; i < allInitScripts.length; i++) {
+        const entry = allInitScripts[i];
+        if (entry.path) {
+          continue;
+        }
+        const initScriptAbsPath = resolveInitScriptPath(
+          projectConfig.projectRoot,
+          entry.script,
+          entry.path
+        );
+        if (existsSync(initScriptAbsPath)) {
+          const mountPath =
+            allInitScripts.length === 1 && !entry.path
+              ? '/init-script.sh'
+              : `/init-script-${i}.sh`;
+          dockerArgs.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
+        }
+      }
+
+      // Mount workspace description if projects are configured
+      const workspaceDescPath = setupBuilder.generateWorkspaceDescription();
+      if (workspaceDescPath) {
+        dockerArgs.push(
+          '-v',
+          `${workspaceDescPath}:/workspace/.rover-workspace.json:Z,ro`
+        );
+      }
+
+      // Mount download cache volumes for interactive mode too
+      ensureDownloadCacheVolumes(ContainerBackend.Docker, projectConfig);
+      dockerArgs.push(...getDownloadCacheMounts(projectConfig));
+
+      // Get extra args from CLI options and project config, merge them
+      const configExtraArgs = normalizeExtraArgs(
+        projectConfig.sandboxExtraArgs
+      );
+      const cliExtraArgs = normalizeExtraArgs(this.options?.extraArgs);
+      const extraArgs = [...configExtraArgs, ...cliExtraArgs];
+
+      dockerArgs.push(
+        ...envVariables,
+        '-w',
+        '/workspace',
+        '--entrypoint',
+        '/entrypoint.sh',
+        ...extraArgs,
+        effectiveImage,
+        'rover-agent',
+        'session',
+        this.task.agent!
+      );
+
+      if (initialPrompt) {
+        dockerArgs.push(initialPrompt);
+      }
+
+      // Pass context directory argument if context was mounted
+      if (hasContext) {
+        dockerArgs.push('--context-dir', '/context');
+      }
+
+      // Pass model if specified
+      if (this.task.agentModel) {
+        dockerArgs.push('--agent-model', this.task.agentModel);
+      }
+
+      // Forward verbose flag to rover-agent if enabled
+      if (VERBOSE) {
+        dockerArgs.push('-v');
+      }
+
+      // Use detached: false to ensure proper TTY signal handling and job control
+      return await launch('docker', dockerArgs, {
+        stdio: 'inherit',
+        reject: false,
+        detached: false,
+      });
+    } finally {
+      if (startedInteractiveServices && this.serviceContext) {
+        await teardownServiceContainers(
+          ContainerBackend.Docker,
+          this.serviceContext,
+          this.getDockerEnv()
+        );
+        this.serviceContext = undefined;
+      }
     }
-
-    // Mount download cache volumes for interactive mode too
-    ensureDownloadCacheVolumes(ContainerBackend.Docker, projectConfig);
-    dockerArgs.push(...getDownloadCacheMounts(projectConfig));
-
-    // Get extra args from CLI options and project config, merge them
-    const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);
-    const cliExtraArgs = normalizeExtraArgs(this.options?.extraArgs);
-    const extraArgs = [...configExtraArgs, ...cliExtraArgs];
-
-    dockerArgs.push(
-      ...envVariables,
-      '-w',
-      '/workspace',
-      '--entrypoint',
-      '/entrypoint.sh',
-      ...extraArgs,
-      effectiveImage,
-      'rover-agent',
-      'session',
-      this.task.agent!
-    );
-
-    if (initialPrompt) {
-      dockerArgs.push(initialPrompt);
-    }
-
-    // Pass context directory argument if context was mounted
-    if (hasContext) {
-      dockerArgs.push('--context-dir', '/context');
-    }
-
-    // Pass model if specified
-    if (this.task.agentModel) {
-      dockerArgs.push('--agent-model', this.task.agentModel);
-    }
-
-    // Forward verbose flag to rover-agent if enabled
-    if (VERBOSE) {
-      dockerArgs.push('-v');
-    }
-
-    // Use detached: false to ensure proper TTY signal handling and job control
-    return launch('docker', dockerArgs, {
-      stdio: 'inherit',
-      reject: false,
-      detached: false,
-    });
   }
 
   /**

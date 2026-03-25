@@ -542,177 +542,198 @@ export class PodmanSandbox extends Sandbox {
       projectConfig
     );
 
-    // Start service containers for interactive mode
-    const interactiveServices = projectConfig.services;
-    if (
-      interactiveServices &&
-      interactiveServices.length > 0 &&
-      !this.serviceContext
-    ) {
-      const networkName = await createServiceNetwork(
-        ContainerBackend.Podman,
-        this.task.id,
-        this.task.iterations
-      );
-      const containerNames = await startServiceContainers(
-        ContainerBackend.Podman,
-        interactiveServices,
-        networkName,
-        this.task.id,
-        this.task.iterations
-      );
-      this.serviceContext = {
-        networkName,
-        containerNames,
-        taskId: this.task.id,
-        iteration: this.task.iterations,
-      };
-      await waitForServicesReady(
-        ContainerBackend.Podman,
-        interactiveServices,
-        containerNames
-      );
-    }
+    let startedInteractiveServices = false;
 
-    const interactiveName = `${this.sandboxName}-i`;
-    const podmanArgs = ['run', '--name', interactiveName, '-it', '--rm'];
-
-    // Attach to service network
-    if (this.serviceContext) {
-      podmanArgs.push(
-        ...getServiceNetworkArgs(this.serviceContext.networkName)
-      );
-    }
-
-    const userInfo_ = normalizeUserInfo(userInfo());
-
-    // Warn if using a custom agent image
-    warnIfCustomImage(projectConfig);
-
-    const {
-      etcPasswd,
-      etcGroup,
-      cleanup: cleanupTmpFiles,
-    } = await tmpUserGroupFiles(
-      ContainerBackend.Podman,
-      effectiveImage,
-      userInfo_
-    );
-    this._tmpCleanups.push(cleanupTmpFiles);
-
-    // Add NET_ADMIN capability if network filtering is configured
-    const effectiveNetworkConfigInteractive = mergeNetworkConfig(
-      projectConfig.network,
-      this.task.networkConfig
-    );
-    if (
-      effectiveNetworkConfigInteractive &&
-      effectiveNetworkConfigInteractive.mode !== 'allowall'
-    ) {
-      podmanArgs.push('--cap-add=NET_ADMIN');
-    }
-
-    podmanArgs.push(
-      '-v',
-      `${etcPasswd}:/etc/passwd:Z,ro`,
-      '-v',
-      `${etcGroup}:/etc/group:Z,ro`,
-      '--user',
-      `${userInfo_.uid}:${userInfo_.gid}`,
-      '-v',
-      `${worktreePath}:/workspace:Z,rw`,
-      ...getWorktreeGitMounts(worktreePath),
-      '-v',
-      `${iteration.iterationPath}:/output:Z,rw`,
-      ...containerMounts,
-      '-v',
-      `${entrypointScriptPath}:/entrypoint.sh:Z,ro`
-    );
-
-    // Mount context directory if available (read-only)
-    const contextDir = join(iteration.iterationPath, 'context');
-    const hasContext = existsSync(contextDir);
-    if (hasContext) {
-      podmanArgs.push('-v', `${contextDir}:/context:Z,ro`);
-    }
-
-    // Mount init scripts (root + per-project)
-    const allInitScripts = projectConfig.allInitScripts;
-    for (let i = 0; i < allInitScripts.length; i++) {
-      const entry = allInitScripts[i];
-      if (entry.path) {
-        continue;
+    try {
+      // Start service containers for interactive mode
+      const interactiveServices = projectConfig.services;
+      if (
+        interactiveServices &&
+        interactiveServices.length > 0 &&
+        !this.serviceContext
+      ) {
+        const networkName = await createServiceNetwork(
+          ContainerBackend.Podman,
+          this.task.id,
+          this.task.iterations
+        );
+        this.serviceContext = {
+          networkName,
+          containerNames: [],
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
+        startedInteractiveServices = true;
+        const containerNames = await startServiceContainers(
+          ContainerBackend.Podman,
+          interactiveServices,
+          networkName,
+          this.task.id,
+          this.task.iterations
+        );
+        this.serviceContext = {
+          networkName,
+          containerNames,
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
+        await waitForServicesReady(
+          ContainerBackend.Podman,
+          interactiveServices,
+          containerNames
+        );
       }
-      const initScriptAbsPath = resolveInitScriptPath(
-        projectConfig.projectRoot,
-        entry.script,
-        entry.path
-      );
-      if (existsSync(initScriptAbsPath)) {
-        const mountPath =
-          allInitScripts.length === 1 && !entry.path
-            ? '/init-script.sh'
-            : `/init-script-${i}.sh`;
-        podmanArgs.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
-      }
-    }
 
-    // Mount workspace description if projects are configured
-    const workspaceDescPath = setupBuilder.generateWorkspaceDescription();
-    if (workspaceDescPath) {
+      const interactiveName = `${this.sandboxName}-i`;
+      const podmanArgs = ['run', '--name', interactiveName, '-it', '--rm'];
+
+      // Attach to service network
+      if (this.serviceContext) {
+        podmanArgs.push(
+          ...getServiceNetworkArgs(this.serviceContext.networkName)
+        );
+      }
+
+      const userInfo_ = normalizeUserInfo(userInfo());
+
+      // Warn if using a custom agent image
+      warnIfCustomImage(projectConfig);
+
+      const {
+        etcPasswd,
+        etcGroup,
+        cleanup: cleanupTmpFiles,
+      } = await tmpUserGroupFiles(
+        ContainerBackend.Podman,
+        effectiveImage,
+        userInfo_
+      );
+      this._tmpCleanups.push(cleanupTmpFiles);
+
+      // Add NET_ADMIN capability if network filtering is configured
+      const effectiveNetworkConfigInteractive = mergeNetworkConfig(
+        projectConfig.network,
+        this.task.networkConfig
+      );
+      if (
+        effectiveNetworkConfigInteractive &&
+        effectiveNetworkConfigInteractive.mode !== 'allowall'
+      ) {
+        podmanArgs.push('--cap-add=NET_ADMIN');
+      }
+
       podmanArgs.push(
         '-v',
-        `${workspaceDescPath}:/workspace/.rover-workspace.json:Z,ro`
+        `${etcPasswd}:/etc/passwd:Z,ro`,
+        '-v',
+        `${etcGroup}:/etc/group:Z,ro`,
+        '--user',
+        `${userInfo_.uid}:${userInfo_.gid}`,
+        '-v',
+        `${worktreePath}:/workspace:Z,rw`,
+        ...getWorktreeGitMounts(worktreePath),
+        '-v',
+        `${iteration.iterationPath}:/output:Z,rw`,
+        ...containerMounts,
+        '-v',
+        `${entrypointScriptPath}:/entrypoint.sh:Z,ro`
       );
+
+      // Mount context directory if available (read-only)
+      const contextDir = join(iteration.iterationPath, 'context');
+      const hasContext = existsSync(contextDir);
+      if (hasContext) {
+        podmanArgs.push('-v', `${contextDir}:/context:Z,ro`);
+      }
+
+      // Mount init scripts (root + per-project)
+      const allInitScripts = projectConfig.allInitScripts;
+      for (let i = 0; i < allInitScripts.length; i++) {
+        const entry = allInitScripts[i];
+        if (entry.path) {
+          continue;
+        }
+        const initScriptAbsPath = resolveInitScriptPath(
+          projectConfig.projectRoot,
+          entry.script,
+          entry.path
+        );
+        if (existsSync(initScriptAbsPath)) {
+          const mountPath =
+            allInitScripts.length === 1 && !entry.path
+              ? '/init-script.sh'
+              : `/init-script-${i}.sh`;
+          podmanArgs.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
+        }
+      }
+
+      // Mount workspace description if projects are configured
+      const workspaceDescPath = setupBuilder.generateWorkspaceDescription();
+      if (workspaceDescPath) {
+        podmanArgs.push(
+          '-v',
+          `${workspaceDescPath}:/workspace/.rover-workspace.json:Z,ro`
+        );
+      }
+
+      // Mount download cache volumes for interactive mode too
+      ensureDownloadCacheVolumes(ContainerBackend.Podman, projectConfig);
+      podmanArgs.push(...getDownloadCacheMounts(projectConfig));
+
+      // Get extra args from CLI options and project config, merge them
+      const configExtraArgs = normalizeExtraArgs(
+        projectConfig.sandboxExtraArgs
+      );
+      const cliExtraArgs = normalizeExtraArgs(this.options?.extraArgs);
+      const extraArgs = [...configExtraArgs, ...cliExtraArgs];
+
+      podmanArgs.push(
+        ...envVariables,
+        '-w',
+        '/workspace',
+        '--entrypoint',
+        '/entrypoint.sh',
+        ...extraArgs,
+        effectiveImage,
+        'rover-agent',
+        'session',
+        this.task.agent!
+      );
+
+      if (initialPrompt) {
+        podmanArgs.push(initialPrompt);
+      }
+
+      // Pass context directory argument if context was mounted
+      if (hasContext) {
+        podmanArgs.push('--context-dir', '/context');
+      }
+
+      // Pass model if specified
+      if (this.task.agentModel) {
+        podmanArgs.push('--agent-model', this.task.agentModel);
+      }
+
+      // Forward verbose flag to rover-agent if enabled
+      if (VERBOSE) {
+        podmanArgs.push('-v');
+      }
+
+      // Use detached: false to ensure proper TTY signal handling and job control
+      return await launch('podman', podmanArgs, {
+        stdio: 'inherit',
+        reject: false,
+        detached: false,
+      });
+    } finally {
+      if (startedInteractiveServices && this.serviceContext) {
+        await teardownServiceContainers(
+          ContainerBackend.Podman,
+          this.serviceContext
+        );
+        this.serviceContext = undefined;
+      }
     }
-
-    // Mount download cache volumes for interactive mode too
-    ensureDownloadCacheVolumes(ContainerBackend.Podman, projectConfig);
-    podmanArgs.push(...getDownloadCacheMounts(projectConfig));
-
-    // Get extra args from CLI options and project config, merge them
-    const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);
-    const cliExtraArgs = normalizeExtraArgs(this.options?.extraArgs);
-    const extraArgs = [...configExtraArgs, ...cliExtraArgs];
-
-    podmanArgs.push(
-      ...envVariables,
-      '-w',
-      '/workspace',
-      '--entrypoint',
-      '/entrypoint.sh',
-      ...extraArgs,
-      effectiveImage,
-      'rover-agent',
-      'session',
-      this.task.agent!
-    );
-
-    if (initialPrompt) {
-      podmanArgs.push(initialPrompt);
-    }
-
-    // Pass context directory argument if context was mounted
-    if (hasContext) {
-      podmanArgs.push('--context-dir', '/context');
-    }
-
-    // Pass model if specified
-    if (this.task.agentModel) {
-      podmanArgs.push('--agent-model', this.task.agentModel);
-    }
-
-    // Forward verbose flag to rover-agent if enabled
-    if (VERBOSE) {
-      podmanArgs.push('-v');
-    }
-
-    // Use detached: false to ensure proper TTY signal handling and job control
-    return launch('podman', podmanArgs, {
-      stdio: 'inherit',
-      reject: false,
-      detached: false,
-    });
   }
 
   async inspect(): Promise<{ status: string; exitCode?: number } | null> {
