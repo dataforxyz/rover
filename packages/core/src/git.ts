@@ -700,6 +700,29 @@ export class Git {
     }
   }
 
+  remoteBranchExists(
+    branch: string,
+    remote: string = 'origin',
+    options: GitWorktreeOptions = {}
+  ): boolean {
+    try {
+      return (
+        launchSync(
+          'git',
+          [
+            'show-ref',
+            '--verify',
+            '--quiet',
+            `refs/remotes/${remote}/${branch}`,
+          ],
+          { reject: false, cwd: options.worktreePath ?? this.cwd }
+        ).exitCode === 0
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
   checkoutBranch(branch: string, options: GitCheckoutOptions = {}): void {
     const effectiveCwd = options.worktreePath ?? this.cwd;
 
@@ -711,6 +734,21 @@ export class Git {
     }
 
     if (options.createIfMissing) {
+      if (
+        this.remoteBranchExists(branch, 'origin', {
+          worktreePath: effectiveCwd,
+        })
+      ) {
+        launchSync(
+          'git',
+          ['checkout', '-B', branch, `refs/remotes/origin/${branch}`],
+          {
+            cwd: effectiveCwd,
+          }
+        );
+        return;
+      }
+
       launchSync('git', ['checkout', '-b', branch], {
         cwd: effectiveCwd,
       });
