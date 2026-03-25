@@ -89,6 +89,7 @@ vi.mock('../container-common.js', () => ({
   normalizeExtraArgs: vi.fn(() => []),
   resolveAgentImage: vi.fn(() => 'agent:latest'),
   resolveInitScriptPath: vi.fn(() => '/tmp/init-script.sh'),
+  getInitScriptMounts: vi.fn(() => []),
   tmpUserGroupFiles: mockTmpUserGroupFiles,
   warnIfCustomImage: vi.fn(),
 }));

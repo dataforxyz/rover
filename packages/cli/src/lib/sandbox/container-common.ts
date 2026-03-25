@@ -143,6 +143,42 @@ export function resolveInitScriptPath(
     : rootRelative;
 }
 
+/**
+ * Compute volume mount args for root-only init scripts.
+ * Project-scoped init scripts (those with `entry.path`) are skipped because
+ * they run from the cloned workspace path instead of being host-mounted.
+ */
+export function getInitScriptMounts(
+  projectConfig: ProjectConfigManager,
+  opts?: { warnMissing?: boolean }
+): string[] {
+  const mounts: string[] = [];
+  const allInitScripts = projectConfig.allInitScripts;
+  for (let i = 0; i < allInitScripts.length; i++) {
+    const entry = allInitScripts[i];
+    if (entry.path) {
+      continue;
+    }
+    const initScriptAbsPath = resolveInitScriptPath(
+      projectConfig.projectRoot,
+      entry.script,
+      entry.path
+    );
+    if (existsSync(initScriptAbsPath)) {
+      const mountPath =
+        allInitScripts.length === 1 && !entry.path
+          ? '/init-script.sh'
+          : `/init-script-${i}.sh`;
+      mounts.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
+    } else if (opts?.warnMissing) {
+      console.log(
+        colors.yellow(`⚠ Warning: initScript '${entry.script}' does not exist`)
+      );
+    }
+  }
+  return mounts;
+}
+
 export type CurrentUser = string;
 export type CurrentGroup = string;
 

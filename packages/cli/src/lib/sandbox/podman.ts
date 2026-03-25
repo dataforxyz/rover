@@ -11,7 +11,7 @@ import {
   getCheckpointArgs,
   getWorktreeGitMounts,
   resolveAgentImage,
-  resolveInitScriptPath,
+  getInitScriptMounts,
   warnIfCustomImage,
   tmpUserGroupFiles,
   normalizeExtraArgs,
@@ -223,32 +223,10 @@ export class PodmanSandbox extends Sandbox {
       podmanArgs.push('-v', `${contextDir}:/context:Z,ro`);
     }
 
-    // Mount init scripts (root + per-project)
-    const allInitScripts = projectConfig.allInitScripts;
-    for (let i = 0; i < allInitScripts.length; i++) {
-      const entry = allInitScripts[i];
-      if (entry.path) {
-        continue;
-      }
-      const initScriptAbsPath = resolveInitScriptPath(
-        projectConfig.projectRoot,
-        entry.script,
-        entry.path
-      );
-      if (existsSync(initScriptAbsPath)) {
-        const mountPath =
-          allInitScripts.length === 1 && !entry.path
-            ? '/init-script.sh'
-            : `/init-script-${i}.sh`;
-        podmanArgs.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
-      } else if (!isJsonMode()) {
-        console.log(
-          colors.yellow(
-            `⚠ Warning: initScript '${entry.script}' does not exist`
-          )
-        );
-      }
-    }
+    // Mount init scripts (root-only; project-scoped scripts run from cloned workspace)
+    podmanArgs.push(
+      ...getInitScriptMounts(projectConfig, { warnMissing: !isJsonMode() })
+    );
 
     // Mount workspace description if projects are configured
     const workspaceDescPath = setupBuilder.generateWorkspaceDescription();
@@ -646,26 +624,8 @@ export class PodmanSandbox extends Sandbox {
         podmanArgs.push('-v', `${contextDir}:/context:Z,ro`);
       }
 
-      // Mount init scripts (root + per-project)
-      const allInitScripts = projectConfig.allInitScripts;
-      for (let i = 0; i < allInitScripts.length; i++) {
-        const entry = allInitScripts[i];
-        if (entry.path) {
-          continue;
-        }
-        const initScriptAbsPath = resolveInitScriptPath(
-          projectConfig.projectRoot,
-          entry.script,
-          entry.path
-        );
-        if (existsSync(initScriptAbsPath)) {
-          const mountPath =
-            allInitScripts.length === 1 && !entry.path
-              ? '/init-script.sh'
-              : `/init-script-${i}.sh`;
-          podmanArgs.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
-        }
-      }
+      // Mount init scripts (root-only; project-scoped scripts run from cloned workspace)
+      podmanArgs.push(...getInitScriptMounts(projectConfig));
 
       // Mount workspace description if projects are configured
       const workspaceDescPath = setupBuilder.generateWorkspaceDescription();
