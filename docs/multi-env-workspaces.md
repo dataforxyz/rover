@@ -270,6 +270,131 @@ It generates:
 - a root `Makefile` with `setup`, `test`, and `test-e2e`
 - a root `make validate` target for one-shot Rover validation
 
+## Service dependencies (sidecars)
+
+Rover supports per-task service containers for infrastructure dependencies like databases, caches, and message brokers. Each task gets its own isolated set of services on a dedicated Docker network — no cross-task conflicts.
+
+### Configuration
+
+Add `sandbox.services` to your `rover.json`:
+
+```json
+{
+  "version": "1.5",
+  "languages": ["python"],
+  "packageManagers": ["uv"],
+  "sandbox": {
+    "services": [
+      {
+        "name": "postgres",
+        "image": "postgres:16",
+        "env": ["POSTGRES_PASSWORD=test", "POSTGRES_DB=myapp"],
+        "ports": [5432],
+        "healthcheck": {
+          "cmd": "pg_isready -U postgres",
+          "interval": 5,
+          "retries": 5,
+          "startPeriod": 10
+        },
+        "readyTimeout": 60
+      },
+      {
+        "name": "redis",
+        "image": "redis:7-alpine",
+        "ports": [6379],
+        "healthcheck": {
+          "cmd": "redis-cli ping"
+        }
+      }
+    ]
+  }
+}
+```
+
+### How it works
+
+When a task starts, Rover:
+
+1. Creates a Docker network named `rover-services-{taskId}-{iteration}`
+2. Starts each service container on that network with the service `name` as hostname
+3. Waits for services with healthchecks to become healthy (up to `readyTimeout` seconds)
+4. Attaches the task container to the same network
+5. Tears down all service containers and the network when the task stops
+
+The task container reaches services by name: `postgres:5432`, `redis:6379`.
+
+### Service fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Hostname on the task network |
+| `image` | yes | Docker image |
+| `ports` | no | Informational — all ports are reachable on the task network |
+| `env` | no | Environment variables (`KEY=VALUE` strings) |
+| `volumes` | no | Volume mounts (same syntax as Docker `-v`) |
+| `healthcheck` | no | Health check config — services without one are assumed ready immediately |
+| `command` | no | Override the image entrypoint command |
+| `readyTimeout` | no | Max seconds to wait for healthy (default: 60) |
+
+### Healthcheck fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `cmd` | (required) | Command to run inside the container |
+| `interval` | 5 | Seconds between checks |
+| `timeout` | 5 | Seconds before a check times out |
+| `retries` | 3 | Failures before unhealthy |
+| `startPeriod` | 0 | Grace period before first check |
+
+### Important notes
+
+- Services are **runtime-only** — `rover build` does not start them. They don't affect the cache image.
+- Services work with both Docker and Podman backends.
+- Network filtering (`sandbox.network`) applies to external traffic only. Containers on the same task network always reach each other.
+- Service names must be unique within a workspace.
+
+### Multi-repo workspaces with services
+
+For the multi-repo pattern, services are shared across all sub-projects. Define them once at `sandbox.services` — the backend, frontend, and e2e projects all connect to the same `postgres` and `redis` on the task network.
+
+Example combined config:
+
+```json
+{
+  "version": "1.5",
+  "taskManagers": ["make"],
+  "sandbox": {
+    "initScript": "scripts/system-init.sh",
+    "services": [
+      {
+        "name": "postgres",
+        "image": "postgres:16",
+        "env": ["POSTGRES_PASSWORD=test", "POSTGRES_DB=app"],
+        "healthcheck": { "cmd": "pg_isready -U postgres" }
+      }
+    ]
+  },
+  "projects": [
+    {
+      "name": "backend",
+      "path": "backend",
+      "repository": "/workspace/sources/backend.git",
+      "languages": ["go"],
+      "packageManagers": ["gomod"]
+    },
+    {
+      "name": "frontend",
+      "path": "frontend",
+      "repository": "/workspace/sources/frontend.git",
+      "languages": ["dart"],
+      "packageManagers": ["pub"]
+    }
+  ]
+}
+```
+
+The backend connects to `postgres:5432` during tests, and the same database is available to e2e tests.
+
 ## Current caveats
 
 - First-time container/image setup is expensive because Flutter and Chromium installation are heavy.
