@@ -872,6 +872,15 @@ export class DockerSandbox extends Sandbox {
       '/bin/bash',
     ];
 
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      dockerArgs.splice(
+        6,
+        0,
+        ...getServiceNetworkArgs(serviceContext.networkName)
+      );
+    }
+
     // Start Docker container with direct stdio inheritance for true interactivity
     // Use detached: false to ensure proper TTY signal handling and job control
     await launch('docker', dockerArgs, {

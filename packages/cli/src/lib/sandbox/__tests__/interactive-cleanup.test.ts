@@ -285,4 +285,41 @@ describe('interactive sandbox cleanup', () => {
       },
     });
   });
+
+  it.each([
+    ['docker', DockerSandbox, 'docker'],
+    ['podman', PodmanSandbox, 'podman'],
+  ])('attaches %s workspace shells to the persisted service network', async (_label, SandboxCtor, backend) => {
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    await sandbox.openShellAtWorktree();
+
+    expect(mockGetServiceNetworkArgs).toHaveBeenCalledWith(
+      'rover-services-1-1'
+    );
+    expect(mockLaunch).toHaveBeenCalledWith(
+      backend,
+      expect.arrayContaining([
+        'run',
+        '--rm',
+        '--network',
+        'rover-services-1-1',
+      ]),
+      expect.objectContaining({
+        detached: false,
+        reject: false,
+        stdio: 'inherit',
+      })
+    );
+  });
 });

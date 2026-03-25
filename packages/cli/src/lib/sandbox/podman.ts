@@ -845,6 +845,15 @@ export class PodmanSandbox extends Sandbox {
       '/bin/bash',
     ];
 
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      podmanArgs.splice(
+        6,
+        0,
+        ...getServiceNetworkArgs(serviceContext.networkName)
+      );
+    }
+
     // Start Podman container with direct stdio inheritance for true interactivity
     // Use detached: false to ensure proper TTY signal handling and job control
     await launch('podman', podmanArgs, {
