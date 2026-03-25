@@ -25,33 +25,7 @@ import { initWorkflowStore } from './workflow.js';
 import { getDependencyResolutionCommands } from './dependency-resolution.js';
 import { shellEscape } from '../utils/shell.js';
 
-// Language packages
-import { JavaScriptSandboxPackage } from './sandbox/languages/javascript.js';
-import { TypeScriptSandboxPackage } from './sandbox/languages/typescript.js';
-import { PHPSandboxPackage } from './sandbox/languages/php.js';
-import { RustSandboxPackage } from './sandbox/languages/rust.js';
-import { GoSandboxPackage } from './sandbox/languages/go.js';
-import { PythonSandboxPackage } from './sandbox/languages/python.js';
-import { RubySandboxPackage } from './sandbox/languages/ruby.js';
-import { DartSandboxPackage } from './sandbox/languages/dart.js';
-
-// Package manager packages
-import { NpmSandboxPackage } from './sandbox/package-managers/npm.js';
-import { PnpmSandboxPackage } from './sandbox/package-managers/pnpm.js';
-import { YarnSandboxPackage } from './sandbox/package-managers/yarn.js';
-import { ComposerSandboxPackage } from './sandbox/package-managers/composer.js';
-import { CargoSandboxPackage } from './sandbox/package-managers/cargo.js';
-import { GomodSandboxPackage } from './sandbox/package-managers/gomod.js';
-import { PipSandboxPackage } from './sandbox/package-managers/pip.js';
-import { PoetrySandboxPackage } from './sandbox/package-managers/poetry.js';
-import { UvSandboxPackage } from './sandbox/package-managers/uv.js';
-import { RubygemsSandboxPackage } from './sandbox/package-managers/rubygems.js';
-import { PubSandboxPackage } from './sandbox/package-managers/pub.js';
-
-// Task manager packages
-import { JustSandboxPackage } from './sandbox/task-managers/just.js';
-import { MakeSandboxPackage } from './sandbox/task-managers/make.js';
-import { TaskSandboxPackage } from './sandbox/task-managers/task.js';
+import { getPackagesFromConfig } from './sandbox/packages.js';
 
 /**
  * SetupBuilder class - Consolidates Docker setup script generation
@@ -232,134 +206,6 @@ export class SetupBuilder {
     return undefined;
   }
 
-  private getEffectiveAllLanguages(): string[] {
-    return [
-      ...new Set([
-        ...(this.projectConfig.languages ?? []),
-        ...this.workspaceProjects.flatMap(project => project.languages ?? []),
-      ]),
-    ];
-  }
-
-  private getEffectiveAllPackageManagers(): string[] {
-    return [
-      ...new Set([
-        ...(this.projectConfig.packageManagers ?? []),
-        ...this.workspaceProjects.flatMap(
-          project => project.packageManagers ?? []
-        ),
-      ]),
-    ];
-  }
-
-  /**
-   * Get language sandbox packages based on project configuration
-   */
-  private getLanguagePackages(): SandboxPackage[] {
-    const packages: SandboxPackage[] = [];
-
-    for (const language of this.getEffectiveAllLanguages()) {
-      switch (language) {
-        case 'javascript':
-          packages.push(new JavaScriptSandboxPackage());
-          break;
-        case 'typescript':
-          packages.push(new TypeScriptSandboxPackage());
-          break;
-        case 'php':
-          packages.push(new PHPSandboxPackage());
-          break;
-        case 'rust':
-          packages.push(new RustSandboxPackage());
-          break;
-        case 'go':
-          packages.push(new GoSandboxPackage());
-          break;
-        case 'python':
-          packages.push(new PythonSandboxPackage());
-          break;
-        case 'ruby':
-          packages.push(new RubySandboxPackage());
-          break;
-        case 'dart':
-          packages.push(new DartSandboxPackage());
-          break;
-      }
-    }
-
-    return packages;
-  }
-
-  /**
-   * Get package manager sandbox packages based on project configuration
-   */
-  private getPackageManagerPackages(): SandboxPackage[] {
-    const packages: SandboxPackage[] = [];
-
-    for (const packageManager of this.getEffectiveAllPackageManagers()) {
-      switch (packageManager) {
-        case 'npm':
-          packages.push(new NpmSandboxPackage());
-          break;
-        case 'pnpm':
-          packages.push(new PnpmSandboxPackage());
-          break;
-        case 'yarn':
-          packages.push(new YarnSandboxPackage());
-          break;
-        case 'composer':
-          packages.push(new ComposerSandboxPackage());
-          break;
-        case 'cargo':
-          packages.push(new CargoSandboxPackage());
-          break;
-        case 'gomod':
-          packages.push(new GomodSandboxPackage());
-          break;
-        case 'pip':
-          packages.push(new PipSandboxPackage());
-          break;
-        case 'poetry':
-          packages.push(new PoetrySandboxPackage());
-          break;
-        case 'uv':
-          packages.push(new UvSandboxPackage());
-          break;
-        case 'rubygems':
-          packages.push(new RubygemsSandboxPackage());
-          break;
-        case 'pub':
-          packages.push(new PubSandboxPackage());
-          break;
-      }
-    }
-
-    return packages;
-  }
-
-  /**
-   * Get task manager sandbox packages based on project configuration
-   */
-  private getTaskManagerPackages(): SandboxPackage[] {
-    const packages: SandboxPackage[] = [];
-
-    for (const taskManager of this.projectConfig.allTaskManagers ?? []) {
-      switch (taskManager) {
-        case 'just':
-          packages.push(new JustSandboxPackage());
-          break;
-        case 'make':
-          packages.push(new MakeSandboxPackage());
-          break;
-        case 'task':
-          packages.push(new TaskSandboxPackage());
-          break;
-      }
-    }
-
-    return packages;
-  }
-
   private getDependencyResolutionCommands(): string[] {
     return getDependencyResolutionCommands({
       rootPackageManagers: this.projectConfig.packageManagers ?? [],
@@ -442,15 +288,7 @@ git config --system --add safe.directory '*' 2>/dev/null || true`;
     // --- package installation ---
     let installAllPackages = '';
     if (!useCachedImage) {
-      const languagePackages = this.getLanguagePackages();
-      const packageManagerPackages = this.getPackageManagerPackages();
-      const taskManagerPackages = this.getTaskManagerPackages();
-
-      const allPackages = [
-        ...languagePackages,
-        ...packageManagerPackages,
-        ...taskManagerPackages,
-      ];
+      const allPackages = getPackagesFromConfig(this.projectConfig);
 
       if (allPackages.length > 0) {
         const installScripts: string[] = [];
