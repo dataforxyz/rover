@@ -86,6 +86,7 @@ const restartCommand = async (
         try {
           const sandbox = await createSandbox(task, undefined, {
             projectPath: project.path,
+            sandboxMetadata: task.sandboxMetadata,
           });
           const state = await sandbox.inspect();
           // Container is still alive — reject the restart

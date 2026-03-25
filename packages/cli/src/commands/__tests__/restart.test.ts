@@ -9,6 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { restartCommand } from '../restart.js';
+import { createSandbox } from '../../lib/sandbox/index.js';
 import {
   TaskDescriptionManager,
   clearProjectRootCache,
@@ -74,6 +75,7 @@ vi.mock('../../lib/sandbox/index.js', () => ({
 
 describe('restart command', async () => {
   let originalCwd: string;
+  const mockedCreateSandbox = vi.mocked(createSandbox);
 
   beforeEach(() => {
     // Clear project root cache to ensure tests use the correct directory
@@ -136,6 +138,41 @@ describe('restart command', async () => {
   });
 
   describe('basic functionality', () => {
+    it('passes stored sandboxMetadata when checking whether an active task container is still running', async () => {
+      const taskId = 901;
+      const taskDir = join(testDir, '.rover', 'tasks', taskId.toString());
+
+      const task = TaskDescriptionManager.create(taskDir, {
+        id: taskId,
+        title: 'Running Task',
+        description: 'A running task',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+      task.markInProgress();
+      task.setContainerInfo('remote-container', 'running', {
+        dockerHost: 'tcp://remote:2375',
+      });
+
+      mockedCreateSandbox.mockResolvedValueOnce({
+        inspect: vi.fn().mockResolvedValue({ status: 'running' }),
+      } as any);
+
+      await restartCommand(taskId.toString(), { json: true });
+
+      const reloadedTask = TaskDescriptionManager.load(taskDir, taskId);
+      expect(mockedCreateSandbox).toHaveBeenCalledWith(
+        reloadedTask,
+        undefined,
+        {
+          projectPath: testDir,
+          sandboxMetadata: {
+            dockerHost: 'tcp://remote:2375',
+          },
+        }
+      );
+    });
+
     it('should restart a failed task successfully', async () => {
       // Create a failed task
       const taskId = 123;

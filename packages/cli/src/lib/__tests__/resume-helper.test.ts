@@ -188,6 +188,9 @@ describe('resumeTask', () => {
       worktreePath,
       iterationsPath: () => iterationPath,
       iterations: 1,
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+      },
     });
     const project = createMockProject(task);
     const checkpointPath = join(iterationPath, '1', 'checkpoint.json');
@@ -213,6 +216,9 @@ describe('resumeTask', () => {
     );
     expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
       projectPath: project.path,
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+      },
       checkpointPath,
       resumeFromCheckpoint: true,
       iterationLogsPath: project.getTaskIterationLogsPath(

@@ -572,6 +572,7 @@ async function resumeTaskLocked(
   try {
     const sandbox = await createSandbox(task, undefined, {
       projectPath: project.path,
+      sandboxMetadata: task.sandboxMetadata,
       checkpointPath: checkpointState === 'valid' ? checkpointPath : undefined,
       resumeFromCheckpoint: checkpointState === 'valid',
       iterationLogsPath: project.getTaskIterationLogsPath(

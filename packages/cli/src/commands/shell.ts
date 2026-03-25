@@ -110,6 +110,7 @@ const shellCommand = async (
       try {
         const sandbox = await createSandbox(task, undefined, {
           projectPath: project.path,
+          sandboxMetadata: task.sandboxMetadata,
         });
 
         spinner.success('Shell started');
