@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -594,5 +600,95 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain(
       "cd '/workspace/e2e' && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true"
     );
+  });
+
+  it('prefers persisted workspace projects over the current config for existing tasks', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const iterationOnePath = join(root, 'iterations', '1');
+    mkdirSync(iterationOnePath, { recursive: true });
+    writeFileSync(
+      join(iterationOnePath, 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'https://github.com/dataforxyz/frontend.git',
+            ref: 'release/1.0',
+            languages: ['python'],
+            packageManagers: ['uv'],
+          },
+        ],
+      })
+    );
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      branchName: 'task/1',
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '2'),
+    };
+
+    const fakeConfig = {
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      allLanguages: ['typescript'],
+      allPackageManagers: ['pnpm'],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'backend',
+          path: 'backend',
+          repository: 'https://github.com/dataforxyz/backend.git',
+          packageManagers: ['npm'],
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(
+      true,
+      'entrypoint.sh',
+      true
+    );
+    const script = readFileSync(entrypointPath, 'utf8');
+    const descPath = builder.generateWorkspaceDescription();
+    const description = JSON.parse(readFileSync(descPath!, 'utf8'));
+
+    expect(script).toContain(
+      "git clone 'https://github.com/dataforxyz/frontend.git' '/workspace/frontend'"
+    );
+    expect(script).toContain("Checking out 'release/1.0' for 'frontend'");
+    expect(script).not.toContain('/workspace/backend');
+    expect(script).toContain('Resolving Python dependencies (uv) in frontend');
+    expect(script).not.toContain(
+      'Resolving Node.js dependencies (npm) in backend'
+    );
+    expect(description.projects).toEqual([
+      expect.objectContaining({
+        name: 'frontend',
+        path: 'frontend',
+        repository: 'https://github.com/dataforxyz/frontend.git',
+        ref: 'release/1.0',
+        languages: ['python'],
+        packageManagers: ['uv'],
+      }),
+    ]);
   });
 });

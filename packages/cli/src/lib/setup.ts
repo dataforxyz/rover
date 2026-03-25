@@ -4,6 +4,8 @@ import {
   mkdirSync,
   cpSync,
   existsSync,
+  readFileSync,
+  readdirSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -63,6 +65,14 @@ export class SetupBuilder {
   private isDockerRootless: boolean;
   private projectConfig: ProjectConfigManager;
   private resumeFromCheckpoint: boolean;
+  private workspaceProjects: Array<{
+    name: string;
+    path: string;
+    repository?: string;
+    ref?: string;
+    languages?: string[];
+    packageManagers?: string[];
+  }>;
 
   constructor(
     taskDescription: TaskDescriptionManager,
@@ -94,9 +104,152 @@ export class SetupBuilder {
     // Set up paths using TaskDescriptionManager methods
     this.taskBasePath = this.task.getBasePath();
     this.iterationPath = this.task.getIterationPath();
+    this.workspaceProjects = this.resolveWorkspaceProjects();
 
     // Ensures the directories exist
     mkdirSync(this.iterationPath, { recursive: true });
+  }
+
+  private resolveWorkspaceProjects(): Array<{
+    name: string;
+    path: string;
+    repository?: string;
+    ref?: string;
+    languages?: string[];
+    packageManagers?: string[];
+  }> {
+    const persistedProjects = this.getPersistedWorkspaceProjects();
+    if (persistedProjects) {
+      return persistedProjects;
+    }
+
+    return (this.projectConfig.projects ?? [])
+      .filter(
+        (
+          project
+        ): project is {
+          name: string;
+          path: string;
+          repository?: string;
+          ref?: string;
+          languages?: string[];
+          packageManagers?: string[];
+        } =>
+          typeof project?.name === 'string' && typeof project?.path === 'string'
+      )
+      .map(project => ({
+        name: project.name,
+        path: project.path,
+        repository: project.repository,
+        ref: project.ref,
+        languages: project.languages ?? [],
+        packageManagers: project.packageManagers ?? [],
+      }));
+  }
+
+  private getPersistedWorkspaceProjects():
+    | Array<{
+        name: string;
+        path: string;
+        repository?: string;
+        ref?: string;
+        languages?: string[];
+        packageManagers?: string[];
+      }>
+    | undefined {
+    const iterationsPath = join(this.taskBasePath, 'iterations');
+    if (!existsSync(iterationsPath)) {
+      return undefined;
+    }
+
+    const iterationIds = readdirSync(iterationsPath, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => Number.parseInt(dirent.name, 10))
+      .filter(iteration => !Number.isNaN(iteration))
+      .sort((a, b) => b - a);
+
+    for (const iterationId of iterationIds) {
+      const descriptionPath = join(
+        iterationsPath,
+        iterationId.toString(),
+        'workspace-description.json'
+      );
+      if (!existsSync(descriptionPath)) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(readFileSync(descriptionPath, 'utf8')) as {
+          projects?: Array<{
+            name?: unknown;
+            path?: unknown;
+            repository?: unknown;
+            ref?: unknown;
+            languages?: unknown;
+            packageManagers?: unknown;
+          }>;
+        };
+
+        return (Array.isArray(parsed.projects) ? parsed.projects : [])
+          .filter(
+            (
+              project
+            ): project is {
+              name: string;
+              path: string;
+              repository?: string;
+              ref?: string;
+              languages?: string[];
+              packageManagers?: string[];
+            } =>
+              typeof project?.name === 'string' &&
+              typeof project?.path === 'string'
+          )
+          .map(project => ({
+            name: project.name,
+            path: project.path,
+            repository:
+              typeof project.repository === 'string'
+                ? project.repository
+                : undefined,
+            ref: typeof project.ref === 'string' ? project.ref : undefined,
+            languages: Array.isArray(project.languages)
+              ? project.languages.filter(
+                  (language): language is string => typeof language === 'string'
+                )
+              : [],
+            packageManagers: Array.isArray(project.packageManagers)
+              ? project.packageManagers.filter(
+                  (pm): pm is string => typeof pm === 'string'
+                )
+              : [],
+          }));
+      } catch {
+        continue;
+      }
+    }
+
+    return undefined;
+  }
+
+  private getEffectiveAllLanguages(): string[] {
+    return [
+      ...new Set([
+        ...(this.projectConfig.languages ?? []),
+        ...this.workspaceProjects.flatMap(project => project.languages ?? []),
+      ]),
+    ];
+  }
+
+  private getEffectiveAllPackageManagers(): string[] {
+    return [
+      ...new Set([
+        ...(this.projectConfig.packageManagers ?? []),
+        ...this.workspaceProjects.flatMap(
+          project => project.packageManagers ?? []
+        ),
+      ]),
+    ];
   }
 
   /**
@@ -105,7 +258,7 @@ export class SetupBuilder {
   private getLanguagePackages(): SandboxPackage[] {
     const packages: SandboxPackage[] = [];
 
-    for (const language of this.projectConfig.allLanguages ?? []) {
+    for (const language of this.getEffectiveAllLanguages()) {
       switch (language) {
         case 'javascript':
           packages.push(new JavaScriptSandboxPackage());
@@ -143,7 +296,7 @@ export class SetupBuilder {
   private getPackageManagerPackages(): SandboxPackage[] {
     const packages: SandboxPackage[] = [];
 
-    for (const packageManager of this.projectConfig.allPackageManagers ?? []) {
+    for (const packageManager of this.getEffectiveAllPackageManagers()) {
       switch (packageManager) {
         case 'npm':
           packages.push(new NpmSandboxPackage());
@@ -210,7 +363,7 @@ export class SetupBuilder {
   private getDependencyResolutionCommands(): string[] {
     return getDependencyResolutionCommands({
       rootPackageManagers: this.projectConfig.packageManagers ?? [],
-      projects: this.projectConfig.projects,
+      projects: this.workspaceProjects,
       addVenvPathExports: true,
     });
   }
@@ -507,7 +660,7 @@ ${scriptBlocks.join('\n')}
 
     // --- external project repositories ---
     let projectRepositoriesSection = '';
-    const projectsWithRepositories = (this.projectConfig.projects || []).filter(
+    const projectsWithRepositories = this.workspaceProjects.filter(
       project => project.repository
     );
 
@@ -823,7 +976,7 @@ echo "======================================="
    * Returns the file path, or undefined if no projects are configured.
    */
   generateWorkspaceDescription(): string | undefined {
-    const projects = this.projectConfig.projects;
+    const projects = this.workspaceProjects;
     if (!projects || projects.length === 0) {
       return undefined;
     }
