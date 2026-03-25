@@ -1,28 +1,28 @@
-import colors from 'ansi-colors';
-import enquirer from 'enquirer';
-import yoctoSpinner from 'yocto-spinner';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import colors from 'ansi-colors';
+import enquirer from 'enquirer';
 import {
-  ProjectConfigManager,
   Git,
-  showTitle,
+  ProjectConfigManager,
   showProperties,
+  showTitle,
 } from 'rover-core';
 import { TaskNotFoundError } from 'rover-schemas';
-import { getTelemetry } from '../lib/telemetry.js';
-import type { TaskPushOutput } from '../output-types.js';
-import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
+import yoctoSpinner from 'yocto-spinner';
 import {
   isJsonMode,
-  setJsonMode,
   requireProjectContext,
+  setJsonMode,
 } from '../lib/context.js';
-import { showRoverChat, TIP_TITLES } from '../utils/display.js';
-import { statusColor } from '../utils/task-status.js';
 import { executeHooks } from '../lib/hooks.js';
-import type { CommandDefinition } from '../types.js';
+import { getTelemetry } from '../lib/telemetry.js';
 import { getWorkspaceRepositories } from '../lib/workspace-repositories.js';
+import type { TaskPushOutput } from '../output-types.js';
+import type { CommandDefinition } from '../types.js';
+import { showRoverChat, TIP_TITLES } from '../utils/display.js';
+import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
+import { statusColor } from '../utils/task-status.js';
 
 const { prompt } = enquirer;
 
@@ -41,6 +41,7 @@ interface RepoInfo {
 interface PushTarget {
   label: string;
   branchName: string;
+  currentBranch: string;
   worktreePath: string;
   remoteUrl: string;
 }
@@ -199,6 +200,9 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       {
         label: 'root workspace',
         branchName: task.branchName,
+        currentBranch: git.getCurrentBranch({
+          worktreePath: task.worktreePath,
+        }),
         worktreePath: task.worktreePath,
         remoteUrl: git.remoteUrl({ worktreePath: task.worktreePath }),
       },
@@ -206,13 +210,31 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         .filter(repo => existsSync(join(repo.worktreePath, '.git')))
         .map(repo => ({
           label: repo.name,
-          branchName:
+          branchName: task.branchName,
+          currentBranch:
             git.getCurrentBranch({ worktreePath: repo.worktreePath }) ||
-            task.branchName,
+            'unknown',
           worktreePath: repo.worktreePath,
           remoteUrl: git.remoteUrl({ worktreePath: repo.worktreePath }),
         })),
     ];
+
+    for (const target of pushTargets) {
+      if (target.currentBranch === target.branchName) {
+        continue;
+      }
+
+      try {
+        git.checkoutBranch(target.branchName, {
+          worktreePath: target.worktreePath,
+          createIfMissing: true,
+        });
+      } catch (error: unknown) {
+        result.error = `Failed to switch ${target.label} to ${target.branchName}: ${error instanceof Error ? error.message : String(error)}`;
+        await exitWithError(result, { telemetry });
+        return;
+      }
+    }
 
     const hasAnyLocalChanges = pushTargets.some(target => {
       const changes = git.uncommittedChanges({

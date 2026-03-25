@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolvePathWithinRoot } from '../../utils/path-safety.js';
 
 const {
@@ -20,12 +20,15 @@ const {
 
 const mockGitInstance = vi.hoisted(() => ({
   isGitRepo: vi.fn().mockReturnValue(true),
-  getCurrentBranch: vi.fn().mockReturnValue('main'),
+  getCurrentBranch: vi.fn(({ worktreePath } = {}) =>
+    worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+  ),
   hasUncommittedChanges: vi.fn().mockReturnValue(false),
   getRecentCommits: vi.fn().mockReturnValue([]),
   rebaseBranch: vi.fn().mockReturnValue({ success: true }),
   getMergeConflicts: vi.fn().mockReturnValue([]),
   getCommitHash: vi.fn().mockReturnValue('new-base'),
+  checkoutBranch: vi.fn(),
 }));
 
 vi.mock('../../utils/exit.js', () => ({
@@ -174,7 +177,7 @@ describe('rebase command', () => {
     ).toBeNull();
   });
 
-  it('rebases configured workspace repositories after the root workspace', async () => {
+  it('rebases configured workspace repositories onto the requested base branch', async () => {
     mockGetWorkspaceRepositories.mockReturnValue([
       {
         name: 'frontend',
@@ -185,12 +188,20 @@ describe('rebase command', () => {
       },
     ]);
 
-    await rebaseCommand('1', { json: true, force: true });
+    await rebaseCommand('1', {
+      json: true,
+      force: true,
+      base: 'release/x',
+    });
 
-    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('main', {
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('release/x', {
       worktreePath: '/tmp/task-1',
     });
-    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('main', {
+    expect(mockGitInstance.checkoutBranch).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+      createIfMissing: true,
+    });
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('release/x', {
       worktreePath: '/tmp/task-1/frontend',
     });
     expect(mockExitWithSuccess).toHaveBeenCalled();

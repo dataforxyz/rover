@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
-import { launchSync } from './os.js';
 import { join, resolve } from 'node:path';
+import { launchSync } from './os.js';
 
 export class GitError extends Error {
   constructor(reason: string) {
@@ -32,6 +32,10 @@ export type GitDiffStatsResult = {
 
 export type GitWorktreeOptions = {
   worktreePath?: string;
+};
+
+export type GitCheckoutOptions = GitWorktreeOptions & {
+  createIfMissing?: boolean;
 };
 
 export type GitRecentCommitOptions = {
@@ -682,18 +686,38 @@ export class Git {
   /**
    * Check if a given branch exists
    */
-  branchExists(branch: string): boolean {
+  branchExists(branch: string, options: GitWorktreeOptions = {}): boolean {
     try {
       return (
         launchSync(
           'git',
           ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`],
-          { reject: false, cwd: this.cwd }
+          { reject: false, cwd: options.worktreePath ?? this.cwd }
         ).exitCode === 0
       );
     } catch (error) {
       return false;
     }
+  }
+
+  checkoutBranch(branch: string, options: GitCheckoutOptions = {}): void {
+    const effectiveCwd = options.worktreePath ?? this.cwd;
+
+    if (this.branchExists(branch, { worktreePath: effectiveCwd })) {
+      launchSync('git', ['checkout', branch], {
+        cwd: effectiveCwd,
+      });
+      return;
+    }
+
+    if (options.createIfMissing) {
+      launchSync('git', ['checkout', '-b', branch], {
+        cwd: effectiveCwd,
+      });
+      return;
+    }
+
+    throw new GitError(`Branch '${branch}' does not exist`);
   }
 
   /**

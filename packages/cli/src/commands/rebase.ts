@@ -1,13 +1,7 @@
-import colors from 'ansi-colors';
-import enquirer from 'enquirer';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import yoctoSpinner from 'yocto-spinner';
-import {
-  getAIAgentTool,
-  getUserDefaultModel,
-  type AIAgentTool,
-} from '../lib/agents/index.js';
+import colors from 'ansi-colors';
+import enquirer from 'enquirer';
 import {
   AI_AGENT,
   Git,
@@ -15,24 +9,29 @@ import {
   UserSettingsManager,
 } from 'rover-core';
 import { TaskNotFoundError } from 'rover-schemas';
-import { getTelemetry } from '../lib/telemetry.js';
-import { showRoverChat } from '../utils/display.js';
-import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
-import type { CLIJsonOutput } from '../types.js';
+import yoctoSpinner from 'yocto-spinner';
+import {
+  type AIAgentTool,
+  getAIAgentTool,
+  getUserDefaultModel,
+} from '../lib/agents/index.js';
 import {
   isJsonMode,
-  setJsonMode,
   requireProjectContext,
+  setJsonMode,
 } from '../lib/context.js';
-import type { CommandDefinition } from '../types.js';
-import { parseAgentString } from '../utils/agent-parser.js';
-import { collapseTaskCommits } from '../lib/squash.js';
 import {
-  getTaskIterationSummaries,
   generateCommitMessage,
+  getTaskIterationSummaries,
   resolveConflicts,
 } from '../lib/merge-rebase-utils.js';
+import { collapseTaskCommits } from '../lib/squash.js';
+import { getTelemetry } from '../lib/telemetry.js';
 import { getWorkspaceRepositories } from '../lib/workspace-repositories.js';
+import type { CLIJsonOutput, CommandDefinition } from '../types.js';
+import { parseAgentString } from '../utils/agent-parser.js';
+import { showRoverChat } from '../utils/display.js';
+import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
 
 const { prompt } = enquirer;
 
@@ -252,14 +251,31 @@ export const rebaseCommand = async (
       },
       ...workspaceRepositories.map(repo => ({
         label: repo.name,
-        branchName:
-          git.getCurrentBranch({ worktreePath: repo.worktreePath }) ||
-          task.branchName,
+        branchName: task.branchName,
         worktreePath: repo.worktreePath,
-        baseBranch:
-          repo.ref || new Git({ cwd: repo.worktreePath }).getMainBranch(),
+        baseBranch: currentBranch,
       })),
     ];
+
+    for (const target of rebaseTargets) {
+      const checkedOutBranch = git.getCurrentBranch({
+        worktreePath: target.worktreePath,
+      });
+      if (checkedOutBranch === target.branchName) {
+        continue;
+      }
+
+      try {
+        git.checkoutBranch(target.branchName, {
+          worktreePath: target.worktreePath,
+          createIfMissing: true,
+        });
+      } catch (error) {
+        jsonOutput.error = `Failed to switch ${target.label} to ${target.branchName}: ${error instanceof Error ? error.message : String(error)}`;
+        await exitWithError(jsonOutput, { telemetry });
+        return;
+      }
+    }
 
     // Check if any workspace repo has uncommitted changes (before squashing root)
     const hasUncommittedChanges = rebaseTargets.some(target =>

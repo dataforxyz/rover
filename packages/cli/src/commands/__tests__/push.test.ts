@@ -36,6 +36,7 @@ const mockGitInstance = vi.hoisted(() => ({
   addAndCommit: vi.fn(),
   push: vi.fn(),
   remoteUrl: vi.fn(),
+  checkoutBranch: vi.fn(),
 }));
 
 vi.mock('../../utils/exit.js', () => ({
@@ -124,7 +125,9 @@ describe('push command', () => {
     mockGitInstance.addAndCommit.mockReturnValue(undefined);
     mockGitInstance.push.mockReturnValue(undefined);
     mockGitInstance.remoteUrl.mockReturnValue('');
-    mockGitInstance.getCurrentBranch = vi.fn().mockReturnValue('task/1');
+    mockGitInstance.getCurrentBranch = vi.fn(({ worktreePath } = {}) =>
+      worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
     mockGetWorkspaceRepositories.mockReturnValue([]);
 
     const task = {
@@ -178,6 +181,10 @@ describe('push command', () => {
 
     expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
       worktreePath: '/tmp/task-1',
+    });
+    expect(mockGitInstance.checkoutBranch).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+      createIfMissing: true,
     });
     expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
       worktreePath: '/tmp/task-1/frontend',
