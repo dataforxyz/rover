@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   launch,
@@ -55,6 +55,7 @@ export interface SetupHashInputs {
     repository?: string;
     ref?: string;
     repositoryRevision?: string;
+    localContentHash?: string;
     languages?: string[];
     packageManagers?: string[];
     taskManagers?: string[];
@@ -95,6 +96,7 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
       repository: p.repository || '',
       ref: p.ref || '',
       repositoryRevision: p.repositoryRevision || '',
+      localContentHash: p.localContentHash || '',
       languages: [...(p.languages || [])].sort(),
       packageManagers: [...(p.packageManagers || [])].sort(),
       taskManagers: [...(p.taskManagers || [])].sort(),
@@ -266,6 +268,51 @@ function resolveRepositoryRevision(repository: string, ref?: string): string {
   }
 }
 
+function hashMaterializedProjectContents(projectPath: string): string {
+  const hash = createHash('sha256');
+
+  try {
+    const visit = (currentPath: string, relativePath: string): void => {
+      const entries = readdirSync(currentPath, { withFileTypes: true }).sort(
+        (a, b) => a.name.localeCompare(b.name)
+      );
+
+      for (const entry of entries) {
+        if (entry.name === '.git') {
+          continue;
+        }
+
+        const entryRelativePath = relativePath
+          ? `${relativePath}/${entry.name}`
+          : entry.name;
+        const entryPath = join(currentPath, entry.name);
+
+        if (entry.isDirectory()) {
+          hash.update(`dir\0${entryRelativePath}\0`);
+          visit(entryPath, entryRelativePath);
+          continue;
+        }
+
+        if (entry.isFile()) {
+          hash.update(`file\0${entryRelativePath}\0`);
+          hash.update(readFileSync(entryPath));
+          hash.update('\0');
+          continue;
+        }
+
+        if (entry.isSymbolicLink()) {
+          hash.update(`symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`);
+        }
+      }
+    };
+
+    visit(projectPath, '');
+    return hash.digest('hex');
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Convenience function: compute hash, build tag, check existence.
  * Returns the cache tag and whether a cached image already exists.
@@ -337,6 +384,9 @@ export function checkImageCache(
           typeof p.repository === 'string'
             ? resolveRepositoryRevision(p.repository, p.ref)
             : '',
+        localContentHash: hashMaterializedProjectContents(
+          join(projectConfig.projectRoot, p.path)
+        ),
         languages: p.languages,
         packageManagers: p.packageManagers,
         taskManagers: p.taskManagers,

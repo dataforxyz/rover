@@ -1,4 +1,13 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -38,6 +47,47 @@ function makeInputs(overrides: Partial<SetupHashInputs> = {}): SetupHashInputs {
     mcps: [],
     ...overrides,
   };
+}
+
+function hashDirectoryContents(dirPath: string): string {
+  const hash = createHash('sha256');
+
+  const visit = (currentPath: string, relativePath: string): void => {
+    const entries = readdirSync(currentPath, { withFileTypes: true }).sort(
+      (a, b) => a.name.localeCompare(b.name)
+    );
+
+    for (const entry of entries) {
+      if (entry.name === '.git') {
+        continue;
+      }
+
+      const entryRelativePath = relativePath
+        ? `${relativePath}/${entry.name}`
+        : entry.name;
+      const entryPath = join(currentPath, entry.name);
+
+      if (entry.isDirectory()) {
+        hash.update(`dir\0${entryRelativePath}\0`);
+        visit(entryPath, entryRelativePath);
+        continue;
+      }
+
+      if (entry.isFile()) {
+        hash.update(`file\0${entryRelativePath}\0`);
+        hash.update(readFileSync(entryPath));
+        hash.update('\0');
+        continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        hash.update(`symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`);
+      }
+    }
+  };
+
+  visit(dirPath, '');
+  return hash.digest('hex');
 }
 
 describe('computeSetupHash', () => {
@@ -962,6 +1012,9 @@ describe('checkImageCache', () => {
         {
           name: 'api',
           path: 'packages/api',
+          localContentHash: hashDirectoryContents(
+            join(projectRoot, 'packages', 'api')
+          ),
           initScriptContent: '#!/bin/sh\necho root\n',
         },
       ],
@@ -1025,5 +1078,53 @@ describe('checkImageCache', () => {
       ['ls-remote', 'https://github.com/dataforxyz/api.git', 'main'],
       { reject: false }
     );
+  });
+
+  it('changes when a materialized child project changes locally', () => {
+    const projectRoot = createTmpDir();
+    mkdirSync(join(projectRoot, 'packages', 'api'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"1.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [{ name: 'api', path: 'packages/api' }],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"2.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [{ name: 'api', path: 'packages/api' }],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).not.toBe(result2.cacheTag);
   });
 });
