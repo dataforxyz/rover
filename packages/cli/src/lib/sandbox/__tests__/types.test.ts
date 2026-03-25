@@ -253,4 +253,29 @@ describe('Sandbox service cleanup', () => {
       },
     });
   });
+
+  it('does not return persisted service context after teardown has run', async () => {
+    const sandbox = new TestSandbox(
+      {
+        id: 12,
+        iterations: 3,
+      } as any,
+      undefined,
+      {
+        sandboxMetadata: {
+          serviceContext: {
+            networkName: 'rover-services-12-3',
+            containerNames: ['rover-svc-12-3-postgres'],
+            taskId: 12,
+            iteration: 3,
+          },
+        },
+      }
+    );
+
+    await sandbox.teardownServices();
+
+    expect(mockTeardownServiceContainers).toHaveBeenCalledTimes(1);
+    expect(sandbox.getSandboxMetadata()).toBeUndefined();
+  });
 });

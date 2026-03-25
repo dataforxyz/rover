@@ -100,6 +100,7 @@ export async function detectOrphanedTasks(
         // because the sandbox type is determined at runtime and may vary per task.
         const sandbox = await createSandbox(task, undefined, {
           projectPath: project?.path ?? '',
+          sandboxMetadata: task.sandboxMetadata,
         });
 
         // Re-check lock after sandbox creation — another process may have
@@ -118,6 +119,7 @@ export async function detectOrphanedTasks(
         }
 
         if (!state) {
+          await sandbox.teardownServices();
           // Final lock re-check after inspect returned null — another
           // process may have acquired the lock and started a replacement
           // container between inspect() returning and this check.

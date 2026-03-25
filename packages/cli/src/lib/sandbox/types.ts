@@ -46,6 +46,7 @@ export abstract class Sandbox {
   task: TaskDescriptionManager;
   options?: SandboxOptions;
   protected serviceContext?: ServiceContainerContext;
+  private servicesTornDown = false;
 
   constructor(
     task: TaskDescriptionManager,
@@ -77,6 +78,10 @@ export abstract class Sandbox {
   }
 
   private getPersistedServiceContext(): ServiceContainerContext | undefined {
+    if (this.servicesTornDown) {
+      return undefined;
+    }
+
     const persisted =
       this.options?.sandboxMetadata?.[SERVICE_CONTEXT_METADATA_KEY];
     const record =
@@ -106,6 +111,10 @@ export abstract class Sandbox {
   }
 
   protected resolveServiceContext(): ServiceContainerContext | undefined {
+    if (this.servicesTornDown) {
+      return undefined;
+    }
+
     if (this.serviceContext) {
       return this.serviceContext;
     }
@@ -140,12 +149,19 @@ export abstract class Sandbox {
       this.getServiceEnvironment()
     );
     this.serviceContext = undefined;
+    this.servicesTornDown = true;
+  }
+
+  async teardownServices(): Promise<void> {
+    await this.teardownServicesIfConfigured();
   }
 
   getSandboxMetadata(): Record<string, unknown> | undefined {
     const metadata = this.options?.sandboxMetadata
       ? { ...this.options.sandboxMetadata }
       : {};
+    delete metadata[SERVICE_CONTEXT_METADATA_KEY];
+
     if (
       typeof metadata.dockerHost !== 'string' &&
       typeof process.env.DOCKER_HOST === 'string'

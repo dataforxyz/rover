@@ -138,11 +138,19 @@ describe('detectOrphanedTasks', () => {
 
   it('marks IN_PROGRESS task as FAILED when a known container is gone', async () => {
     const task = mockTask(15, 'IN_PROGRESS', 'container-15');
-    const sandbox = { inspect: vi.fn().mockResolvedValue(null) };
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue(null),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: '/projects/test',
+      sandboxMetadata: undefined,
+    });
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
     );
@@ -169,7 +177,10 @@ describe('detectOrphanedTasks', () => {
 
   it('suppresses warnings when suppressWarnings option is enabled', async () => {
     const task = mockTask(17, 'IN_PROGRESS', 'container-17');
-    const sandbox = { inspect: vi.fn().mockResolvedValue(null) };
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue(null),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }], {
@@ -254,9 +265,11 @@ describe('detectOrphanedTasks', () => {
     mockedCreateSandbox
       .mockResolvedValueOnce({
         inspect: vi.fn().mockResolvedValue(null),
+        teardownServices: vi.fn().mockResolvedValue(undefined),
       } as any)
       .mockResolvedValueOnce({
         inspect: vi.fn().mockResolvedValue({ status: 'running' }),
+        teardownServices: vi.fn().mockResolvedValue(undefined),
       } as any);
 
     await detectOrphanedTasks([
@@ -342,7 +355,10 @@ describe('detectOrphanedTasks', () => {
       lastRestartAt: new Date(now - 20_000).toISOString(),
       runningAt: new Date(now - 10_000).toISOString(),
     });
-    const sandbox = { inspect: vi.fn().mockResolvedValue(null) };
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue(null),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
@@ -451,7 +467,10 @@ describe('detectOrphanedTasks', () => {
       lastRestartAt: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
       runningAt: undefined,
     });
-    const sandbox = { inspect: vi.fn().mockResolvedValue(null) };
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue(null),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
@@ -478,7 +497,10 @@ describe('detectOrphanedTasks', () => {
 
   it('does not treat stale resume lock as active and continues orphan detection', async () => {
     const task = mockTask(26, 'IN_PROGRESS', 'container-26');
-    const sandbox = { inspect: vi.fn().mockResolvedValue(null) };
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue(null),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
     mockedExistsSync.mockImplementation(path =>
       String(path).endsWith('.resume.lock')
@@ -494,5 +516,39 @@ describe('detectOrphanedTasks', () => {
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
     );
+  });
+
+  it('passes persisted sandbox metadata into orphan reconciliation', async () => {
+    const task = mockTask(33, 'IN_PROGRESS', 'container-33', {
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-33-1',
+          containerNames: ['rover-svc-33-1-postgres'],
+          taskId: 33,
+          iteration: 1,
+        },
+      },
+    });
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue({ status: 'running' }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
+    mockedCreateSandbox.mockResolvedValue(sandbox as any);
+
+    await detectOrphanedTasks([{ task, project: mockProject() }]);
+
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: '/projects/test',
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-33-1',
+          containerNames: ['rover-svc-33-1-postgres'],
+          taskId: 33,
+          iteration: 1,
+        },
+      },
+    });
   });
 });
