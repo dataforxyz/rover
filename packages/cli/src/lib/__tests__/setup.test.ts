@@ -176,6 +176,19 @@ describe('SetupBuilder multi-repo projects', () => {
     );
   });
 
+  it('runs repository sync before dependency resolution in the runtime entrypoint template', () => {
+    const script = readFileSync(
+      new URL('../entrypoint.sh', import.meta.url),
+      'utf8'
+    );
+
+    const repoSyncIndex = script.indexOf('{projectRepositoriesSection}');
+    const dependencyResolutionIndex = script.indexOf('{workspaceDeps}');
+
+    expect(repoSyncIndex).toBeGreaterThanOrEqual(0);
+    expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
+  });
+
   it('includes repository metadata in workspace description', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);

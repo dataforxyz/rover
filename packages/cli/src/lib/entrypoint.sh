@@ -168,11 +168,11 @@ done
 echo "✅ Package manager MCP is ready"
 {taskDataSection}
 {installAllPackages}
-{workspaceDeps}
 {agentInstallSection}
 {credentialInstallSection}
 {mcpConfigSection}
 {projectRepositoriesSection}
+{workspaceDeps}
 {exportTaskVariables}
 
 # Ensure agent-installed toolchains are never committed
