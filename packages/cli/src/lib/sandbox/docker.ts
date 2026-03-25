@@ -743,6 +743,10 @@ export class DockerSandbox extends Sandbox {
     return process.env;
   }
 
+  private shouldTeardownServicesForStatus(status: string): boolean {
+    return status === 'exited' || status === 'dead' || status === 'removing';
+  }
+
   async inspect(): Promise<{ status: string; exitCode?: number } | null> {
     try {
       const result = await launch(
@@ -767,7 +771,7 @@ export class DockerSandbox extends Sandbox {
         status,
         exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
       };
-      if (status !== 'running') {
+      if (this.shouldTeardownServicesForStatus(status)) {
         await this.teardownServicesIfConfigured();
       }
 
