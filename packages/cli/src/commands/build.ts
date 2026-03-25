@@ -29,80 +29,9 @@ import type { BuildOutput } from '../output-types.js';
 import { getTelemetry } from '../lib/telemetry.js';
 import { getUserAIAgent, getAIAgentTool } from '../lib/agents/index.js';
 
-// Language packages
-import { JavaScriptSandboxPackage } from '../lib/sandbox/languages/javascript.js';
-import { TypeScriptSandboxPackage } from '../lib/sandbox/languages/typescript.js';
-import { PHPSandboxPackage } from '../lib/sandbox/languages/php.js';
-import { RustSandboxPackage } from '../lib/sandbox/languages/rust.js';
-import { GoSandboxPackage } from '../lib/sandbox/languages/go.js';
-import { PythonSandboxPackage } from '../lib/sandbox/languages/python.js';
-import { RubySandboxPackage } from '../lib/sandbox/languages/ruby.js';
-import { DartSandboxPackage } from '../lib/sandbox/languages/dart.js';
-
-// Package manager packages
-import { NpmSandboxPackage } from '../lib/sandbox/package-managers/npm.js';
-import { PnpmSandboxPackage } from '../lib/sandbox/package-managers/pnpm.js';
-import { YarnSandboxPackage } from '../lib/sandbox/package-managers/yarn.js';
-import { ComposerSandboxPackage } from '../lib/sandbox/package-managers/composer.js';
-import { CargoSandboxPackage } from '../lib/sandbox/package-managers/cargo.js';
-import { GomodSandboxPackage } from '../lib/sandbox/package-managers/gomod.js';
-import { PipSandboxPackage } from '../lib/sandbox/package-managers/pip.js';
-import { PoetrySandboxPackage } from '../lib/sandbox/package-managers/poetry.js';
-import { UvSandboxPackage } from '../lib/sandbox/package-managers/uv.js';
-import { RubygemsSandboxPackage } from '../lib/sandbox/package-managers/rubygems.js';
-import { PubSandboxPackage } from '../lib/sandbox/package-managers/pub.js';
-
-// Task manager packages
-import { JustSandboxPackage } from '../lib/sandbox/task-managers/just.js';
-import { MakeSandboxPackage } from '../lib/sandbox/task-managers/make.js';
-import { TaskSandboxPackage } from '../lib/sandbox/task-managers/task.js';
-
-import type { SandboxPackage } from '../lib/sandbox/types.js';
+import { getPackagesFromConfig } from '../lib/sandbox/packages.js';
 import { getDependencyResolutionCommands } from '../lib/dependency-resolution.js';
 import { shellEscape } from '../utils/shell.js';
-
-function getPackages(projectConfig: ProjectConfigManager): SandboxPackage[] {
-  const packages: SandboxPackage[] = [];
-  const langMap: Record<string, () => SandboxPackage> = {
-    javascript: () => new JavaScriptSandboxPackage(),
-    typescript: () => new TypeScriptSandboxPackage(),
-    php: () => new PHPSandboxPackage(),
-    rust: () => new RustSandboxPackage(),
-    go: () => new GoSandboxPackage(),
-    python: () => new PythonSandboxPackage(),
-    ruby: () => new RubySandboxPackage(),
-    dart: () => new DartSandboxPackage(),
-  };
-  const pmMap: Record<string, () => SandboxPackage> = {
-    npm: () => new NpmSandboxPackage(),
-    pnpm: () => new PnpmSandboxPackage(),
-    yarn: () => new YarnSandboxPackage(),
-    composer: () => new ComposerSandboxPackage(),
-    cargo: () => new CargoSandboxPackage(),
-    gomod: () => new GomodSandboxPackage(),
-    pip: () => new PipSandboxPackage(),
-    poetry: () => new PoetrySandboxPackage(),
-    uv: () => new UvSandboxPackage(),
-    rubygems: () => new RubygemsSandboxPackage(),
-    pub: () => new PubSandboxPackage(),
-  };
-  const tmMap: Record<string, () => SandboxPackage> = {
-    just: () => new JustSandboxPackage(),
-    make: () => new MakeSandboxPackage(),
-    task: () => new TaskSandboxPackage(),
-  };
-
-  for (const lang of projectConfig.allLanguages ?? []) {
-    if (langMap[lang]) packages.push(langMap[lang]());
-  }
-  for (const pm of projectConfig.allPackageManagers ?? []) {
-    if (pmMap[pm]) packages.push(pmMap[pm]());
-  }
-  for (const tm of projectConfig.allTaskManagers ?? []) {
-    if (tmMap[tm]) packages.push(tmMap[tm]());
-  }
-  return packages;
-}
 
 function generateProjectRepositorySyncSection(
   projectConfig: ProjectConfigManager
@@ -183,7 +112,7 @@ function generateBuildEntrypoint(
   targetUid?: number,
   targetGid?: number
 ): string {
-  const allPackages = getPackages(projectConfig);
+  const allPackages = getPackagesFromConfig(projectConfig);
 
   const installScripts: string[] = [];
   for (const pkg of allPackages) {
@@ -491,7 +420,11 @@ const buildCommand = async (
       );
     }
 
-    await launch(backendName, ['start', '-a', containerName]);
+    // 6. Start container and stream build output. Don't throw on non-zero
+    //    exit — let waitForInitAndCommit handle cleanup and commit decisions.
+    await launch(backendName, ['start', '-a', containerName], {
+      reject: false,
+    });
 
     // 7. Wait for init to finish and commit as cache image
     const committed = await waitForInitAndCommit(
