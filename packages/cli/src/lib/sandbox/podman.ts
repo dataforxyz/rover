@@ -542,10 +542,11 @@ export class PodmanSandbox extends Sandbox {
     try {
       // Start service containers for interactive mode
       const interactiveServices = projectConfig.services;
+      const existingServiceContext = this.resolveServiceContext();
       if (
         interactiveServices &&
         interactiveServices.length > 0 &&
-        !this.serviceContext
+        !existingServiceContext
       ) {
         const networkName = await createServiceNetwork(
           ContainerBackend.Podman,
@@ -592,10 +593,9 @@ export class PodmanSandbox extends Sandbox {
       const podmanArgs = ['run', '--name', interactiveName, '-it', '--rm'];
 
       // Attach to service network
-      if (this.serviceContext) {
-        podmanArgs.push(
-          ...getServiceNetworkArgs(this.serviceContext.networkName)
-        );
+      const serviceContext = this.resolveServiceContext();
+      if (serviceContext) {
+        podmanArgs.push(...getServiceNetworkArgs(serviceContext.networkName));
       }
 
       const userInfo_ = normalizeUserInfo(userInfo());
@@ -757,6 +757,7 @@ export class PodmanSandbox extends Sandbox {
       return containerState;
     } catch (error) {
       if (isContainerMissingInspectError(error)) {
+        await this.teardownServicesIfConfigured();
         return null;
       }
       throw error;

@@ -541,7 +541,8 @@ export class DockerSandbox extends Sandbox {
     try {
       // Start service containers for interactive mode
       const services = projectConfig.services;
-      if (services && services.length > 0 && !this.serviceContext) {
+      const existingServiceContext = this.resolveServiceContext();
+      if (services && services.length > 0 && !existingServiceContext) {
         const dockerEnv = this.getDockerEnv();
         const networkName = await createServiceNetwork(
           ContainerBackend.Docker,
@@ -590,10 +591,9 @@ export class DockerSandbox extends Sandbox {
       const dockerArgs = ['run', '--name', interactiveName, '-it', '--rm'];
 
       // Attach to service network
-      if (this.serviceContext) {
-        dockerArgs.push(
-          ...getServiceNetworkArgs(this.serviceContext.networkName)
-        );
+      const serviceContext = this.resolveServiceContext();
+      if (serviceContext) {
+        dockerArgs.push(...getServiceNetworkArgs(serviceContext.networkName));
       }
 
       const rawUserInfoInteractive = userInfo();
@@ -778,6 +778,7 @@ export class DockerSandbox extends Sandbox {
       return containerState;
     } catch (error) {
       if (isContainerMissingInspectError(error)) {
+        await this.teardownServicesIfConfigured();
         return null;
       }
       throw error;

@@ -199,4 +199,61 @@ describe('sandbox inspect', () => {
     );
     expect(sandbox.getSandboxMetadata()).toBeUndefined();
   });
+
+  it.each([
+    [
+      'docker',
+      DockerSandbox,
+      'No such object: rover-task-1-1',
+      'docker',
+      { env: expect.any(Object) },
+      undefined,
+    ],
+    [
+      'podman',
+      PodmanSandbox,
+      'no such container "rover-task-1-1"',
+      'podman',
+      { stdio: 'pipe' },
+      undefined,
+    ],
+  ])('tears down persisted services when %s inspect finds no task container', async (_label, SandboxCtor, stderr, backend, inspectOptions, teardownEnv) => {
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      sandboxMetadata: {
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+    const error = new Error(stderr) as Error & { stderr: string };
+    error.stderr = stderr;
+    mockLaunch.mockRejectedValueOnce(error);
+
+    await expect(sandbox.inspect()).resolves.toBeNull();
+
+    expect(mockLaunch).toHaveBeenCalledWith(
+      backend,
+      [
+        'inspect',
+        '--format',
+        '{{.State.Status}}|{{.State.ExitCode}}',
+        'rover-task-1-1',
+      ],
+      inspectOptions
+    );
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+      backend,
+      {
+        networkName: 'rover-services-1-1',
+        containerNames: ['rover-svc-1-1-postgres'],
+        taskId: 1,
+        iteration: 1,
+      },
+      teardownEnv
+    );
+    expect(sandbox.getSandboxMetadata()).toBeUndefined();
+  });
 });

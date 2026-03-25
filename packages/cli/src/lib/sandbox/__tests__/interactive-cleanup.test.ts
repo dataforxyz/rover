@@ -250,4 +250,39 @@ describe('interactive sandbox cleanup', () => {
       'interactive run failed'
     );
   });
+
+  it.each([
+    ['docker', DockerSandbox],
+    ['podman', PodmanSandbox],
+  ])('reuses persisted %s sidecars for interactive sessions', async (_label, SandboxCtor) => {
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    await sandbox.runInteractive('fix the bug');
+
+    expect(mockCreateServiceNetwork).not.toHaveBeenCalled();
+    expect(mockStartServiceContainers).not.toHaveBeenCalled();
+    expect(mockWaitForServicesReady).not.toHaveBeenCalled();
+    expect(mockGetServiceNetworkArgs).toHaveBeenCalledWith(
+      'rover-services-1-1'
+    );
+    expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
+    expect(sandbox.getSandboxMetadata()).toEqual({
+      serviceContext: {
+        networkName: 'rover-services-1-1',
+        containerNames: ['rover-svc-1-1-postgres'],
+        taskId: 1,
+        iteration: 1,
+      },
+    });
+  });
 });
