@@ -83,6 +83,9 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain(
       "git -C '/workspace/frontend' checkout --detach 'main'"
     );
+    expect(script).toContain(
+      "git -C '/workspace/frontend' checkout -B 'task/1' HEAD"
+    );
   });
 
   it('installs the agent CLI without unsupported install flags', () => {
@@ -443,8 +446,82 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain('🔧 Running initialization scripts');
     expect(script).toContain('🔧 Running initialization script (frontend)');
     expect(script).toContain("cd '/workspace/frontend'");
-    expect(script).toContain('/bin/sh /init-script-1.sh');
+    expect(script).toContain("'/workspace/frontend/scripts/frontend-init.sh'");
     expect(script).not.toContain('/bin/sh /init-script-0.sh');
-    expect(script).not.toContain('echo "🔧 Running initialization script"\n');
+    expect(script).not.toContain("/bin/sh '/workspace/scripts/root-init.sh'");
+  });
+
+  it('resolves dependencies for configured sub-project package managers', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      branchName: 'task/1',
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      packageManagers: [],
+      allLanguages: [],
+      allPackageManagers: ['pub', 'gomod', 'uv'],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+          packageManagers: ['pub'],
+        },
+        {
+          name: 'backend',
+          path: 'backend',
+          repository: 'https://github.com/dataforxyz/backend.git',
+          packageManagers: ['gomod'],
+        },
+        {
+          name: 'e2e',
+          path: 'e2e',
+          repository: 'https://github.com/dataforxyz/e2e.git',
+          packageManagers: ['uv'],
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(
+      true,
+      'entrypoint.sh',
+      true
+    );
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain('Resolving Dart dependencies in frontend');
+    expect(script).toContain(
+      "cd '/workspace/frontend' && flutter pub get 2>/dev/null || dart pub get 2>/dev/null || true"
+    );
+    expect(script).toContain('Resolving Go dependencies in backend');
+    expect(script).toContain(
+      "cd '/workspace/backend' && go mod download 2>/dev/null || true"
+    );
+    expect(script).toContain('Resolving Python dependencies (uv) in e2e');
+    expect(script).toContain(
+      "cd '/workspace/e2e' && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true"
+    );
   });
 });

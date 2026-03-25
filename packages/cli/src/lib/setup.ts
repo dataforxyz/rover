@@ -212,6 +212,102 @@ export class SetupBuilder {
     return `'${value.replace(/'/g, `'\"'\"'`)}'`;
   }
 
+  private getDependencyResolutionCommands(): string[] {
+    const commands: string[] = [];
+    const locations = [
+      {
+        path: '/workspace',
+        packageManagers: this.projectConfig.packageManagers ?? [],
+        label: 'workspace root',
+      },
+      ...(this.projectConfig.projects ?? []).map(project => ({
+        path: `/workspace/${project.path}`,
+        packageManagers: project.packageManagers ?? [],
+        label: project.path,
+      })),
+    ];
+
+    for (const location of locations) {
+      const quotedPath = this.shellEscape(location.path);
+      const pms = location.packageManagers;
+
+      if (pms.includes('uv')) {
+        commands.push(
+          `if [ -f ${quotedPath}/pyproject.toml ]; then`,
+          `  echo "📦 Resolving Python dependencies (uv) in ${location.label}..."`,
+          `  cd ${quotedPath} && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true`,
+          `  if [ -d ${quotedPath}/.venv/bin ]; then`,
+          `    export PATH="${location.path}/.venv/bin:$PATH"`,
+          `    echo 'export PATH="${location.path}/.venv/bin:$PATH"' >> $HOME/.profile`,
+          '  fi',
+          'fi'
+        );
+      }
+
+      if (pms.includes('poetry')) {
+        commands.push(
+          `if [ -f ${quotedPath}/pyproject.toml ]; then`,
+          `  echo "📦 Resolving Python dependencies (poetry) in ${location.label}..."`,
+          `  cd ${quotedPath} && poetry install --no-interaction 2>/dev/null || true`,
+          'fi'
+        );
+      }
+
+      if (pms.includes('pub')) {
+        commands.push(
+          `if [ -f ${quotedPath}/pubspec.yaml ]; then`,
+          `  echo "📦 Resolving Dart dependencies in ${location.label}..."`,
+          `  cd ${quotedPath} && flutter pub get 2>/dev/null || dart pub get 2>/dev/null || true`,
+          'fi'
+        );
+      }
+
+      if (pms.includes('pnpm')) {
+        commands.push(
+          `if [ -f ${quotedPath}/pnpm-lock.yaml ]; then`,
+          `  echo "📦 Resolving Node dependencies (pnpm) in ${location.label}..."`,
+          `  cd ${quotedPath} && pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true`,
+          'fi'
+        );
+      }
+
+      if (pms.includes('npm')) {
+        commands.push(
+          `if [ -f ${quotedPath}/package-lock.json ]; then`,
+          `  echo "📦 Resolving Node dependencies (npm) in ${location.label}..."`,
+          `  cd ${quotedPath} && npm ci 2>/dev/null || npm install 2>/dev/null || true`,
+          'fi'
+        );
+      }
+
+      if (pms.includes('yarn')) {
+        commands.push(
+          `if [ -f ${quotedPath}/yarn.lock ]; then`,
+          `  echo "📦 Resolving Node dependencies (yarn) in ${location.label}..."`,
+          `  cd ${quotedPath} && yarn install --frozen-lockfile 2>/dev/null || yarn install 2>/dev/null || true`,
+          'fi'
+        );
+      }
+
+      if (pms.includes('gomod')) {
+        commands.push(
+          `if [ -f ${quotedPath}/go.mod ]; then`,
+          `  echo "📦 Resolving Go dependencies in ${location.label}..."`,
+          `  cd ${quotedPath} && go mod download 2>/dev/null || true`,
+          `elif [ -f ${quotedPath}/src/go.mod ]; then`,
+          `  cd ${quotedPath}/src && go mod download 2>/dev/null || true`,
+          'fi'
+        );
+      }
+    }
+
+    if (commands.length > 0) {
+      commands.push('cd /workspace');
+    }
+
+    return commands;
+  }
+
   /**
    * Generate and save the setup script to the appropriate task directory
    */
@@ -264,77 +360,17 @@ sudo chown -R $(id -u):$(id -g) /workspace
 source $HOME/.profile`;
     }
 
+    const gitSafeDirectorySetup = `# Allow git operations across mounted workspaces and embedded repositories
+git config --global --add safe.directory '*' 2>/dev/null || true
+git config --system --add safe.directory '*' 2>/dev/null || true`;
+
     // --- workspace dependency resolution (runs even with cached images) ---
     // Some package managers (uv, poetry, pip -e) create virtualenvs in /workspace
     // which can't be done during image build (/workspace is read-only).
     // Resolve deps here since /workspace is now read-write.
     let workspaceDeps = '';
     if (useCachedImage) {
-      const depCmds: string[] = [];
-      const pms = this.projectConfig.allPackageManagers ?? [];
-      if (pms.includes('uv')) {
-        depCmds.push(
-          'if [ -f /workspace/pyproject.toml ]; then',
-          '  echo "📦 Resolving Python dependencies (uv)..."',
-          '  cd /workspace && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true',
-          '  # Add venv to PATH so python/pytest are available without "uv run"',
-          '  if [ -d /workspace/.venv/bin ]; then',
-          '    export PATH="/workspace/.venv/bin:$PATH"',
-          '    echo \'export PATH="/workspace/.venv/bin:$PATH"\' >> $HOME/.profile',
-          '  fi',
-          'fi'
-        );
-      }
-      if (pms.includes('poetry')) {
-        depCmds.push(
-          'if [ -f /workspace/pyproject.toml ]; then',
-          '  echo "📦 Resolving Python dependencies (poetry)..."',
-          '  cd /workspace && poetry install --no-interaction 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('pub')) {
-        depCmds.push(
-          'if [ -f /workspace/pubspec.yaml ]; then',
-          '  echo "📦 Resolving Dart dependencies..."',
-          '  cd /workspace && flutter pub get 2>/dev/null || dart pub get 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('pnpm')) {
-        depCmds.push(
-          'if [ -f /workspace/pnpm-lock.yaml ]; then',
-          '  echo "📦 Resolving Node dependencies (pnpm)..."',
-          '  cd /workspace && pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('npm')) {
-        depCmds.push(
-          'if [ -f /workspace/package-lock.json ]; then',
-          '  echo "📦 Resolving Node dependencies (npm)..."',
-          '  cd /workspace && npm ci 2>/dev/null || npm install 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('yarn')) {
-        depCmds.push(
-          'if [ -f /workspace/yarn.lock ]; then',
-          '  echo "📦 Resolving Node dependencies (yarn)..."',
-          '  cd /workspace && yarn install --frozen-lockfile 2>/dev/null || yarn install 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('gomod')) {
-        depCmds.push(
-          'if [ -f /workspace/go.mod ]; then',
-          '  echo "📦 Resolving Go dependencies..."',
-          '  cd /workspace && go mod download 2>/dev/null || true',
-          'elif [ -f /workspace/src/go.mod ]; then',
-          '  cd /workspace/src && go mod download 2>/dev/null || true',
-          'fi'
-        );
-      }
+      const depCmds = this.getDependencyResolutionCommands();
       if (depCmds.length > 0) {
         workspaceDeps = depCmds.join('\n');
       }
@@ -518,30 +554,40 @@ echo -e "\\n📦 Done installing MCP servers"`;
     if (executableInitScripts.length > 0) {
       const scriptBlocks: string[] = [];
       for (const { entry, index } of executableInitScripts) {
-        const mountPath =
-          allInitScripts.length === 1 && !entry.path
-            ? '/init-script.sh'
-            : `/init-script-${index}.sh`;
-        const escapedWorkspacePath = entry.path
-          ? this.shellEscape(`/workspace/${entry.path}`)
-          : '';
         const label = entry.path ? ` (${entry.path})` : '';
-        let block = `echo "🔧 Running initialization script${label}"
-chmod +x ${mountPath}`;
         if (entry.path) {
-          block += `\ncd ${escapedWorkspacePath}`;
-        }
-        block += `\n/bin/sh ${mountPath}
+          const escapedWorkspacePath = this.shellEscape(
+            `/workspace/${entry.path}`
+          );
+          const escapedWorkspaceScript = this.shellEscape(
+            `/workspace/${entry.path}/${entry.script}`
+          );
+          scriptBlocks.push(`echo "🔧 Running initialization script${label}"
+chmod +x ${escapedWorkspaceScript}
+cd ${escapedWorkspacePath}
+${escapedWorkspaceScript}
 if [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else
   echo "❌ Initialization script${label} failed"
   safe_exit 1
-fi`;
-        if (entry.path) {
-          block += '\ncd /workspace';
+fi
+cd /workspace`);
+          continue;
         }
-        scriptBlocks.push(block);
+
+        const escapedWorkspaceScript = this.shellEscape(
+          `/workspace/${entry.script}`
+        );
+        scriptBlocks.push(`echo "🔧 Running initialization script${label}"
+chmod +x ${escapedWorkspaceScript}
+${escapedWorkspaceScript}
+if [ $? -eq 0 ]; then
+  echo "✅ Initialization script${label} completed successfully"
+else
+  echo "❌ Initialization script${label} failed"
+  safe_exit 1
+fi`);
       }
       initScriptExecution = `
 echo -e "\\n======================================="
@@ -558,6 +604,8 @@ ${scriptBlocks.join('\n')}
     );
 
     if (projectsWithRepositories.length > 0) {
+      const taskBranch = this.task.branchName || `task/${this.task.id}`;
+      const escapedTaskBranch = this.shellEscape(taskBranch);
       const repositoryStateFunctions = `
 compute_repo_untracked_hash() {
   local repo_path="$1"
@@ -714,6 +762,16 @@ if ! git -C ${escapedPath} fetch --all --tags --prune; then
   safe_exit 1
 fi
 ${checkoutRef}
+if git -C ${escapedPath} rev-parse --verify refs/remotes/origin/${escapedTaskBranch} >/dev/null 2>&1; then
+  echo "🌿 Checking out task branch ${escapedTaskBranch} for ${escapedName} from origin"
+  git -C ${escapedPath} checkout -B ${escapedTaskBranch} refs/remotes/origin/${escapedTaskBranch}
+elif git -C ${escapedPath} rev-parse --verify refs/heads/${escapedTaskBranch} >/dev/null 2>&1; then
+  echo "🌿 Reusing local task branch ${escapedTaskBranch} for ${escapedName}"
+  git -C ${escapedPath} checkout ${escapedTaskBranch}
+else
+  echo "🌿 Creating task branch ${escapedTaskBranch} for ${escapedName}"
+  git -C ${escapedPath} checkout -B ${escapedTaskBranch} HEAD
+fi
 git -C ${escapedPath} reset --hard HEAD
 git -C ${escapedPath} clean -fd
 echo "✅ Repository ${escapedName} is ready"`;
@@ -736,7 +794,7 @@ ${syncBlocks.join('\n')}
       ? ''
       : `# Remove ourselves from sudoers
 echo -e "\\n👤 Removing privileges after completing the setup!"
-sudo rm /etc/sudoers.d/1-agent-setup`;
+sudo rm -f /etc/sudoers.d/1-agent-setup`;
 
     // Generate network filtering configuration (always runs — iptables are runtime state)
     const effectiveNetworkConfig = mergeNetworkConfig(
@@ -804,6 +862,7 @@ echo "======================================="
       recoverPermissions,
       aptGetUpdate,
       homeSetup,
+      gitSafeDirectorySetup,
       installAllPackages,
       workspaceDeps,
       agentInstallSection,

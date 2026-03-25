@@ -46,6 +46,7 @@ export PATH=/root/local/.bin:$PATH
 
 {aptGetUpdate}
 {homeSetup}
+{gitSafeDirectorySetup}
 
 # Function to shred secrets before exit
 shred_secrets() {

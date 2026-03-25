@@ -2,6 +2,7 @@ import colors from 'ansi-colors';
 import enquirer from 'enquirer';
 import yoctoSpinner from 'yocto-spinner';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   ProjectConfigManager,
   Git,
@@ -21,6 +22,7 @@ import { showRoverChat, TIP_TITLES } from '../utils/display.js';
 import { statusColor } from '../utils/task-status.js';
 import { executeHooks } from '../lib/hooks.js';
 import type { CommandDefinition } from '../types.js';
+import { getWorkspaceRepositories } from '../lib/workspace-repositories.js';
 
 const { prompt } = enquirer;
 
@@ -34,6 +36,13 @@ interface RepoInfo {
   provider: 'github' | 'gitlab';
   host: string;
   projectPath: string;
+}
+
+interface PushTarget {
+  label: string;
+  branchName: string;
+  worktreePath: string;
+  remoteUrl: string;
 }
 
 /**
@@ -186,35 +195,54 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       });
     }
 
-    // Check for changes
-    const fileChanges = git.uncommittedChanges({
-      worktreePath: task.worktreePath,
+    const pushTargets: PushTarget[] = [
+      {
+        label: 'root workspace',
+        branchName: task.branchName,
+        worktreePath: task.worktreePath,
+        remoteUrl: git.remoteUrl({ worktreePath: task.worktreePath }),
+      },
+      ...getWorkspaceRepositories(task.worktreePath, projectConfig)
+        .filter(repo => existsSync(join(repo.worktreePath, '.git')))
+        .map(repo => ({
+          label: repo.name,
+          branchName:
+            git.getCurrentBranch({ worktreePath: repo.worktreePath }) ||
+            task.branchName,
+          worktreePath: repo.worktreePath,
+          remoteUrl: git.remoteUrl({ worktreePath: repo.worktreePath }),
+        })),
+    ];
+
+    const hasAnyLocalChanges = pushTargets.some(target => {
+      const changes = git.uncommittedChanges({
+        worktreePath: target.worktreePath,
+      });
+      return changes.length > 0;
     });
-    const hasChanges = fileChanges.length > 0;
-    result.hasChanges = hasChanges;
 
-    if (!hasChanges) {
-      // Check if there are unpushed commits
+    const hasAnyUnpushedCommits = pushTargets.some(target => {
       try {
-        const unpushedCommits = git.hasUnmergedCommits(task.branchName, {
-          targetBranch: `origin/${task.branchName}`,
-          worktreePath: task.worktreePath,
+        return git.hasUnmergedCommits(target.branchName, {
+          targetBranch: `origin/${target.branchName}`,
+          worktreePath: target.worktreePath,
         });
-
-        if (!unpushedCommits) {
-          result.success = true;
-          await exitWithWarn('No changes to push', result, { telemetry });
-          return;
-        }
       } catch {
-        // Remote branch doesn't exist yet, continue with push
+        return true;
       }
+    });
+
+    result.hasChanges = hasAnyLocalChanges;
+
+    if (!hasAnyLocalChanges && !hasAnyUnpushedCommits) {
+      result.success = true;
+      await exitWithWarn('No changes to push', result, { telemetry });
+      return;
     }
 
-    // If there are changes, commit them
-    if (hasChanges) {
+    let commitMessage = options.message;
+    if (hasAnyLocalChanges) {
       // Get commit message
-      let commitMessage = options.message;
       if (!commitMessage) {
         const defaultMessage = `Task ${numericTaskId}: ${task.title}`;
         if (isJsonMode()) {
@@ -244,81 +272,83 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       }
 
       result.commitMessage = commitMessage;
-
-      // Stage and commit changes
-      const commitSpinner = !options.json
-        ? yoctoSpinner({ text: 'Committing changes...' }).start()
-        : null;
-      try {
-        git.addAndCommit(commitMessage, {
-          worktreePath: task.worktreePath,
-        });
-        result.committed = true;
-        commitSpinner?.success('Changes committed');
-      } catch (error: unknown) {
-        result.error = `Failed to commit changes: ${error instanceof Error ? error.message : String(error)}`;
-        commitSpinner?.error('Failed to commit changes');
-        await exitWithError(result, { telemetry });
-        return;
-      }
-    }
-
-    // Push to remote
-    telemetry?.eventPushBranch();
-
-    const pushSpinner = !options.json
-      ? yoctoSpinner({
-          text: `Pushing branch ${task.branchName} to remote...`,
-        }).start()
-      : null;
-    try {
-      git.push(task.branchName, {
-        worktreePath: task.worktreePath,
-      });
-      result.pushed = true;
-      task.markPushed(); // Set status to PUSHED
-      if (pushSpinner) {
-        pushSpinner.success(`Branch pushed successfully`);
-      }
-    } catch (error: unknown) {
-      // Check if it's because the remote branch doesn't exist
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      if (errorMessage.includes('has no upstream branch')) {
-        if (pushSpinner) {
-          pushSpinner.text =
-            'Branch does not exist in remote. Setting upstream branch';
+      for (const target of pushTargets) {
+        const hasLocalChanges =
+          git.uncommittedChanges({ worktreePath: target.worktreePath }).length >
+          0;
+        if (!hasLocalChanges) {
+          continue;
         }
 
+        const commitSpinner = !options.json
+          ? yoctoSpinner({
+              text: `Committing changes in ${target.label}...`,
+            }).start()
+          : null;
         try {
-          git.push(task.branchName, {
-            setUpstream: true,
-            worktreePath: task.worktreePath,
+          git.addAndCommit(commitMessage, {
+            worktreePath: target.worktreePath,
           });
-          result.pushed = true;
-          pushSpinner?.success('Branch pushed successfully');
-          task.markPushed(); // Set status to PUSHED
-          if (!isJsonMode()) {
-            console.log(colors.green(`✓ Branch pushed successfully`));
-          }
-        } catch (retryError: unknown) {
-          pushSpinner?.error('Failed to push branch');
-          result.error = `Failed to push branch: ${retryError instanceof Error ? retryError.message : String(retryError)}`;
+          result.committed = true;
+          commitSpinner?.success(`Changes committed in ${target.label}`);
+        } catch (error: unknown) {
+          result.error = `Failed to commit changes in ${target.label}: ${error instanceof Error ? error.message : String(error)}`;
+          commitSpinner?.error(`Failed to commit ${target.label}`);
           await exitWithError(result, { telemetry });
           return;
         }
-      } else {
-        pushSpinner?.error('Failed to push branch');
-        result.error = `Failed to push branch: ${errorMessage}`;
-        await exitWithError(result, { telemetry });
-        return;
       }
     }
+
+    telemetry?.eventPushBranch();
+
+    for (const target of pushTargets) {
+      const pushSpinner = !options.json
+        ? yoctoSpinner({
+            text: `Pushing ${target.branchName} from ${target.label}...`,
+          }).start()
+        : null;
+      try {
+        git.push(target.branchName, {
+          worktreePath: target.worktreePath,
+        });
+        result.pushed = true;
+        pushSpinner?.success(`Pushed ${target.label}`);
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('has no upstream branch')) {
+          if (pushSpinner) {
+            pushSpinner.text = `Setting upstream for ${target.label}...`;
+          }
+
+          try {
+            git.push(target.branchName, {
+              setUpstream: true,
+              worktreePath: target.worktreePath,
+            });
+            result.pushed = true;
+            pushSpinner?.success(`Pushed ${target.label}`);
+          } catch (retryError: unknown) {
+            pushSpinner?.error(`Failed to push ${target.label}`);
+            result.error = `Failed to push ${target.label}: ${retryError instanceof Error ? retryError.message : String(retryError)}`;
+            await exitWithError(result, { telemetry });
+            return;
+          }
+        } else {
+          pushSpinner?.error(`Failed to push ${target.label}`);
+          result.error = `Failed to push ${target.label}: ${errorMessage}`;
+          await exitWithError(result, { telemetry });
+          return;
+        }
+      }
+    }
+    task.markPushed(); // Set status to PUSHED
 
     let repoInfo: RepoInfo | null = null;
 
     try {
-      const remoteUrl = git.remoteUrl();
+      const remoteUrl = pushTargets[0]?.remoteUrl ?? '';
       repoInfo = getRepoInfo(remoteUrl);
     } catch (_err) {
       // Ignore the error

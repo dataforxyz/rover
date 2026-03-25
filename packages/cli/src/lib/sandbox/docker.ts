@@ -206,6 +206,9 @@ export class DockerSandbox extends Sandbox {
     const allInitScripts = projectConfig.allInitScripts;
     for (let i = 0; i < allInitScripts.length; i++) {
       const entry = allInitScripts[i];
+      if (entry.path) {
+        continue;
+      }
       const initScriptAbsPath = resolveInitScriptPath(
         projectConfig.projectRoot,
         entry.script,
@@ -519,6 +522,9 @@ export class DockerSandbox extends Sandbox {
     const allInitScripts = projectConfig.allInitScripts;
     for (let i = 0; i < allInitScripts.length; i++) {
       const entry = allInitScripts[i];
+      if (entry.path) {
+        continue;
+      }
       const initScriptAbsPath = resolveInitScriptPath(
         projectConfig.projectRoot,
         entry.script,

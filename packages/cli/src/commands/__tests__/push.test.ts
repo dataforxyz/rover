@@ -17,6 +17,7 @@ const {
   mockExecuteHooks,
   mockCollapseTaskCommits,
   mockShowRoverChat,
+  mockGetWorkspaceRepositories,
 } = vi.hoisted(() => ({
   mockRequireProjectContext: vi.fn(),
   mockSetJsonMode: vi.fn(),
@@ -26,6 +27,7 @@ const {
   mockExecuteHooks: vi.fn(),
   mockCollapseTaskCommits: vi.fn(),
   mockShowRoverChat: vi.fn(),
+  mockGetWorkspaceRepositories: vi.fn(),
 }));
 
 const mockGitInstance = vi.hoisted(() => ({
@@ -71,6 +73,10 @@ vi.mock('../../lib/squash.js', () => ({
   collapseTaskCommits: mockCollapseTaskCommits,
 }));
 
+vi.mock('../../lib/workspace-repositories.js', () => ({
+  getWorkspaceRepositories: mockGetWorkspaceRepositories,
+}));
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual('node:fs');
   return {
@@ -91,7 +97,10 @@ vi.mock('enquirer', () => ({
 
 vi.mock('rover-core', () => ({
   ProjectConfigManager: {
-    load: vi.fn().mockReturnValue(null),
+    load: vi.fn().mockReturnValue({
+      hooks: undefined,
+      projects: [],
+    }),
   },
   Git: vi.fn(() => mockGitInstance),
   showTitle: vi.fn(),
@@ -115,6 +124,8 @@ describe('push command', () => {
     mockGitInstance.addAndCommit.mockReturnValue(undefined);
     mockGitInstance.push.mockReturnValue(undefined);
     mockGitInstance.remoteUrl.mockReturnValue('');
+    mockGitInstance.getCurrentBranch = vi.fn().mockReturnValue('task/1');
+    mockGetWorkspaceRepositories.mockReturnValue([]);
 
     const task = {
       id: 1,
@@ -151,5 +162,25 @@ describe('push command', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('pushes configured workspace repositories alongside the root workspace', async () => {
+    mockGetWorkspaceRepositories.mockReturnValue([
+      {
+        name: 'frontend',
+        relativePath: 'frontend',
+        worktreePath: '/tmp/task-1/frontend',
+        repository: 'https://example.com/frontend.git',
+      },
+    ]);
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1',
+    });
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
   });
 });

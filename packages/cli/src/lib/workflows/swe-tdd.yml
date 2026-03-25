@@ -73,11 +73,14 @@ steps:
       - Find the main file or files affected by these changes. Then, identify other secondary files. Focus mostly on main files and avoid a deep research in the secondary ones
       - Identify existing test files, test frameworks, and test configuration
       - Determine the correct test command for this project by examining package.json, Makefile, pyproject.toml, go.mod, or other build/test configuration files. If a user-provided test command is shown above, use that instead.
+      - If the workspace root has a `Makefile` and the project is configured around `make`, prefer the root command such as `make test` over ad hoc per-project commands.
+      - For multi-project workspaces, prefer a single root orchestration command when available, and treat per-project commands as supporting detail.
+      - If the task description explicitly requires validating multiple root commands in sequence, the test command may be a shell sequence such as `make setup && make test && make test-e2e` or a dedicated root validation target if the repository provides one.
       - Follow the template strictly
       - Just output the template. Skip any text before and after
       - Use globs when a change affects multiple files
 
-      Then, write your structured analysis to `context.md` following this template. This is mandatory.
+      Return your structured analysis in the `context_markdown` output following this template.
 
       <template>
       # Context
@@ -100,7 +103,7 @@ steps:
 
       ## Extra OS packages
 
-      Identify missing OS packages to accomplish this task and install them using the tools provided by the `package-manager` MCP. Return a list of new installed packages or "No additional packages required".
+      Identify whether any OS packages are missing for this task. Do NOT install OS packages during the task. Rover task containers intentionally have limited sudo after setup, so OS package installation belongs in `rover build`, `sandbox.initScript`, or image configuration. Return either "No additional packages required" or a short list of packages that must be added to build/setup-time configuration.
 
       ## Relevant knowledge
 
@@ -116,7 +119,7 @@ steps:
 
       </template>
 
-      IMPORTANT: After writing context.md, you MUST extract the task complexity value, build command, and test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
+      IMPORTANT: You MUST return three scalar outputs as well: `complexity`, `build_command`, and `test_command`. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
     outputs:
       - name: complexity
         description: 'Task complexity: either "simple" or "complex"'
@@ -128,10 +131,17 @@ steps:
         description: 'The command to run tests for this project'
         type: string
         required: true
-      - name: context_file
-        description: 'Technical context analysis file'
-        type: file
-        filename: context.md
+      - name: context_markdown
+        description: 'Technical context analysis markdown'
+        type: string
+
+  - id: persist_context
+    type: command
+    name: 'Persist Context'
+    command: |
+      cat > /output/context.md <<'EOF'
+      {{steps.context.outputs.context_markdown}}
+      EOF
 
   - id: plan
     type: agent
@@ -144,7 +154,10 @@ steps:
       └─────────────────────────────────────────────┘
 
       Description: {{inputs.description}}
-      Context: {{steps.context.outputs.context_file}}
+      Context:
+      ```
+      {{steps.context.outputs.context_markdown}}
+      ```
 
       ---
 
@@ -179,7 +192,7 @@ steps:
       - Follow the template strictly
       - Just output the template. Skip any text before and after
 
-      Write your plan to `plan.md` following this template. This is mandatory.
+      Return your plan in the `plan_markdown` output following this template.
 
       <template>
       # TDD Implementation Plan
@@ -209,10 +222,17 @@ steps:
       - Prerequisite libraries, configs, or tasks (skip if none)
       </template>
     outputs:
-      - name: plan_file
-        description: 'TDD Implementation plan file'
-        type: file
-        filename: plan.md
+      - name: plan_markdown
+        description: 'TDD implementation plan markdown'
+        type: string
+
+  - id: persist_plan
+    type: command
+    name: 'Persist Plan'
+    command: |
+      cat > /output/plan.md <<'EOF'
+      {{steps.plan.outputs.plan_markdown}}
+      EOF
 
   - id: write_tests
     type: agent
@@ -233,12 +253,12 @@ steps:
 
       Context:
       ```
-      {{steps.context.outputs.context_file}}
+      {{steps.context.outputs.context_markdown}}
       ```
 
       Plan:
       ```
-      {{steps.plan.outputs.plan_file}}
+      {{steps.plan.outputs.plan_markdown}}
       ```
       ---
 
@@ -258,7 +278,7 @@ steps:
 
       ### Phase 3: Output
 
-      Write `test_changes.md` describing what tests you wrote and why. This is mandatory.
+      Return the markdown in the `test_changes_markdown` output describing what tests you wrote and why.
 
       <template>
       # Tests Written
@@ -276,10 +296,17 @@ steps:
       - List of tests that will fail until implementation is complete
       </template>
     outputs:
-      - name: test_changes_file
+      - name: test_changes_markdown
         description: 'Description of tests written'
-        type: file
-        filename: test_changes.md
+        type: string
+
+  - id: persist_test_changes
+    type: command
+    name: 'Persist Test Changes'
+    command: |
+      cat > /output/test_changes.md <<'EOF'
+      {{steps.write_tests.outputs.test_changes_markdown}}
+      EOF
 
   - id: implement
     type: agent
@@ -296,17 +323,17 @@ steps:
 
       Context:
       ```
-      {{steps.context.outputs.context_file}}
+      {{steps.context.outputs.context_markdown}}
       ```
 
       Plan:
       ```
-      {{steps.plan.outputs.plan_file}}
+      {{steps.plan.outputs.plan_markdown}}
       ```
 
       Tests Written:
       ```
-      {{steps.write_tests.outputs.test_changes_file}}
+      {{steps.write_tests.outputs.test_changes_markdown}}
       ```
       ---
 
@@ -327,7 +354,7 @@ steps:
 
       ### Phase 3: Output
 
-      Write `changes.md` following this template. This is mandatory.
+      Return the markdown in the `changes_markdown` output following this template.
 
       <template>
       # Implementation Changes
@@ -355,10 +382,17 @@ steps:
       - Explanation of structure, functions, and integrations
       </template>
     outputs:
-      - name: changes_file
-        description: 'Implementation changes file'
-        type: file
-        filename: changes.md
+      - name: changes_markdown
+        description: 'Implementation changes markdown'
+        type: string
+
+  - id: persist_changes
+    type: command
+    name: 'Persist Changes'
+    command: |
+      cat > /output/changes.md <<'EOF'
+      {{steps.implement.outputs.changes_markdown}}
+      EOF
 
   - id: test_fix_loop
     type: loop
@@ -503,11 +537,11 @@ steps:
 
           Classify your findings into one of three outcomes:
 
-          - **No issues at all**: output {"issues_found": "false"} and do NOT create any file.
-          - **Only nits** (style, naming, minor comments — nothing that affects correctness or security): output {"issues_found": "nits"}. Create `review.md` with the nits noted, but these will NOT block shipping.
-          - **Blocking issues** (bugs, logic errors, security flaws, missing error handling, compile errors, broken tests, out-of-scope files): output {"issues_found": "blocking"} and create `review.md`. These MUST be fixed before shipping.
+          - **No issues at all**: output {"issues_found": "false", "review_markdown": ""}.
+          - **Only nits** (style, naming, minor comments — nothing that affects correctness or security): output {"issues_found": "nits"} and return the review body in `review_markdown`. These will NOT block shipping.
+          - **Blocking issues** (bugs, logic errors, security flaws, missing error handling, compile errors, broken tests, out-of-scope files): output {"issues_found": "blocking"} and return the review body in `review_markdown`. These MUST be fixed before shipping.
 
-          Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files. Use `review.md` with the following template:
+          Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files. Use the following template for `review_markdown`:
 
           <template>
           # Code Review
@@ -530,10 +564,9 @@ steps:
           - name: issues_found
             description: 'Whether issues were found (true/false)'
             type: string
-          - name: review_file
-            description: 'Code review file with issues (only created if issues found)'
-            type: file
-            filename: review.md
+          - name: review_markdown
+            description: 'Code review markdown with issues (empty when no issues are found)'
+            type: string
 
       - id: apply_fixes
         type: agent
@@ -556,7 +589,7 @@ steps:
 
           Review:
           ```
-          {{steps.code_review.outputs.review_file}}
+          {{steps.code_review.outputs.review_markdown}}
           ```
 
           Test command: {{steps.context.outputs.test_command}}
@@ -581,10 +614,27 @@ steps:
           - name: fixes_applied
             description: 'Whether fixes were applied (true/false)'
             type: string
-          - name: review_fixes_file
+          - name: review_fixes_markdown
             description: 'Updated changes file with review fixes appended'
-            type: file
-            filename: review_fixes.md
+            type: string
+
+      - id: persist_review
+        type: command
+        name: 'Persist Review'
+        if: steps.code_review.outputs.issues_found != false
+        command: |
+          cat > /output/review.md <<'EOF'
+          {{steps.code_review.outputs.review_markdown}}
+          EOF
+
+      - id: persist_review_fixes
+        type: command
+        name: 'Persist Review Fixes'
+        if: steps.apply_fixes.outputs.fixes_applied == true
+        command: |
+          cat > /output/review_fixes.md <<'EOF'
+          {{steps.apply_fixes.outputs.review_fixes_markdown}}
+          EOF
 
       - id: build_after_review
         type: command
@@ -680,7 +730,7 @@ steps:
 
       Changes:
       ```
-      {{steps.implement.outputs.changes_file}}
+      {{steps.implement.outputs.changes_markdown}}
       ```
 
       Test-Fix Loop Iterations: {{steps.test_fix_loop.outputs.iterations}}
@@ -702,7 +752,7 @@ steps:
 
       ### Phase 3: Output
 
-      Write to `summary.md` following this template. This is mandatory.
+      Return the markdown in the `summary_markdown` output following this template.
 
       <template>
       # Implementation Summary
@@ -729,7 +779,14 @@ steps:
       - Remaining tasks, considerations, or `None`
       </template>
     outputs:
-      - name: summary_file
-        description: 'Implementation summary file'
-        type: file
-        filename: summary.md
+      - name: summary_markdown
+        description: 'Implementation summary markdown'
+        type: string
+
+  - id: persist_summary
+    type: command
+    name: 'Persist Summary'
+    command: |
+      cat > /output/summary.md <<'EOF'
+      {{steps.summary.outputs.summary_markdown}}
+      EOF

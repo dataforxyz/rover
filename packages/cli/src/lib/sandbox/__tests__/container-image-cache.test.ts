@@ -268,6 +268,34 @@ describe('computeSetupHash', () => {
     expect(a).not.toBe(b);
   });
 
+  it('changes when project repositoryRevision changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            repositoryRevision: 'abc123',
+          },
+        ],
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            repositoryRevision: 'def456',
+          },
+        ],
+      })
+    );
+    expect(a).not.toBe(b);
+  });
+
   it('changes when project initScriptContent changes', () => {
     const a = computeSetupHash(
       makeInputs({
@@ -337,6 +365,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -345,7 +376,7 @@ describe('waitForInitAndCommit', () => {
     );
 
     expect(result).toBe(true);
-    expect(mockedLaunch).toHaveBeenCalledTimes(3);
+    expect(mockedLaunch).toHaveBeenCalledTimes(6);
     expect(mockedLaunch).toHaveBeenNthCalledWith(
       1,
       ContainerBackend.Docker,
@@ -364,6 +395,21 @@ describe('waitForInitAndCommit', () => {
       ['rm', '-f', 'test-container'],
       undefined
     );
+    expect(mockedLaunch).toHaveBeenNthCalledWith(
+      4,
+      ContainerBackend.Docker,
+      [
+        'run',
+        '--name',
+        'test-container-fixup',
+        '--entrypoint',
+        '/bin/bash',
+        'rover-cache:abc123',
+        '-c',
+        'chmod -R a+rwX /home/agent 2>/dev/null || true',
+      ],
+      undefined
+    );
   });
 
   it('includes LABEL change when projectPath is provided', async () => {
@@ -372,6 +418,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -401,6 +450,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -433,6 +485,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const metadata = { dockerHost: 'tcp://remote:2375' };
     const result = await waitForInitAndCommit(
@@ -446,7 +501,7 @@ describe('waitForInitAndCommit', () => {
 
     expect(result).toBe(true);
     // Every launch call should receive { env: { DOCKER_HOST: ... } }
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= 6; i++) {
       const callOpts = mockedLaunch.mock.calls[i - 1][2] as any;
       expect(callOpts?.env?.DOCKER_HOST).toBe('tcp://remote:2375');
     }
@@ -913,5 +968,62 @@ describe('checkImageCache', () => {
     });
 
     expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
+  it('includes external project repository revisions in the cache hash', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    const expectedHash = computeSetupHash({
+      agentImage: 'sha256:img',
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      taskManagers: [],
+      agent: 'claude',
+      roverVersion: '1.0.0-test',
+      initScriptContent: '',
+      cacheFilesContent: '',
+      mcps: [],
+      projects: [
+        {
+          name: 'api',
+          path: 'packages/api',
+          repository: 'https://github.com/dataforxyz/api.git',
+          ref: 'main',
+          repositoryRevision: 'abc123',
+        },
+      ],
+    });
+
+    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', 'https://github.com/dataforxyz/api.git', 'main'],
+      { reject: false }
+    );
   });
 });

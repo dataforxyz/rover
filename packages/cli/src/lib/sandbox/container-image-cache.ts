@@ -54,6 +54,7 @@ export interface SetupHashInputs {
     path: string;
     repository?: string;
     ref?: string;
+    repositoryRevision?: string;
     languages?: string[];
     packageManagers?: string[];
     taskManagers?: string[];
@@ -93,6 +94,7 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
       path: p.path,
       repository: p.repository || '',
       ref: p.ref || '',
+      repositoryRevision: p.repositoryRevision || '',
       languages: [...(p.languages || [])].sort(),
       packageManagers: [...(p.packageManagers || [])].sort(),
       taskManagers: [...(p.taskManagers || [])].sort(),
@@ -144,6 +146,7 @@ export async function waitForInitAndCommit(
 ): Promise<boolean> {
   const env = envFromSandboxMetadata(sandboxMetadata);
   const opts = env ? { env } : undefined;
+  const keepFailedContainer = process.env.ROVER_DEBUG_KEEP_FAILED_BUILD === '1';
   try {
     // `docker/podman wait` prints the exit code to stdout
     const waitResult = await launch(backend, ['wait', containerName], opts);
@@ -196,14 +199,32 @@ export async function waitForInitAndCommit(
     }
 
     // Container exited with an unexpected code — don't commit
-    await launch(backend, ['rm', '-f', containerName], opts);
-    return false;
-  } catch {
-    // Best-effort cleanup
-    try {
+    if (!keepFailedContainer) {
       await launch(backend, ['rm', '-f', containerName], opts);
-    } catch {
-      // ignore cleanup errors
+    } else if (VERBOSE) {
+      console.error(
+        `[rover] keeping failed build container for debugging: ${containerName}`
+      );
+    }
+    return false;
+  } catch (error) {
+    if (VERBOSE) {
+      console.error(
+        `[rover] waitForInitAndCommit failed for ${containerName}:`,
+        error
+      );
+    }
+    // Best-effort cleanup
+    if (!keepFailedContainer) {
+      try {
+        await launch(backend, ['rm', '-f', containerName], opts);
+      } catch {
+        // ignore cleanup errors
+      }
+    } else if (VERBOSE) {
+      console.error(
+        `[rover] preserving build container after failure: ${containerName}`
+      );
     }
     return false;
   }
@@ -224,6 +245,24 @@ function resolveImageId(backend: ContainerBackend, imageTag: string): string {
     return id || imageTag;
   } catch {
     return imageTag;
+  }
+}
+
+function resolveRepositoryRevision(repository: string, ref?: string): string {
+  try {
+    const target = ref || 'HEAD';
+    const result = launchSync('git', ['ls-remote', repository, target], {
+      reject: false,
+    });
+    const line = result.stdout?.toString().trim().split('\n')[0]?.trim();
+    if (!line) {
+      return '';
+    }
+
+    const [sha] = line.split(/\s+/);
+    return sha || '';
+  } catch {
+    return '';
   }
 }
 
@@ -294,6 +333,10 @@ export function checkImageCache(
         path: p.path,
         repository: p.repository,
         ref: p.ref,
+        repositoryRevision:
+          typeof p.repository === 'string'
+            ? resolveRepositoryRevision(p.repository, p.ref)
+            : '',
         languages: p.languages,
         packageManagers: p.packageManagers,
         taskManagers: p.taskManagers,

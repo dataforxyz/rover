@@ -1,6 +1,7 @@
 import colors from 'ansi-colors';
 import enquirer from 'enquirer';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import yoctoSpinner from 'yocto-spinner';
 import {
   getAIAgentTool,
@@ -31,6 +32,7 @@ import {
   generateCommitMessage,
   resolveConflicts,
 } from '../lib/merge-rebase-utils.js';
+import { getWorkspaceRepositories } from '../lib/workspace-repositories.js';
 
 const { prompt } = enquirer;
 
@@ -80,6 +82,13 @@ interface TaskRebaseOutput extends CLIJsonOutput {
   commitMessage?: string;
   rebased?: boolean;
   conflictsResolved?: boolean;
+}
+
+interface RebaseTarget {
+  label: string;
+  branchName: string;
+  worktreePath: string;
+  baseBranch: string;
 }
 
 /**
@@ -227,16 +236,43 @@ export const rebaseCommand = async (
     const currentBranch = options.base || git.getCurrentBranch();
     jsonOutput.currentBranch = currentBranch;
 
-    // Check if worktree has uncommitted changes (before squashing)
-    const hasUncommittedChanges = git.hasUncommittedChanges({
-      worktreePath: task.worktreePath,
-    });
+    const workspaceRepositories =
+      projectConfig && task.worktreePath
+        ? getWorkspaceRepositories(task.worktreePath, projectConfig).filter(
+            repo => existsSync(join(repo.worktreePath, '.git'))
+          )
+        : [];
+
+    const rebaseTargets: RebaseTarget[] = [
+      {
+        label: 'root workspace',
+        branchName: task.branchName,
+        worktreePath: task.worktreePath,
+        baseBranch: currentBranch,
+      },
+      ...workspaceRepositories.map(repo => ({
+        label: repo.name,
+        branchName:
+          git.getCurrentBranch({ worktreePath: repo.worktreePath }) ||
+          task.branchName,
+        worktreePath: repo.worktreePath,
+        baseBranch:
+          repo.ref || new Git({ cwd: repo.worktreePath }).getMainBranch(),
+      })),
+    ];
+
+    // Check if any workspace repo has uncommitted changes (before squashing root)
+    const hasUncommittedChanges = rebaseTargets.some(target =>
+      git.hasUncommittedChanges({
+        worktreePath: target.worktreePath,
+      })
+    );
 
     if (!isJsonMode()) {
       console.log('');
       console.log(colors.cyan('The rebase process will'));
       if (hasUncommittedChanges) {
-        console.log(colors.cyan('├── Commit changes in the task worktree'));
+        console.log(colors.cyan('├── Commit changes in the task worktree(s)'));
       }
       console.log(
         colors.cyan(`├── Rebase the task branch onto ${currentBranch}`)
@@ -290,6 +326,8 @@ export const rebaseCommand = async (
       : null;
 
     try {
+      let finalCommitMessage: string | undefined;
+
       // Commit worktree changes if needed
       if (hasWorktreeChanges) {
         const recentCommits = git.getRecentCommits({
@@ -309,7 +347,6 @@ export const rebaseCommand = async (
 
         const commitMessage = aiCommitMessage || task.title;
 
-        let finalCommitMessage: string;
         if (projectConfig == null || projectConfig?.attribution === true) {
           finalCommitMessage = `${commitMessage}\n\nCo-Authored-By: Rover <noreply@endor.dev>`;
         } else {
@@ -318,37 +355,49 @@ export const rebaseCommand = async (
 
         jsonOutput.commitMessage = finalCommitMessage.split('\n')[0];
 
-        if (spinner) spinner.text = 'Committing changes in worktree...';
-
-        try {
-          git.addAndCommit(finalCommitMessage, {
-            worktreePath: task.worktreePath,
+        for (const target of rebaseTargets) {
+          const targetHasChanges = git.hasUncommittedChanges({
+            worktreePath: target.worktreePath,
           });
-          jsonOutput.committed = true;
-        } catch (error) {
-          jsonOutput.committed = false;
-          spinner?.error('Failed to commit changes');
-          jsonOutput.error =
-            'Failed to add and commit changes in the workspace';
-          await exitWithError(jsonOutput, { telemetry });
-          return;
+          if (!targetHasChanges) {
+            continue;
+          }
+
+          if (spinner) {
+            spinner.text = `Committing changes in ${target.label}...`;
+          }
+
+          try {
+            git.addAndCommit(finalCommitMessage, {
+              worktreePath: target.worktreePath,
+            });
+            jsonOutput.committed = true;
+          } catch (error) {
+            jsonOutput.committed = false;
+            spinner?.error('Failed to commit changes');
+            jsonOutput.error = `Failed to add and commit changes in ${target.label}`;
+            await exitWithError(jsonOutput, { telemetry });
+            return;
+          }
         }
       }
 
-      if (spinner) spinner.text = 'Rebasing task branch...';
+      for (const target of rebaseTargets) {
+        if (spinner) {
+          spinner.text = `Rebasing ${target.label} onto ${target.baseBranch}...`;
+        }
 
-      // Rebase the task branch onto the current branch
-      const rebaseResult = git.rebaseBranch(currentBranch, {
-        worktreePath: task.worktreePath,
-      });
+        const rebaseResult = git.rebaseBranch(target.baseBranch, {
+          worktreePath: target.worktreePath,
+        });
 
-      if (rebaseResult.success) {
-        jsonOutput.rebased = true;
-        spinner?.success('Task branch rebased successfully');
-      } else {
-        // Check for conflicts
+        if (rebaseResult.success) {
+          jsonOutput.rebased = true;
+          continue;
+        }
+
         const rebaseConflicts = git.getMergeConflicts({
-          worktreePath: task.worktreePath,
+          worktreePath: target.worktreePath,
         });
 
         if (rebaseConflicts.length > 0) {
@@ -357,7 +406,7 @@ export const rebaseCommand = async (
           if (!isJsonMode()) {
             console.log(
               colors.yellow(
-                `\n⚠ Rebase conflicts detected in ${rebaseConflicts.length} file(s):`
+                `\n⚠ Rebase conflicts detected in ${target.label} (${rebaseConflicts.length} file(s)):`
               )
             );
             rebaseConflicts.forEach((file, index) => {
@@ -385,7 +434,7 @@ export const rebaseCommand = async (
             git,
             rebaseConflicts,
             aiAgent,
-            task.worktreePath,
+            target.worktreePath,
             concurrency,
             contextLinesNum,
             options.sendFullFile === true
@@ -416,7 +465,7 @@ export const rebaseCommand = async (
               }
 
               if (!applyChanges) {
-                git.abortRebase({ worktreePath: task.worktreePath });
+                git.abortRebase({ worktreePath: target.worktreePath });
                 await exitWithWarn(
                   'User rejected AI resolution. Rebase aborted',
                   jsonOutput,
@@ -428,7 +477,7 @@ export const rebaseCommand = async (
 
             // Continue the rebase with resolved conflicts
             try {
-              git.continueRebase({ worktreePath: task.worktreePath });
+              git.continueRebase({ worktreePath: target.worktreePath });
 
               jsonOutput.rebased = true;
 
@@ -440,7 +489,7 @@ export const rebaseCommand = async (
                 );
               }
             } catch (continueError) {
-              git.abortRebase({ worktreePath: task.worktreePath });
+              git.abortRebase({ worktreePath: target.worktreePath });
 
               jsonOutput.error = `Error completing rebase after conflict resolution: ${continueError}`;
               await exitWithError(jsonOutput, { telemetry });
@@ -450,7 +499,7 @@ export const rebaseCommand = async (
             jsonOutput.error =
               resolution.failureReason ||
               'AI failed to resolve rebase conflicts';
-            git.abortRebase({ worktreePath: task.worktreePath });
+            git.abortRebase({ worktreePath: target.worktreePath });
 
             if (!isJsonMode()) {
               console.log(
@@ -460,7 +509,7 @@ export const rebaseCommand = async (
               console.log(
                 colors.gray('├──'),
                 colors.gray(
-                  `1. cd ${task.worktreePath} && git rebase ${currentBranch}`
+                  `1. cd ${target.worktreePath} && git rebase ${target.baseBranch}`
                 )
               );
               console.log(
@@ -481,10 +530,11 @@ export const rebaseCommand = async (
           }
         } else {
           // Other rebase error, not conflicts — abort to restore worktree
-          git.abortRebase({ worktreePath: task.worktreePath });
+          git.abortRebase({ worktreePath: target.worktreePath });
           if (spinner) spinner.error('Rebase failed');
           jsonOutput.error =
-            rebaseResult.error || 'Rebase failed with an unknown error';
+            rebaseResult.error ||
+            `Rebase failed with an unknown error in ${target.label}`;
           await exitWithError(jsonOutput, { telemetry });
           return;
         }

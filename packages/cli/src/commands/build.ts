@@ -59,6 +59,14 @@ import { TaskSandboxPackage } from '../lib/sandbox/task-managers/task.js';
 
 import type { SandboxPackage } from '../lib/sandbox/types.js';
 
+function exitProcessIfNeeded(code: number): void {
+  if (process.env.VITEST) {
+    return;
+  }
+
+  process.exit(code);
+}
+
 function getPackages(projectConfig: ProjectConfigManager): SandboxPackage[] {
   const packages: SandboxPackage[] = [];
   const langMap: Record<string, () => SandboxPackage> = {
@@ -102,6 +110,206 @@ function getPackages(projectConfig: ProjectConfigManager): SandboxPackage[] {
   return packages;
 }
 
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function getDependencyResolutionCommands(
+  projectConfig: ProjectConfigManager
+): string[] {
+  const commands: string[] = [];
+  const locations = [
+    {
+      path: '/workspace',
+      packageManagers: projectConfig.packageManagers ?? [],
+      label: 'workspace root',
+    },
+    ...(projectConfig.projects ?? []).map(project => ({
+      path: `/workspace/${project.path}`,
+      packageManagers: project.packageManagers ?? [],
+      label: project.path,
+    })),
+  ];
+
+  for (const location of locations) {
+    const quotedPath = shellEscape(location.path);
+    const pms = location.packageManagers;
+
+    if (pms.includes('uv')) {
+      commands.push(
+        `if [ -f ${quotedPath}/pyproject.toml ]; then`,
+        `  echo "📦 Resolving Python dependencies (uv) in ${location.label}..."`,
+        `  cd ${quotedPath} && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('poetry')) {
+      commands.push(
+        `if [ -f ${quotedPath}/pyproject.toml ]; then`,
+        `  echo "📦 Resolving Python dependencies (poetry) in ${location.label}..."`,
+        `  cd ${quotedPath} && poetry install --no-interaction 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('pub')) {
+      commands.push(
+        `if [ -f ${quotedPath}/pubspec.yaml ]; then`,
+        `  echo "📦 Resolving Dart dependencies in ${location.label}..."`,
+        `  cd ${quotedPath} && flutter pub get 2>/dev/null || dart pub get 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('npm')) {
+      commands.push(
+        `if [ -f ${quotedPath}/package-lock.json ]; then`,
+        `  echo "📦 Resolving Node.js dependencies (npm) in ${location.label}..."`,
+        `  cd ${quotedPath} && npm ci 2>/dev/null || npm install 2>/dev/null || true`,
+        `elif [ -f ${quotedPath}/package.json ]; then`,
+        `  echo "📦 Resolving Node.js dependencies (npm) in ${location.label}..."`,
+        `  cd ${quotedPath} && npm install 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('pnpm')) {
+      commands.push(
+        `if [ -f ${quotedPath}/pnpm-lock.yaml ]; then`,
+        `  echo "📦 Resolving Node.js dependencies (pnpm) in ${location.label}..."`,
+        `  cd ${quotedPath} && pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true`,
+        `elif [ -f ${quotedPath}/package.json ]; then`,
+        `  echo "📦 Resolving Node.js dependencies (pnpm) in ${location.label}..."`,
+        `  cd ${quotedPath} && pnpm install 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('yarn')) {
+      commands.push(
+        `if [ -f ${quotedPath}/yarn.lock ]; then`,
+        `  echo "📦 Resolving Node.js dependencies (yarn) in ${location.label}..."`,
+        `  cd ${quotedPath} && yarn install --frozen-lockfile 2>/dev/null || yarn install 2>/dev/null || true`,
+        `elif [ -f ${quotedPath}/package.json ]; then`,
+        `  echo "📦 Resolving Node.js dependencies (yarn) in ${location.label}..."`,
+        `  cd ${quotedPath} && yarn install 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('composer')) {
+      commands.push(
+        `if [ -f ${quotedPath}/composer.json ]; then`,
+        `  echo "📦 Resolving PHP dependencies in ${location.label}..."`,
+        `  cd ${quotedPath} && composer install --no-interaction 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('cargo')) {
+      commands.push(
+        `if [ -f ${quotedPath}/Cargo.toml ]; then`,
+        `  echo "📦 Resolving Rust dependencies in ${location.label}..."`,
+        `  cd ${quotedPath} && cargo fetch 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('gomod')) {
+      commands.push(
+        `if [ -f ${quotedPath}/go.mod ]; then`,
+        `  echo "📦 Resolving Go dependencies in ${location.label}..."`,
+        `  cd ${quotedPath} && go mod download 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('pip')) {
+      commands.push(
+        `if [ -f ${quotedPath}/requirements.txt ]; then`,
+        `  echo "📦 Resolving Python dependencies (pip) in ${location.label}..."`,
+        `  cd ${quotedPath} && pip install -r requirements.txt 2>/dev/null || true`,
+        'fi'
+      );
+    }
+
+    if (pms.includes('rubygems')) {
+      commands.push(
+        `if [ -f ${quotedPath}/Gemfile ]; then`,
+        `  echo "📦 Resolving Ruby dependencies in ${location.label}..."`,
+        `  cd ${quotedPath} && bundle install 2>/dev/null || true`,
+        'fi'
+      );
+    }
+  }
+
+  return commands;
+}
+
+function generateProjectRepositorySyncSection(
+  projectConfig: ProjectConfigManager
+): string {
+  const projectsWithRepositories = (projectConfig.projects || []).filter(
+    project => project.repository
+  );
+
+  if (projectsWithRepositories.length === 0) {
+    return '';
+  }
+
+  const syncBlocks = projectsWithRepositories.map(project => {
+    const targetPath = `/workspace/${project.path}`;
+    const escapedName = shellEscape(project.name);
+    const escapedPath = shellEscape(targetPath);
+    const escapedRepository = shellEscape(project.repository!);
+    const escapedRef = project.ref ? shellEscape(project.ref) : '';
+
+    const checkoutRef = project.ref
+      ? `
+echo "🔀 Checking out ${escapedRef} for ${escapedName}"
+if git -C ${escapedPath} rev-parse --verify refs/remotes/origin/${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout -B ${escapedRef} refs/remotes/origin/${escapedRef}
+elif git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout --detach ${escapedRef}
+else
+  echo "❌ Could not resolve ref ${escapedRef} in ${escapedName}"
+  safe_exit 1
+fi`
+      : `
+default_remote_ref=$(git -C ${escapedPath} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+if [ -z "$default_remote_ref" ]; then
+  echo "❌ Could not determine default remote branch for ${escapedName}"
+  safe_exit 1
+fi
+default_branch="\${default_remote_ref#origin/}"
+echo "🔀 Checking out default branch $default_branch for ${escapedName}"
+git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"`;
+
+    return `echo "📥 Syncing repository ${escapedName} for build cache"
+mkdir -p "$(dirname ${escapedPath})"
+rm -rf ${escapedPath}
+git clone ${escapedRepository} ${escapedPath}
+if ! git -C ${escapedPath} fetch --all --tags --prune; then
+  echo "❌ Failed to fetch repository ${escapedName}"
+  safe_exit 1
+fi
+${checkoutRef}
+git -C ${escapedPath} reset --hard HEAD
+git -C ${escapedPath} clean -fd
+echo "✅ Repository ${escapedName} is ready for build caching"`;
+  });
+
+  return `
+# Materialize external project repositories so multi-repo dependency setup can
+# be baked into the cache image just like the root repository.
+echo -e "\\n======================================="
+echo "📥 Syncing external repositories for cache build"
+echo "======================================="
+${syncBlocks.join('\n')}
+`;
+}
+
 function generateBuildEntrypoint(
   agent: string,
   projectConfig: ProjectConfigManager,
@@ -123,6 +331,44 @@ function generateBuildEntrypoint(
       installScripts.push(init);
     }
   }
+
+  const rootInitScripts = (projectConfig.allInitScripts ?? []).filter(
+    () => true
+  );
+  const initScriptBlocks = rootInitScripts.map(entry => {
+    const workspaceScript = entry.path
+      ? `/workspace/${entry.path}/${entry.script}`
+      : `/workspace/${entry.script}`;
+    const workspaceDir = entry.path
+      ? `/workspace/${entry.path}`
+      : '/workspace';
+    const label = entry.path ? ` (${entry.path})` : '';
+
+    return `echo "🔧 Running initialization script${label}"
+cd ${JSON.stringify(workspaceDir)}
+bash ${JSON.stringify(workspaceScript)}
+echo "✅ Initialization script${label} completed successfully"`;
+  });
+
+  const initScriptSection =
+    initScriptBlocks.length > 0
+      ? `
+# Run root and project init scripts after project repositories have been
+# materialized into the writable build workspace.
+${initScriptBlocks.join('\n')}
+`
+      : '';
+
+  const dependencyResolutionCommands = getDependencyResolutionCommands(
+    projectConfig
+  );
+  const dependencyResolutionSection =
+    dependencyResolutionCommands.length > 0
+      ? `
+# Resolve root and project dependencies in the staged build workspace.
+${dependencyResolutionCommands.join('\n')}
+`
+      : '';
 
   const mcps = projectConfig.mcps ?? [];
   let mcpSection = '';
@@ -167,10 +413,26 @@ if [[ -f /etc/debian_version ]]; then
   sudo apt-get update -qq
 fi
 
+# Create a writable build workspace from the read-only host project mount.
+export BUILD_WORKSPACE=/tmp/rover-build-workspace
+rm -rf "$BUILD_WORKSPACE"
+mkdir -p "$BUILD_WORKSPACE"
+cp -a /workspace-src/. "$BUILD_WORKSPACE/"
+rm -rf /workspace 2>/dev/null || true
+ln -s "$BUILD_WORKSPACE" /workspace
+
+# Allow local source repos copied into the staged workspace to be used as
+# clone/fetch remotes during cache builds regardless of runtime UID/GID.
+git config --global --add safe.directory '*' 2>/dev/null || true
+
 # Install languages, package managers, task managers
 ${installScripts.join('\n')}
 
-# Install agent CLI
+${generateProjectRepositorySyncSection(projectConfig)}
+
+${dependencyResolutionSection}
+
+${initScriptSection}
 echo "Installing agent CLI ($AGENT)..."
 sudo -E rover-agent install $AGENT || echo "Agent install failed (non-fatal for build)"
 sudo chown -R $(id -u):$(id -g) $HOME
@@ -267,6 +529,7 @@ const buildCommand = async (
       jsonOutput.cacheTag = cacheTag;
       jsonOutput.cached = true;
       await exitWithSuccess(null, jsonOutput, { telemetry });
+      exitProcessIfNeeded(0);
       return;
     }
 
@@ -310,11 +573,9 @@ const buildCommand = async (
       '--name',
       containerName,
       '-v',
-      `${projectPath}:/workspace:Z,ro`,
+      `${projectPath}:/workspace-src:Z,ro`,
       '-v',
       `${entrypointPath}:/entrypoint.sh:Z,ro`,
-      '-w',
-      '/workspace',
       '--entrypoint',
       '/entrypoint.sh',
     ];
@@ -406,19 +667,23 @@ const buildCommand = async (
       jsonOutput.elapsed = parseFloat(elapsed);
       jsonOutput.cached = false;
       await exitWithSuccess(null, jsonOutput, { telemetry });
+      exitProcessIfNeeded(0);
     } else {
       jsonOutput.success = false;
       jsonOutput.error = 'Container init failed — image was not committed';
       await exitWithError(jsonOutput, { telemetry });
+      exitProcessIfNeeded(1);
     }
   } catch (error) {
     jsonOutput.success = false;
     jsonOutput.error = error instanceof Error ? error.message : String(error);
     await exitWithError(jsonOutput, { telemetry });
+    exitProcessIfNeeded(1);
   }
 };
 
 export { buildCommand };
+export { generateBuildEntrypoint };
 
 export default {
   name: 'build',
