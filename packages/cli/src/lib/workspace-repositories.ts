@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { ProjectConfigManager } from 'rover-core';
 
 export interface WorkspaceRepository {
@@ -21,14 +21,39 @@ interface WorkspaceDescription {
   projects?: WorkspaceDescriptionProject[];
 }
 
-export function getWorkspaceDescriptionRepositories(
+function getLatestIterationWorkspaceDescriptionPath(
   taskWorktreePath: string
-): WorkspaceRepository[] {
-  const descriptionPath = join(taskWorktreePath, '.rover-workspace.json');
-  if (!existsSync(descriptionPath)) {
-    return [];
+): string | undefined {
+  const taskBasePath = dirname(taskWorktreePath);
+  const iterationsPath = join(taskBasePath, 'iterations');
+
+  if (!existsSync(iterationsPath)) {
+    return undefined;
   }
 
+  const latestIteration = readdirSync(iterationsPath, { withFileTypes: true })
+    .filter(dirent => dirent.isDirectory())
+    .map(dirent => Number.parseInt(dirent.name, 10))
+    .filter(iteration => !Number.isNaN(iteration))
+    .sort((a, b) => b - a)[0];
+
+  if (latestIteration === undefined) {
+    return undefined;
+  }
+
+  const descriptionPath = join(
+    iterationsPath,
+    latestIteration.toString(),
+    'workspace-description.json'
+  );
+
+  return existsSync(descriptionPath) ? descriptionPath : undefined;
+}
+
+function parseWorkspaceDescription(
+  descriptionPath: string,
+  taskWorktreePath: string
+): WorkspaceRepository[] {
   try {
     const raw = readFileSync(descriptionPath, 'utf8');
     const parsed = JSON.parse(raw) as WorkspaceDescription;
@@ -58,6 +83,26 @@ export function getWorkspaceDescriptionRepositories(
   } catch {
     return [];
   }
+}
+
+export function getWorkspaceDescriptionRepositories(
+  taskWorktreePath: string
+): WorkspaceRepository[] {
+  const persistedDescriptionPath =
+    getLatestIterationWorkspaceDescriptionPath(taskWorktreePath);
+  if (persistedDescriptionPath) {
+    return parseWorkspaceDescription(
+      persistedDescriptionPath,
+      taskWorktreePath
+    );
+  }
+
+  const legacyDescriptionPath = join(taskWorktreePath, '.rover-workspace.json');
+  if (!existsSync(legacyDescriptionPath)) {
+    return [];
+  }
+
+  return parseWorkspaceDescription(legacyDescriptionPath, taskWorktreePath);
 }
 
 export function getConfiguredWorkspaceRepositories(

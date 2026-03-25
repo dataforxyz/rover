@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,39 +9,57 @@ import {
 } from '../workspace-repositories.js';
 
 describe('workspace-repositories', () => {
-  const testDirs: string[] = [];
+  const testRoots: string[] = [];
 
   function makeTmpDir(): string {
-    const dir = mkdtempSync(join(tmpdir(), 'rover-ws-repo-test-'));
-    testDirs.push(dir);
-    return dir;
+    const rootDir = mkdtempSync(join(tmpdir(), 'rover-ws-repo-test-'));
+    const worktreeDir = join(rootDir, 'workspace');
+    mkdirSync(worktreeDir, { recursive: true });
+    testRoots.push(rootDir);
+    return worktreeDir;
+  }
+
+  function makeIterationDir(worktreeDir: string, iteration: number): string {
+    const iterationDir = join(
+      worktreeDir,
+      '..',
+      'iterations',
+      iteration.toString()
+    );
+    mkdirSync(iterationDir, { recursive: true });
+    return iterationDir;
   }
 
   afterEach(() => {
-    for (const dir of testDirs) {
-      rmSync(dir, { recursive: true, force: true });
+    for (const rootDir of testRoots) {
+      rmSync(rootDir, { recursive: true, force: true });
     }
-    testDirs.length = 0;
+    testRoots.length = 0;
   });
 
   // ── getWorkspaceDescriptionRepositories ───────────────────────────
 
   describe('getWorkspaceDescriptionRepositories', () => {
-    it('returns empty array when .rover-workspace.json does not exist', () => {
+    it('returns empty array when no persisted description exists', () => {
       const dir = makeTmpDir();
       expect(getWorkspaceDescriptionRepositories(dir)).toEqual([]);
     });
 
-    it('returns empty array for malformed JSON', () => {
+    it('returns empty array for malformed persisted JSON', () => {
       const dir = makeTmpDir();
-      writeFileSync(join(dir, '.rover-workspace.json'), 'not json {{{');
+      const iterationDir = makeIterationDir(dir, 1);
+      writeFileSync(
+        join(iterationDir, 'workspace-description.json'),
+        'not json {{{'
+      );
       expect(getWorkspaceDescriptionRepositories(dir)).toEqual([]);
     });
 
     it('returns empty array when projects is not an array', () => {
       const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 1);
       writeFileSync(
-        join(dir, '.rover-workspace.json'),
+        join(iterationDir, 'workspace-description.json'),
         JSON.stringify({ projects: 'not-an-array' })
       );
       expect(getWorkspaceDescriptionRepositories(dir)).toEqual([]);
@@ -49,8 +67,9 @@ describe('workspace-repositories', () => {
 
     it('filters out projects missing required fields', () => {
       const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 1);
       writeFileSync(
-        join(dir, '.rover-workspace.json'),
+        join(iterationDir, 'workspace-description.json'),
         JSON.stringify({
           projects: [
             {
@@ -84,8 +103,9 @@ describe('workspace-repositories', () => {
 
     it('parses valid workspace description correctly', () => {
       const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 2);
       writeFileSync(
-        join(dir, '.rover-workspace.json'),
+        join(iterationDir, 'workspace-description.json'),
         JSON.stringify({
           projects: [
             {
@@ -123,8 +143,9 @@ describe('workspace-repositories', () => {
 
     it('ignores non-string ref values', () => {
       const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 1);
       writeFileSync(
-        join(dir, '.rover-workspace.json'),
+        join(iterationDir, 'workspace-description.json'),
         JSON.stringify({
           projects: [
             {
@@ -139,6 +160,75 @@ describe('workspace-repositories', () => {
 
       const result = getWorkspaceDescriptionRepositories(dir);
       expect(result[0].ref).toBeUndefined();
+    });
+
+    it('prefers the latest persisted iteration description over legacy worktree metadata', () => {
+      const dir = makeTmpDir();
+      const olderIterationDir = makeIterationDir(dir, 1);
+      const latestIterationDir = makeIterationDir(dir, 2);
+
+      writeFileSync(
+        join(dir, '.rover-workspace.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'legacy',
+              path: 'legacy',
+              repository: 'https://example.com/legacy.git',
+            },
+          ],
+        })
+      );
+
+      writeFileSync(
+        join(olderIterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'older',
+              path: 'older',
+              repository: 'https://example.com/older.git',
+            },
+          ],
+        })
+      );
+
+      writeFileSync(
+        join(latestIterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'latest',
+              path: 'latest',
+              repository: 'https://example.com/latest.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(dir);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('latest');
+    });
+
+    it('falls back to legacy worktree metadata when persisted iteration metadata is absent', () => {
+      const dir = makeTmpDir();
+      writeFileSync(
+        join(dir, '.rover-workspace.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'legacy',
+              path: 'legacy',
+              repository: 'https://example.com/legacy.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(dir);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('legacy');
     });
   });
 
