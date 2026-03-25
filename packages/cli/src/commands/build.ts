@@ -125,12 +125,12 @@ function generateProjectRepositorySyncSection(
 
     return `echo "📥 Validating local child repository ${escapedName} for build cache"
 if [ ! -d ${escapedPath} ]; then
-  echo "⚠ Missing child repository ${escapedName} at ${escapedPath} in the staged build workspace"
-  echo "  Skipping project-specific cache setup for ${escapedName}."
-  echo "  rover build does not clone child repositories from project.repository."
-else
-  echo "✅ Local child repository ${escapedName} is present for build caching"
-fi`;
+  echo "❌ Missing child repository ${escapedName} at ${escapedPath} in the staged build workspace"
+  echo "   rover build does not clone child repositories from project.repository."
+  echo "   Make sure ${escapedName} is already materialized under ${escapedPath} before building the cache image."
+  safe_exit 1
+fi
+echo "✅ Local child repository ${escapedName} is present for build caching"`;
   });
 
   return `
