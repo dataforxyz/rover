@@ -6,8 +6,8 @@
  * the task finishes.  Backend-agnostic: accepts a ContainerBackend parameter
  * so the same functions work for both Docker and Podman.
  */
-
 import { launch, VERBOSE } from 'rover-core';
+import { parseCommandString } from 'execa';
 import type { ServiceContainer } from 'rover-schemas';
 import { ContainerBackend } from './container-common.js';
 
@@ -130,7 +130,7 @@ export async function startServiceContainers(
       if (Array.isArray(service.command)) {
         args.push(...service.command);
       } else {
-        args.push(service.command);
+        args.push(...parseCommandString(service.command));
       }
     }
 
