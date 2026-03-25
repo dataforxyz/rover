@@ -264,15 +264,22 @@ export const rebaseCommand = async (
         worktreePath: task.worktreePath,
         baseBranch: currentBranch,
       },
-      ...workspaceRepositories.map(repo => ({
-        label: repo.name,
-        branchName: task.branchName,
-        worktreePath: repo.worktreePath,
-        baseBranch:
-          options.base ||
-          repo.ref ||
-          new Git({ cwd: repo.worktreePath }).getMainBranch(),
-      })),
+      ...workspaceRepositories.map(repo => {
+        let baseBranch = options.base || repo.ref;
+        if (!baseBranch) {
+          try {
+            baseBranch = new Git({ cwd: repo.worktreePath }).getMainBranch();
+          } catch {
+            baseBranch = 'main';
+          }
+        }
+        return {
+          label: repo.name,
+          branchName: task.branchName,
+          worktreePath: repo.worktreePath,
+          baseBranch,
+        };
+      }),
     ];
 
     for (const target of rebaseTargets) {

@@ -360,6 +360,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         });
         result.pushed = true;
         pushedTargets.push(target.label);
+        result.pushedRepos = [...pushedTargets];
         pushSpinner?.success(`Pushed ${target.label}`);
       } catch (error: unknown) {
         const errorMessage =
@@ -376,6 +377,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
             });
             result.pushed = true;
             pushedTargets.push(target.label);
+            result.pushedRepos = [...pushedTargets];
             pushSpinner?.success(`Pushed ${target.label}`);
           } catch (retryError: unknown) {
             pushSpinner?.error(`Failed to push ${target.label}`);

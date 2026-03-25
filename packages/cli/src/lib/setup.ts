@@ -21,6 +21,7 @@ import type { SandboxPackage } from './sandbox/types.js';
 import { mergeNetworkConfig, generateNetworkScript } from './network-config.js';
 import { initWorkflowStore } from './workflow.js';
 import { getDependencyResolutionCommands } from './dependency-resolution.js';
+import { shellEscape } from '../utils/shell.js';
 
 // Language packages
 import { JavaScriptSandboxPackage } from './sandbox/languages/javascript.js';
@@ -204,13 +205,6 @@ export class SetupBuilder {
     }
 
     return packages;
-  }
-
-  /**
-   * Safely single-quote a value for shell interpolation.
-   */
-  private shellEscape(value: string): string {
-    return `'${value.replace(/'/g, `'\"'\"'`)}'`;
   }
 
   private getDependencyResolutionCommands(): string[] {
@@ -407,21 +401,21 @@ fi`;
       if (mcps && mcps.length > 0) {
         configureAllMCPCommands.push('echo "✅ Configuring custom MCPs"');
         for (const mcp of mcps) {
-          let cmd = `rover-agent config mcp ${this.agent} ${this.shellEscape(mcp.name)} --transport ${this.shellEscape(mcp.transport)}`;
+          let cmd = `rover-agent config mcp ${this.agent} ${shellEscape(mcp.name)} --transport ${shellEscape(mcp.transport)}`;
 
           if (mcp.envs && mcp.envs.length > 0) {
             for (const env of mcp.envs) {
-              cmd += ` --env ${this.shellEscape(env)}`;
+              cmd += ` --env ${shellEscape(env)}`;
             }
           }
 
           if (mcp.headers && mcp.headers.length > 0) {
             for (const header of mcp.headers) {
-              cmd += ` --header ${this.shellEscape(header)}`;
+              cmd += ` --header ${shellEscape(header)}`;
             }
           }
 
-          cmd += ` ${this.shellEscape(mcp.commandOrUrl)}`;
+          cmd += ` ${shellEscape(mcp.commandOrUrl)}`;
 
           configureAllMCPCommands.push(cmd);
         }
@@ -474,10 +468,8 @@ echo -e "\\n📦 Done installing MCP servers"`;
       for (const { entry, index } of executableInitScripts) {
         const label = entry.path ? ` (${entry.path})` : '';
         if (entry.path) {
-          const escapedWorkspacePath = this.shellEscape(
-            `/workspace/${entry.path}`
-          );
-          const escapedWorkspaceScript = this.shellEscape(
+          const escapedWorkspacePath = shellEscape(`/workspace/${entry.path}`);
+          const escapedWorkspaceScript = shellEscape(
             `/workspace/${entry.path}/${entry.script}`
           );
           scriptBlocks.push(`echo "🔧 Running initialization script${label}"
@@ -494,7 +486,7 @@ cd /workspace`);
           continue;
         }
 
-        const escapedWorkspaceScript = this.shellEscape(
+        const escapedWorkspaceScript = shellEscape(
           `/workspace/${entry.script}`
         );
         scriptBlocks.push(`echo "🔧 Running initialization script${label}"
@@ -523,7 +515,7 @@ ${scriptBlocks.join('\n')}
 
     if (projectsWithRepositories.length > 0) {
       const taskBranch = this.task.branchName || `task/${this.task.id}`;
-      const escapedTaskBranch = this.shellEscape(taskBranch);
+      const escapedTaskBranch = shellEscape(taskBranch);
       const repositoryStateFunctions = `
 compute_repo_untracked_hash() {
   local repo_path="$1"
@@ -604,11 +596,11 @@ NODE
 
       const syncBlocks = projectsWithRepositories.map(project => {
         const targetPath = `/workspace/${project.path}`;
-        const escapedName = this.shellEscape(project.name);
-        const escapedPath = this.shellEscape(targetPath);
-        const escapedRepository = this.shellEscape(project.repository!);
-        const escapedRef = project.ref ? this.shellEscape(project.ref) : '';
-        const checkpointLookupScript = this.shellEscape(
+        const escapedName = shellEscape(project.name);
+        const escapedPath = shellEscape(targetPath);
+        const escapedRepository = shellEscape(project.repository!);
+        const escapedRef = project.ref ? shellEscape(project.ref) : '';
+        const checkpointLookupScript = shellEscape(
           `const fs=require('fs'); const checkpoint=JSON.parse(fs.readFileSync('/output/checkpoint.json','utf8')); const entry=(checkpoint.externalRepositories||[]).find(repo => repo.path === ${JSON.stringify(project.path)}); if (!entry) process.exit(2); process.stdout.write([entry.head, entry.trackedDiffHash, entry.untrackedHash].join('\\t'));`
         );
 

@@ -59,6 +59,7 @@ import { TaskSandboxPackage } from '../lib/sandbox/task-managers/task.js';
 
 import type { SandboxPackage } from '../lib/sandbox/types.js';
 import { getDependencyResolutionCommands } from '../lib/dependency-resolution.js';
+import { shellEscape } from '../utils/shell.js';
 
 function getPackages(projectConfig: ProjectConfigManager): SandboxPackage[] {
   const packages: SandboxPackage[] = [];
@@ -101,10 +102,6 @@ function getPackages(projectConfig: ProjectConfigManager): SandboxPackage[] {
     if (tmMap[tm]) packages.push(tmMap[tm]());
   }
   return packages;
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 function generateProjectRepositorySyncSection(

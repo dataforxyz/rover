@@ -6,9 +6,7 @@
  * a single implementation to keep them in sync.
  */
 
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, `'\"'\"'`)}' `;
-}
+import { shellEscape } from '../utils/shell.js';
 
 interface DependencyLocation {
   path: string;
@@ -46,7 +44,7 @@ export function getDependencyResolutionCommands(
   ];
 
   for (const location of locations) {
-    const quotedPath = shellEscape(location.path).trim();
+    const quotedPath = shellEscape(location.path);
     const pms = location.packageManagers;
 
     if (pms.includes('uv')) {
