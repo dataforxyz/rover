@@ -5,10 +5,21 @@ export class DartSandboxPackage extends SandboxPackage {
   name = 'dart';
 
   installScript(): string {
-    // Install Flutter SDK (includes Dart SDK).
+    // Install Flutter SDK (includes Dart SDK) and Linux desktop build deps.
     // Reads .fvmrc for project-pinned version, falls back to stable.
     // Uses the git repo for the channel name and the archive for pinned versions.
     return `
+# Linux desktop build toolchain (required for flutter test integration_test/)
+sudo apt-get update -qq && sudo apt-get install -y -qq cmake clang ninja-build pkg-config libgtk-3-dev 2>/dev/null || true
+# systemd postinst creates systemd-network (UID 998) which can conflict
+# with the container runtime user. Remove it to avoid HOME resolution issues.
+if getent passwd systemd-network >/dev/null 2>&1; then
+  sudo userdel systemd-network 2>/dev/null || sudo sed -i '/^systemd-network:/d' /etc/passwd
+fi
+if getent group systemd-network >/dev/null 2>&1; then
+  sudo groupdel systemd-network 2>/dev/null || sudo sed -i '/^systemd-network:/d' /etc/group
+fi
+
 FLUTTER_VERSION="stable"
 if [ -f /workspace/.fvmrc ]; then
   FVM_VER=$(cat /workspace/.fvmrc | grep -oP '"flutter"\\s*:\\s*"\\K[^"]+' 2>/dev/null || cat /workspace/.fvmrc | tr -d '{}\" ' | grep -oP 'flutter:\\K[^,]+' 2>/dev/null)
@@ -27,20 +38,19 @@ esac
 rm -rf $HOME/.flutter
 if [ "$FLUTTER_VERSION" = "stable" ]; then
   echo "Resolving latest Flutter stable archive..."
-  FLUTTER_VERSION=$(python3 - <<'PY'
-import json
-import sys
-from urllib.request import urlopen
-
-meta = json.load(urlopen("https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json"))
-stable_hash = meta["current_release"]["stable"]
-for release in meta["releases"]:
-    if release.get("hash") == stable_hash:
-        print(release["version"])
-        sys.exit(0)
-sys.exit(1)
-PY
-  ) || FLUTTER_VERSION="stable"
+  RELEASES_JSON=$(curl -fsSL "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json" 2>/dev/null || true)
+  if [ -n "$RELEASES_JSON" ]; then
+    # Try python3 first (most reliable JSON parsing), fall back to grep-based extraction.
+    # python3 may not be available yet if dart is the first language being installed.
+    FLUTTER_VERSION=$(echo "$RELEASES_JSON" | python3 -c "
+import json, sys
+meta = json.load(sys.stdin)
+h = meta['current_release']['stable']
+print(next(r['version'] for r in meta['releases'] if r.get('hash') == h))
+" 2>/dev/null) || \
+    FLUTTER_VERSION=$(echo "$RELEASES_JSON" | grep -oP '"version"\\s*:\\s*"\\K[0-9]+\\.[0-9]+\\.[0-9]+' 2>/dev/null | head -1) || \
+    FLUTTER_VERSION="stable"
+  fi
 fi
 
 FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_\${FLUTTER_VERSION}-stable.tar.xz"
@@ -97,6 +107,7 @@ if [ -f /workspace/.fvmrc ]; then
   fi
 fi
 
+flutter precache --no-ios --no-macos --no-windows --no-fuchsia --no-universal-apk --no-web 2>/dev/null || true
 if [ -f /workspace/pubspec.yaml ]; then
   cd /workspace && flutter pub get 2>/dev/null || true
 fi`;

@@ -20,6 +20,7 @@ import pupa from 'pupa';
 import type { SandboxPackage } from './sandbox/types.js';
 import { mergeNetworkConfig, generateNetworkScript } from './network-config.js';
 import { initWorkflowStore } from './workflow.js';
+import { getDependencyResolutionCommands } from './dependency-resolution.js';
 
 // Language packages
 import { JavaScriptSandboxPackage } from './sandbox/languages/javascript.js';
@@ -213,99 +214,11 @@ export class SetupBuilder {
   }
 
   private getDependencyResolutionCommands(): string[] {
-    const commands: string[] = [];
-    const locations = [
-      {
-        path: '/workspace',
-        packageManagers: this.projectConfig.packageManagers ?? [],
-        label: 'workspace root',
-      },
-      ...(this.projectConfig.projects ?? []).map(project => ({
-        path: `/workspace/${project.path}`,
-        packageManagers: project.packageManagers ?? [],
-        label: project.path,
-      })),
-    ];
-
-    for (const location of locations) {
-      const quotedPath = this.shellEscape(location.path);
-      const pms = location.packageManagers;
-
-      if (pms.includes('uv')) {
-        commands.push(
-          `if [ -f ${quotedPath}/pyproject.toml ]; then`,
-          `  echo "📦 Resolving Python dependencies (uv) in ${location.label}..."`,
-          `  cd ${quotedPath} && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true`,
-          `  if [ -d ${quotedPath}/.venv/bin ]; then`,
-          `    export PATH="${location.path}/.venv/bin:$PATH"`,
-          `    echo 'export PATH="${location.path}/.venv/bin:$PATH"' >> $HOME/.profile`,
-          '  fi',
-          'fi'
-        );
-      }
-
-      if (pms.includes('poetry')) {
-        commands.push(
-          `if [ -f ${quotedPath}/pyproject.toml ]; then`,
-          `  echo "📦 Resolving Python dependencies (poetry) in ${location.label}..."`,
-          `  cd ${quotedPath} && poetry install --no-interaction 2>/dev/null || true`,
-          'fi'
-        );
-      }
-
-      if (pms.includes('pub')) {
-        commands.push(
-          `if [ -f ${quotedPath}/pubspec.yaml ]; then`,
-          `  echo "📦 Resolving Dart dependencies in ${location.label}..."`,
-          `  cd ${quotedPath} && flutter pub get 2>/dev/null || dart pub get 2>/dev/null || true`,
-          'fi'
-        );
-      }
-
-      if (pms.includes('pnpm')) {
-        commands.push(
-          `if [ -f ${quotedPath}/pnpm-lock.yaml ]; then`,
-          `  echo "📦 Resolving Node dependencies (pnpm) in ${location.label}..."`,
-          `  cd ${quotedPath} && pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true`,
-          'fi'
-        );
-      }
-
-      if (pms.includes('npm')) {
-        commands.push(
-          `if [ -f ${quotedPath}/package-lock.json ]; then`,
-          `  echo "📦 Resolving Node dependencies (npm) in ${location.label}..."`,
-          `  cd ${quotedPath} && npm ci 2>/dev/null || npm install 2>/dev/null || true`,
-          'fi'
-        );
-      }
-
-      if (pms.includes('yarn')) {
-        commands.push(
-          `if [ -f ${quotedPath}/yarn.lock ]; then`,
-          `  echo "📦 Resolving Node dependencies (yarn) in ${location.label}..."`,
-          `  cd ${quotedPath} && yarn install --frozen-lockfile 2>/dev/null || yarn install 2>/dev/null || true`,
-          'fi'
-        );
-      }
-
-      if (pms.includes('gomod')) {
-        commands.push(
-          `if [ -f ${quotedPath}/go.mod ]; then`,
-          `  echo "📦 Resolving Go dependencies in ${location.label}..."`,
-          `  cd ${quotedPath} && go mod download 2>/dev/null || true`,
-          `elif [ -f ${quotedPath}/src/go.mod ]; then`,
-          `  cd ${quotedPath}/src && go mod download 2>/dev/null || true`,
-          'fi'
-        );
-      }
-    }
-
-    if (commands.length > 0) {
-      commands.push('cd /workspace');
-    }
-
-    return commands;
+    return getDependencyResolutionCommands({
+      rootPackageManagers: this.projectConfig.packageManagers ?? [],
+      projects: this.projectConfig.projects,
+      addVenvPathExports: true,
+    });
   }
 
   /**
@@ -360,7 +273,12 @@ sudo chown -R $(id -u):$(id -g) /workspace
 source $HOME/.profile`;
     }
 
-    const gitSafeDirectorySetup = `# Allow git operations across mounted workspaces and embedded repositories
+    // SECURITY NOTE: Disabling git's directory ownership check with '*' is safe here
+    // because this only runs inside ephemeral, single-user task containers where the
+    // workspace is bind-mounted with a different UID than the container user.
+    const gitSafeDirectorySetup = `# Allow git operations across mounted workspaces and embedded repositories.
+# This is safe inside ephemeral task containers — the wildcard disables ownership
+# checks that would otherwise block operations on bind-mounted directories.
 git config --global --add safe.directory '*' 2>/dev/null || true
 git config --system --add safe.directory '*' 2>/dev/null || true`;
 
@@ -565,7 +483,7 @@ echo -e "\\n📦 Done installing MCP servers"`;
           scriptBlocks.push(`echo "🔧 Running initialization script${label}"
 chmod +x ${escapedWorkspaceScript}
 cd ${escapedWorkspacePath}
-${escapedWorkspaceScript}
+bash ${escapedWorkspaceScript}
 if [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else
@@ -581,7 +499,7 @@ cd /workspace`);
         );
         scriptBlocks.push(`echo "🔧 Running initialization script${label}"
 chmod +x ${escapedWorkspaceScript}
-${escapedWorkspaceScript}
+bash ${escapedWorkspaceScript}
 if [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else

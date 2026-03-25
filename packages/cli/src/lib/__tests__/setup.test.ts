@@ -446,8 +446,14 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain('🔧 Running initialization scripts');
     expect(script).toContain('🔧 Running initialization script (frontend)');
     expect(script).toContain("cd '/workspace/frontend'");
-    expect(script).toContain("'/workspace/frontend/scripts/frontend-init.sh'");
+    expect(script).toContain(
+      "bash '/workspace/frontend/scripts/frontend-init.sh'"
+    );
     expect(script).not.toContain('/bin/sh /init-script-0.sh');
+    expect(script).not.toContain(
+      "\n'/workspace/frontend/scripts/frontend-init.sh'\n"
+    );
+    expect(script).not.toContain("\n'/workspace/scripts/root-init.sh'\n");
     expect(script).not.toContain("/bin/sh '/workspace/scripts/root-init.sh'");
   });
 
