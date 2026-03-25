@@ -1,17 +1,17 @@
-import colors from 'ansi-colors';
 import { rmSync } from 'node:fs';
-import { createSandbox } from '../lib/sandbox/index.js';
-import { TaskNotFoundError } from 'rover-schemas';
+import colors from 'ansi-colors';
 import { launch, ProcessManager } from 'rover-core';
-import { exitWithError, exitWithSuccess } from '../utils/exit.js';
-import type { TaskStopOutput } from '../output-types.js';
-import { getTelemetry } from '../lib/telemetry.js';
+import { TaskNotFoundError } from 'rover-schemas';
 import {
   isJsonMode,
-  setJsonMode,
   requireProjectContext,
+  setJsonMode,
 } from '../lib/context.js';
+import { createSandbox } from '../lib/sandbox/index.js';
+import { getTelemetry } from '../lib/telemetry.js';
+import type { TaskStopOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
+import { exitWithError, exitWithSuccess } from '../utils/exit.js';
 
 /**
  * Stop a running task and optionally clean up its resources.
@@ -85,6 +85,7 @@ const stopCommand = async (
     // Stop sandbox container if it exists and is running
     if (task.containerId) {
       const sandbox = await createSandbox(task, processManager, {
+        projectPath: project.path,
         sandboxMetadata: task.sandboxMetadata,
       });
 

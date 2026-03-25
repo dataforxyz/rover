@@ -1,18 +1,18 @@
-import colors from 'ansi-colors';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createSandbox } from '../lib/sandbox/index.js';
-import { TaskNotFoundError } from 'rover-schemas';
+import colors from 'ansi-colors';
 import { ProcessManager } from 'rover-core';
-import { exitWithError, exitWithSuccess } from '../utils/exit.js';
-import type { TaskPauseOutput } from '../output-types.js';
-import { getTelemetry } from '../lib/telemetry.js';
+import { TaskNotFoundError } from 'rover-schemas';
 import {
   isJsonMode,
-  setJsonMode,
   requireProjectContext,
+  setJsonMode,
 } from '../lib/context.js';
+import { createSandbox } from '../lib/sandbox/index.js';
+import { getTelemetry } from '../lib/telemetry.js';
+import type { TaskPauseOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
+import { exitWithError, exitWithSuccess } from '../utils/exit.js';
 
 /**
  * Maximum time (ms) to wait for the agent to finish its current step
@@ -110,7 +110,9 @@ const pauseCommand = async (
     const pauseRequestFile = join(iterationPath, '.pause-requested');
     const checkpointPath = join(iterationPath, 'checkpoint.json');
 
-    processManager?.addItem('Requesting graceful pause (waiting for current step to finish)');
+    processManager?.addItem(
+      'Requesting graceful pause (waiting for current step to finish)'
+    );
 
     writeFileSync(pauseRequestFile, reason, 'utf-8');
 
@@ -120,6 +122,7 @@ const pauseCommand = async (
     let agentExited = false;
     if (task.containerId) {
       const sandbox = await createSandbox(task, undefined, {
+        projectPath: project.path,
         sandboxMetadata: task.sandboxMetadata,
       });
 

@@ -4,11 +4,17 @@ import {
   ProjectConfigManager,
   TaskDescriptionManager,
 } from 'rover-core';
-import { AIAgentTool } from '../agents/index.js';
 import {
   loadEnvsFile,
   parseCustomEnvironmentVariables,
 } from '../../utils/env-variables.js';
+import { AIAgentTool } from '../agents/index.js';
+import { ContainerBackend } from './container-common.js';
+import {
+  buildServiceContainerContext,
+  type ServiceContainerContext,
+  teardownServiceContainers,
+} from './service-containers.js';
 
 export interface SandboxOptions {
   /** Extra arguments to pass to Docker/Podman from CLI */
@@ -38,6 +44,7 @@ export abstract class Sandbox {
   processManager?: ProcessManager;
   task: TaskDescriptionManager;
   options?: SandboxOptions;
+  protected serviceContext?: ServiceContainerContext;
 
   constructor(
     task: TaskDescriptionManager,
@@ -66,6 +73,36 @@ export abstract class Sandbox {
 
   protected get sandboxName(): string {
     return `rover-task-${this.task.id}-${this.task.iterations}`;
+  }
+
+  protected resolveServiceContext(): ServiceContainerContext | undefined {
+    if (this.serviceContext) {
+      return this.serviceContext;
+    }
+
+    try {
+      const projectConfig = ProjectConfigManager.load(
+        this.options?.projectPath ?? process.cwd()
+      );
+      const services = projectConfig.services;
+      if (!services || services.length === 0) {
+        return undefined;
+      }
+
+      return buildServiceContainerContext(
+        services,
+        this.task.id,
+        this.task.iterations
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  protected getContainerBackend(): ContainerBackend {
+    return this.backend === 'docker'
+      ? ContainerBackend.Docker
+      : ContainerBackend.Podman;
   }
 
   async createAndStart(): Promise<string> {
@@ -108,6 +145,17 @@ export abstract class Sandbox {
     } finally {
       this.processManager?.finish();
     }
+
+    // Tear down service containers when the task is paused/stopped
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      await teardownServiceContainers(
+        this.getContainerBackend(),
+        serviceContext
+      );
+      this.serviceContext = undefined;
+    }
+
     return sandboxId;
   }
 
@@ -136,6 +184,16 @@ export abstract class Sandbox {
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
+    }
+
+    // Tear down service containers and network after the task container is gone
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      await teardownServiceContainers(
+        this.getContainerBackend(),
+        serviceContext
+      );
+      this.serviceContext = undefined;
     }
 
     return sandboxId;
