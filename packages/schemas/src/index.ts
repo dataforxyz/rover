@@ -142,8 +142,6 @@ export type {
   NetworkRule,
   NetworkConfig,
   SandboxConfig,
-  ServiceHealthcheck,
-  ServiceContainer,
   HooksConfig,
   SubProject,
   ProjectConfig,
@@ -160,8 +158,6 @@ export {
   PROJECT_CONFIG_FILENAME,
   ProjectConfigSchema,
   SubProjectSchema,
-  ServiceContainerSchema,
-  ServiceHealthcheckSchema,
   NETWORK_MODE_VALUES,
 } from './project-config/schema.js';
 

@@ -12,8 +12,6 @@ import type {
   NetworkRuleSchema,
   NetworkConfigSchema,
   SandboxConfigSchema,
-  ServiceHealthcheckSchema,
-  ServiceContainerSchema,
   HooksConfigSchema,
   SubProjectSchema,
   ProjectConfigSchema,
@@ -28,8 +26,6 @@ export type NetworkMode = z.infer<typeof NetworkModeSchema>;
 export type NetworkRule = z.infer<typeof NetworkRuleSchema>;
 export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;
 export type SandboxConfig = z.infer<typeof SandboxConfigSchema>;
-export type ServiceHealthcheck = z.infer<typeof ServiceHealthcheckSchema>;
-export type ServiceContainer = z.infer<typeof ServiceContainerSchema>;
 export type HooksConfig = z.infer<typeof HooksConfigSchema>;
 export type SubProject = z.infer<typeof SubProjectSchema>;
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
