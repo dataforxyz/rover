@@ -235,6 +235,7 @@ export abstract class Sandbox {
 
   async stopAndRemove(): Promise<string> {
     let sandboxId = '';
+    let removed = false;
     this.processManager?.addItem(
       `Stopping sandbox (${this.backend}) | Name: ${this.sandboxName}`
     );
@@ -253,6 +254,7 @@ export abstract class Sandbox {
 
     try {
       sandboxId = await this.remove();
+      removed = true;
       this.processManager?.completeLastItem();
     } catch (_err: any) {
       this.processManager?.failLastItem();
@@ -260,8 +262,11 @@ export abstract class Sandbox {
       this.processManager?.finish();
     }
 
-    // Tear down service containers and network after the task container is gone
-    await this.teardownServicesIfConfigured();
+    // Tear down service containers and network only after the task container
+    // is definitely gone.
+    if (removed) {
+      await this.teardownServicesIfConfigured();
+    }
 
     return sandboxId;
   }

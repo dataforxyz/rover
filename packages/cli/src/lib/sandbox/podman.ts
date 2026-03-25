@@ -427,10 +427,14 @@ export class PodmanSandbox extends Sandbox {
       } catch (err) {
         this.processManager?.failLastItem();
         if (this.serviceContext) {
-          await teardownServiceContainers(
-            ContainerBackend.Podman,
-            this.serviceContext
-          );
+          try {
+            await teardownServiceContainers(
+              ContainerBackend.Podman,
+              this.serviceContext
+            );
+          } catch {
+            // Don't mask the original service startup error with cleanup failures.
+          }
           this.serviceContext = undefined;
         }
         this.processManager?.finish();
@@ -705,10 +709,14 @@ export class PodmanSandbox extends Sandbox {
       });
     } finally {
       if (startedInteractiveServices && this.serviceContext) {
-        await teardownServiceContainers(
-          ContainerBackend.Podman,
-          this.serviceContext
-        );
+        try {
+          await teardownServiceContainers(
+            ContainerBackend.Podman,
+            this.serviceContext
+          );
+        } catch {
+          // Interactive session result takes precedence over sidecar cleanup.
+        }
         this.serviceContext = undefined;
       }
     }

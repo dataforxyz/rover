@@ -233,4 +233,21 @@ describe('interactive sandbox cleanup', () => {
     }
     expect((sandbox as any).serviceContext).toBeUndefined();
   });
+
+  it.each([
+    ['docker', DockerSandbox],
+    ['podman', PodmanSandbox],
+  ])('preserves the interactive failure when %s sidecar cleanup also fails', async (_label, SandboxCtor) => {
+    mockLaunch.mockRejectedValueOnce(new Error('interactive run failed'));
+    mockTeardownServiceContainers.mockRejectedValueOnce(
+      new Error('cleanup failed')
+    );
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+    });
+
+    await expect(sandbox.runInteractive()).rejects.toThrow(
+      'interactive run failed'
+    );
+  });
 });

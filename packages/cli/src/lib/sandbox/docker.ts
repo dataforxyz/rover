@@ -428,11 +428,15 @@ export class DockerSandbox extends Sandbox {
         this.processManager?.failLastItem();
         // Best-effort cleanup of any partially started services
         if (this.serviceContext) {
-          await teardownServiceContainers(
-            ContainerBackend.Docker,
-            this.serviceContext,
-            dockerEnv
-          );
+          try {
+            await teardownServiceContainers(
+              ContainerBackend.Docker,
+              this.serviceContext,
+              dockerEnv
+            );
+          } catch {
+            // Don't mask the original service startup error with cleanup failures.
+          }
           this.serviceContext = undefined;
         }
         this.processManager?.finish();
@@ -714,11 +718,15 @@ export class DockerSandbox extends Sandbox {
       });
     } finally {
       if (startedInteractiveServices && this.serviceContext) {
-        await teardownServiceContainers(
-          ContainerBackend.Docker,
-          this.serviceContext,
-          this.getDockerEnv()
-        );
+        try {
+          await teardownServiceContainers(
+            ContainerBackend.Docker,
+            this.serviceContext,
+            this.getDockerEnv()
+          );
+        } catch {
+          // Interactive session result takes precedence over sidecar cleanup.
+        }
         this.serviceContext = undefined;
       }
     }

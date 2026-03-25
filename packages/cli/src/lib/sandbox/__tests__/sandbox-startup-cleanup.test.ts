@@ -178,4 +178,27 @@ describe('sandbox startup cleanup', () => {
       expect.any(Object)
     );
   });
+
+  it('preserves the original Docker service startup error when teardown also fails', async () => {
+    mockProjectConfigLoad.mockReturnValue({ services: [{ name: 'postgres' }] });
+    mockCreateServiceNetwork.mockResolvedValue('rover-services-1-1');
+    mockStartServiceContainers.mockRejectedValue(
+      new Error('service startup failed')
+    );
+    mockTeardownServiceContainers.mockRejectedValue(
+      new Error('cleanup failed')
+    );
+
+    const sandbox = new DockerSandbox(createFakeTask(), undefined, {
+      projectPath: '/repo',
+    });
+
+    (sandbox as any).checkCacheState = vi.fn().mockImplementation(() => {
+      (sandbox as any).shouldCommitCache = false;
+    });
+
+    await expect(sandbox.createAndStart()).rejects.toThrow(
+      'service startup failed'
+    );
+  });
 });
