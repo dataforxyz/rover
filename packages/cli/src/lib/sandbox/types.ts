@@ -11,10 +11,11 @@ import {
 import { AIAgentTool } from '../agents/index.js';
 import { ContainerBackend } from './container-common.js';
 import {
-  buildServiceContainerContext,
   type ServiceContainerContext,
   teardownServiceContainers,
 } from './service-containers.js';
+
+const SERVICE_CONTEXT_METADATA_KEY = 'serviceContext';
 
 export interface SandboxOptions {
   /** Extra arguments to pass to Docker/Podman from CLI */
@@ -75,28 +76,41 @@ export abstract class Sandbox {
     return `rover-task-${this.task.id}-${this.task.iterations}`;
   }
 
+  private getPersistedServiceContext(): ServiceContainerContext | undefined {
+    const persisted =
+      this.options?.sandboxMetadata?.[SERVICE_CONTEXT_METADATA_KEY];
+    const record =
+      persisted && typeof persisted === 'object'
+        ? (persisted as Record<string, unknown>)
+        : undefined;
+
+    if (
+      record &&
+      typeof record.networkName === 'string' &&
+      Array.isArray(record.containerNames) &&
+      record.containerNames.every(
+        (name: unknown) => typeof name === 'string'
+      ) &&
+      typeof record.taskId === 'number' &&
+      typeof record.iteration === 'number'
+    ) {
+      return {
+        networkName: record.networkName,
+        containerNames: [...record.containerNames],
+        taskId: record.taskId,
+        iteration: record.iteration,
+      };
+    }
+
+    return undefined;
+  }
+
   protected resolveServiceContext(): ServiceContainerContext | undefined {
     if (this.serviceContext) {
       return this.serviceContext;
     }
 
-    try {
-      const projectConfig = ProjectConfigManager.load(
-        this.options?.projectPath ?? process.cwd()
-      );
-      const services = projectConfig.services;
-      if (!services || services.length === 0) {
-        return undefined;
-      }
-
-      return buildServiceContainerContext(
-        services,
-        this.task.id,
-        this.task.iterations
-      );
-    } catch {
-      return undefined;
-    }
+    return this.getPersistedServiceContext();
   }
 
   protected getContainerBackend(): ContainerBackend {
@@ -126,6 +140,30 @@ export abstract class Sandbox {
       this.getServiceEnvironment()
     );
     this.serviceContext = undefined;
+  }
+
+  getSandboxMetadata(): Record<string, unknown> | undefined {
+    const metadata = this.options?.sandboxMetadata
+      ? { ...this.options.sandboxMetadata }
+      : {};
+    if (
+      typeof metadata.dockerHost !== 'string' &&
+      typeof process.env.DOCKER_HOST === 'string'
+    ) {
+      metadata.dockerHost = process.env.DOCKER_HOST;
+    }
+
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      metadata[SERVICE_CONTEXT_METADATA_KEY] = {
+        networkName: serviceContext.networkName,
+        containerNames: [...serviceContext.containerNames],
+        taskId: serviceContext.taskId,
+        iteration: serviceContext.iteration,
+      };
+    }
+
+    return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
 
   async createAndStart(): Promise<string> {

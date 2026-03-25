@@ -334,15 +334,15 @@ const restartCommand = async (
           ),
         });
         const containerId = await sandbox.createAndStart();
+        const sandboxMetadata =
+          typeof sandbox.getSandboxMetadata === 'function'
+            ? sandbox.getSandboxMetadata()
+            : process.env.DOCKER_HOST
+              ? { dockerHost: process.env.DOCKER_HOST }
+              : undefined;
 
         // Update task metadata with new container ID
-        task.setContainerInfo(
-          containerId,
-          'running',
-          process.env.DOCKER_HOST
-            ? { dockerHost: process.env.DOCKER_HOST }
-            : undefined
-        );
+        task.setContainerInfo(containerId, 'running', sandboxMetadata);
       } catch (error) {
         // If sandbox execution fails, restore the pre-restart task status.
         try {

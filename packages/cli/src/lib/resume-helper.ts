@@ -580,15 +580,15 @@ async function resumeTaskLocked(
       ),
     });
     const containerId = await sandbox.createAndStart();
+    const sandboxMetadata =
+      typeof sandbox.getSandboxMetadata === 'function'
+        ? sandbox.getSandboxMetadata()
+        : process.env.DOCKER_HOST
+          ? { dockerHost: process.env.DOCKER_HOST }
+          : undefined;
 
     // Update task metadata with new container ID
-    task.setContainerInfo(
-      containerId,
-      'running',
-      process.env.DOCKER_HOST
-        ? { dockerHost: process.env.DOCKER_HOST }
-        : undefined
-    );
+    task.setContainerInfo(containerId, 'running', sandboxMetadata);
     // Task already marked IN_PROGRESS before container creation (under lock)
 
     return { status: 'ok' };

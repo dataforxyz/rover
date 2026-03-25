@@ -9,16 +9,6 @@ const { mockTeardownServiceContainers, mockProjectConfigLoad } = vi.hoisted(
 );
 
 vi.mock('../service-containers.js', () => ({
-  buildServiceContainerContext: vi.fn(
-    (services: Array<{ name: string }>, taskId: number, iteration: number) => ({
-      networkName: `rover-services-${taskId}-${iteration}`,
-      containerNames: services.map(
-        service => `rover-svc-${taskId}-${iteration}-${service.name}`
-      ),
-      taskId,
-      iteration,
-    })
-  ),
   teardownServiceContainers: mockTeardownServiceContainers,
 }));
 
@@ -78,24 +68,32 @@ class TestSandbox extends Sandbox {
 describe('Sandbox service cleanup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockProjectConfigLoad.mockReturnValue({
-      services: [{ name: 'postgres' }, { name: 'redis' }],
-    });
+    mockProjectConfigLoad.mockReturnValue({ services: [] });
   });
 
-  it('tears down configured services during stop on a fresh sandbox instance', async () => {
+  it('tears down persisted services during stop on a fresh sandbox instance', async () => {
     const sandbox = new TestSandbox(
       {
         id: 12,
         iterations: 3,
       } as any,
       undefined,
-      { projectPath: '/repo' }
+      {
+        projectPath: '/repo',
+        sandboxMetadata: {
+          serviceContext: {
+            networkName: 'rover-services-12-3',
+            containerNames: ['rover-svc-12-3-postgres', 'rover-svc-12-3-redis'],
+            taskId: 12,
+            iteration: 3,
+          },
+        },
+      }
     );
 
     await sandbox.stopAndRemove();
 
-    expect(mockProjectConfigLoad).toHaveBeenCalledWith('/repo');
+    expect(mockProjectConfigLoad).not.toHaveBeenCalled();
     expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
       'docker',
       {
@@ -134,7 +132,15 @@ describe('Sandbox service cleanup', () => {
       undefined,
       {
         projectPath: '/repo',
-        sandboxMetadata: { dockerHost: 'tcp://remote:2375' },
+        sandboxMetadata: {
+          dockerHost: 'tcp://remote:2375',
+          serviceContext: {
+            networkName: 'rover-services-12-3',
+            containerNames: ['rover-svc-12-3-postgres'],
+            taskId: 12,
+            iteration: 3,
+          },
+        },
       }
     );
 
@@ -148,6 +154,42 @@ describe('Sandbox service cleanup', () => {
       expect.objectContaining({
         DOCKER_HOST: 'tcp://remote:2375',
       })
+    );
+  });
+
+  it('does not reconstruct service names from the current project config', async () => {
+    mockProjectConfigLoad.mockReturnValue({
+      services: [{ name: 'renamed-postgres' }],
+    });
+
+    const sandbox = new TestSandbox(
+      {
+        id: 12,
+        iterations: 3,
+      } as any,
+      undefined,
+      {
+        projectPath: '/repo',
+        sandboxMetadata: {
+          serviceContext: {
+            networkName: 'rover-services-12-3',
+            containerNames: ['rover-svc-12-3-postgres'],
+            taskId: 12,
+            iteration: 3,
+          },
+        },
+      }
+    );
+
+    await sandbox.stopGracefully();
+
+    expect(mockProjectConfigLoad).not.toHaveBeenCalled();
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+      'docker',
+      expect.objectContaining({
+        containerNames: ['rover-svc-12-3-postgres'],
+      }),
+      undefined
     );
   });
 
@@ -181,5 +223,34 @@ describe('Sandbox service cleanup', () => {
       undefined
     );
     expect((sandbox as any).serviceContext).toBeUndefined();
+  });
+
+  it('includes service context in persisted sandbox metadata', () => {
+    const sandbox = new TestSandbox(
+      {
+        id: 12,
+        iterations: 3,
+      } as any,
+      undefined,
+      {
+        sandboxMetadata: { dockerHost: 'tcp://remote:2375' },
+      }
+    );
+    (sandbox as any).serviceContext = {
+      networkName: 'rover-services-12-3',
+      containerNames: ['rover-svc-12-3-postgres'],
+      taskId: 12,
+      iteration: 3,
+    };
+
+    expect(sandbox.getSandboxMetadata()).toEqual({
+      dockerHost: 'tcp://remote:2375',
+      serviceContext: {
+        networkName: 'rover-services-12-3',
+        containerNames: ['rover-svc-12-3-postgres'],
+        taskId: 12,
+        iteration: 3,
+      },
+    });
   });
 });

@@ -530,6 +530,12 @@ const createTaskForAgent = async (
       ),
     });
     const containerId = await sandbox.createAndStart();
+    const sandboxMetadata =
+      typeof sandbox.getSandboxMetadata === 'function'
+        ? sandbox.getSandboxMetadata()
+        : process.env.DOCKER_HOST
+          ? { dockerHost: process.env.DOCKER_HOST }
+          : undefined;
 
     updateTaskMetadata(
       project,
@@ -538,9 +544,7 @@ const createTaskForAgent = async (
         containerId,
         executionStatus: 'running',
         runningAt: new Date().toISOString(),
-        sandboxMetadata: process.env.DOCKER_HOST
-          ? { dockerHost: process.env.DOCKER_HOST }
-          : undefined,
+        sandboxMetadata,
       },
       jsonMode
     );
