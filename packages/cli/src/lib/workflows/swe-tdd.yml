@@ -139,9 +139,9 @@ steps:
     type: command
     name: 'Persist Context'
     command: |
-      cat > /output/context.md <<'EOF'
+      cat > /output/context.md <<'ROVER_PERSIST_BLOCK'
       {{steps.context.outputs.context_markdown}}
-      EOF
+      ROVER_PERSIST_BLOCK
 
   - id: plan
     type: agent
@@ -230,9 +230,9 @@ steps:
     type: command
     name: 'Persist Plan'
     command: |
-      cat > /output/plan.md <<'EOF'
+      cat > /output/plan.md <<'ROVER_PERSIST_BLOCK'
       {{steps.plan.outputs.plan_markdown}}
-      EOF
+      ROVER_PERSIST_BLOCK
 
   - id: write_tests
     type: agent
@@ -304,9 +304,9 @@ steps:
     type: command
     name: 'Persist Test Changes'
     command: |
-      cat > /output/test_changes.md <<'EOF'
+      cat > /output/test_changes.md <<'ROVER_PERSIST_BLOCK'
       {{steps.write_tests.outputs.test_changes_markdown}}
-      EOF
+      ROVER_PERSIST_BLOCK
 
   - id: implement
     type: agent
@@ -390,9 +390,9 @@ steps:
     type: command
     name: 'Persist Changes'
     command: |
-      cat > /output/changes.md <<'EOF'
+      cat > /output/changes.md <<'ROVER_PERSIST_BLOCK'
       {{steps.implement.outputs.changes_markdown}}
-      EOF
+      ROVER_PERSIST_BLOCK
 
   - id: test_fix_loop
     type: loop
@@ -623,18 +623,18 @@ steps:
         name: 'Persist Review'
         if: steps.code_review.outputs.issues_found != false
         command: |
-          cat > /output/review.md <<'EOF'
+          cat > /output/review.md <<'ROVER_PERSIST_BLOCK'
           {{steps.code_review.outputs.review_markdown}}
-          EOF
+          ROVER_PERSIST_BLOCK
 
       - id: persist_review_fixes
         type: command
         name: 'Persist Review Fixes'
         if: steps.apply_fixes.outputs.fixes_applied == true
         command: |
-          cat > /output/review_fixes.md <<'EOF'
+          cat > /output/review_fixes.md <<'ROVER_PERSIST_BLOCK'
           {{steps.apply_fixes.outputs.review_fixes_markdown}}
-          EOF
+          ROVER_PERSIST_BLOCK
 
       - id: build_after_review
         type: command
@@ -787,6 +787,6 @@ steps:
     type: command
     name: 'Persist Summary'
     command: |
-      cat > /output/summary.md <<'EOF'
+      cat > /output/summary.md <<'ROVER_PERSIST_BLOCK'
       {{steps.summary.outputs.summary_markdown}}
-      EOF
+      ROVER_PERSIST_BLOCK
