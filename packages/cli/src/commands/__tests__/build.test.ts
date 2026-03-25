@@ -45,4 +45,36 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain('bash "/workspace/frontend/scripts/init.sh"');
     expect(script).toContain('bash "/workspace/backend/scripts/init.sh"');
   });
+
+  it('copies credentials before syncing child repositories for cache builds', () => {
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [],
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'git@github.com:dataforxyz/frontend.git',
+          packageManagers: ['npm'],
+        },
+      ],
+      mcps: [],
+    } as any);
+
+    const credentialInstallIndex = script.indexOf(
+      'sudo rover-agent-install $AGENT || true'
+    );
+    const repoSyncIndex = script.indexOf(
+      'Syncing external repositories for cache build'
+    );
+    const dependencyResolutionIndex = script.indexOf(
+      "cd '/workspace/frontend' && npm install 2>/dev/null || true"
+    );
+
+    expect(credentialInstallIndex).toBeGreaterThanOrEqual(0);
+    expect(repoSyncIndex).toBeGreaterThan(credentialInstallIndex);
+    expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
+  });
 });

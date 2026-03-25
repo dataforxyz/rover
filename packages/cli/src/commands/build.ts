@@ -288,11 +288,6 @@ ln -s "$BUILD_WORKSPACE" /workspace
 # Install languages, package managers, task managers
 ${installScripts.join('\n')}
 
-${generateProjectRepositorySyncSection(projectConfig)}
-
-${dependencyResolutionSection}
-
-${initScriptSection}
 echo "Installing agent CLI ($AGENT)..."
 sudo -E rover-agent install $AGENT || echo "Agent install failed (non-fatal for build)"
 sudo chown -R $(id -u):$(id -g) $HOME
@@ -303,6 +298,12 @@ sudo rover-agent-install $AGENT || true
 for _cred_dir in $HOME/.codex $HOME/.claude $HOME/.config/github-copilot $HOME/.gemini $HOME/.qwen $HOME/.opencode; do
   [ -d "$_cred_dir" ] && sudo chown -R $(id -u):$(id -g) "$_cred_dir"
 done
+
+${generateProjectRepositorySyncSection(projectConfig)}
+
+${dependencyResolutionSection}
+
+${initScriptSection}
 
 ${mcpSection}
 
