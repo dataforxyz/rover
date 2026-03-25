@@ -302,6 +302,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
 
     telemetry?.eventPushBranch();
 
+    const pushedTargets: string[] = [];
     for (const target of pushTargets) {
       const pushSpinner = !options.json
         ? yoctoSpinner({
@@ -313,6 +314,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
           worktreePath: target.worktreePath,
         });
         result.pushed = true;
+        pushedTargets.push(target.label);
         pushSpinner?.success(`Pushed ${target.label}`);
       } catch (error: unknown) {
         const errorMessage =
@@ -328,15 +330,30 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
               worktreePath: target.worktreePath,
             });
             result.pushed = true;
+            pushedTargets.push(target.label);
             pushSpinner?.success(`Pushed ${target.label}`);
           } catch (retryError: unknown) {
             pushSpinner?.error(`Failed to push ${target.label}`);
+            if (pushedTargets.length > 0 && !isJsonMode()) {
+              console.log(
+                colors.yellow(
+                  `⚠ Already pushed: ${pushedTargets.join(', ')}. These were NOT rolled back.`
+                )
+              );
+            }
             result.error = `Failed to push ${target.label}: ${retryError instanceof Error ? retryError.message : String(retryError)}`;
             await exitWithError(result, { telemetry });
             return;
           }
         } else {
           pushSpinner?.error(`Failed to push ${target.label}`);
+          if (pushedTargets.length > 0 && !isJsonMode()) {
+            console.log(
+              colors.yellow(
+                `⚠ Already pushed: ${pushedTargets.join(', ')}. These were NOT rolled back.`
+              )
+            );
+          }
           result.error = `Failed to push ${target.label}: ${errorMessage}`;
           await exitWithError(result, { telemetry });
           return;

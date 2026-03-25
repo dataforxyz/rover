@@ -327,6 +327,7 @@ export const rebaseCommand = async (
 
     try {
       let finalCommitMessage: string | undefined;
+      const rebasedTargets: string[] = [];
 
       // Commit worktree changes if needed
       if (hasWorktreeChanges) {
@@ -375,6 +376,13 @@ export const rebaseCommand = async (
           } catch (error) {
             jsonOutput.committed = false;
             spinner?.error('Failed to commit changes');
+            if (rebasedTargets.length > 0 && !isJsonMode()) {
+              console.log(
+                colors.yellow(
+                  `⚠ Already rebased: ${rebasedTargets.join(', ')}. These were NOT rolled back.`
+                )
+              );
+            }
             jsonOutput.error = `Failed to add and commit changes in ${target.label}`;
             await exitWithError(jsonOutput, { telemetry });
             return;
@@ -393,6 +401,7 @@ export const rebaseCommand = async (
 
         if (rebaseResult.success) {
           jsonOutput.rebased = true;
+          rebasedTargets.push(target.label);
           continue;
         }
 
@@ -532,6 +541,13 @@ export const rebaseCommand = async (
           // Other rebase error, not conflicts — abort to restore worktree
           git.abortRebase({ worktreePath: target.worktreePath });
           if (spinner) spinner.error('Rebase failed');
+          if (rebasedTargets.length > 0 && !isJsonMode()) {
+            console.log(
+              colors.yellow(
+                `⚠ Already rebased: ${rebasedTargets.join(', ')}. These were NOT rolled back.`
+              )
+            );
+          }
           jsonOutput.error =
             rebaseResult.error ||
             `Rebase failed with an unknown error in ${target.label}`;
