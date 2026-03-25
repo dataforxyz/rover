@@ -44,6 +44,8 @@ interface PushTarget {
   currentBranch: string;
   worktreePath: string;
   remoteUrl: string;
+  hasLocalChanges: boolean;
+  hasUnpushedCommits: boolean;
 }
 
 /**
@@ -205,6 +207,8 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         }),
         worktreePath: task.worktreePath,
         remoteUrl: git.remoteUrl({ worktreePath: task.worktreePath }),
+        hasLocalChanges: false,
+        hasUnpushedCommits: false,
       },
       ...getWorkspaceRepositories(task.worktreePath, projectConfig)
         .filter(repo => existsSync(join(repo.worktreePath, '.git')))
@@ -216,10 +220,43 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
             'unknown',
           worktreePath: repo.worktreePath,
           remoteUrl: git.remoteUrl({ worktreePath: repo.worktreePath }),
+          hasLocalChanges: false,
+          hasUnpushedCommits: false,
         })),
     ];
 
     for (const target of pushTargets) {
+      target.hasLocalChanges =
+        git.uncommittedChanges({
+          worktreePath: target.worktreePath,
+        }).length > 0;
+
+      const hasTaskBranch =
+        target.currentBranch === target.branchName ||
+        git.branchExists(target.branchName, {
+          worktreePath: target.worktreePath,
+        });
+
+      if (!hasTaskBranch) {
+        target.hasUnpushedCommits = false;
+        continue;
+      }
+
+      try {
+        target.hasUnpushedCommits = git.hasUnmergedCommits(target.branchName, {
+          targetBranch: `origin/${target.branchName}`,
+          worktreePath: target.worktreePath,
+        });
+      } catch {
+        target.hasUnpushedCommits = true;
+      }
+    }
+
+    const actionableTargets = pushTargets.filter(
+      target => target.hasLocalChanges || target.hasUnpushedCommits
+    );
+
+    for (const target of actionableTargets) {
       if (target.currentBranch === target.branchName) {
         continue;
       }
@@ -236,23 +273,12 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       }
     }
 
-    const hasAnyLocalChanges = pushTargets.some(target => {
-      const changes = git.uncommittedChanges({
-        worktreePath: target.worktreePath,
-      });
-      return changes.length > 0;
-    });
-
-    const hasAnyUnpushedCommits = pushTargets.some(target => {
-      try {
-        return git.hasUnmergedCommits(target.branchName, {
-          targetBranch: `origin/${target.branchName}`,
-          worktreePath: target.worktreePath,
-        });
-      } catch {
-        return true;
-      }
-    });
+    const hasAnyLocalChanges = actionableTargets.some(
+      target => target.hasLocalChanges
+    );
+    const hasAnyUnpushedCommits = actionableTargets.some(
+      target => target.hasUnpushedCommits
+    );
 
     result.hasChanges = hasAnyLocalChanges;
 
@@ -294,11 +320,8 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       }
 
       result.commitMessage = commitMessage;
-      for (const target of pushTargets) {
-        const hasLocalChanges =
-          git.uncommittedChanges({ worktreePath: target.worktreePath }).length >
-          0;
-        if (!hasLocalChanges) {
+      for (const target of actionableTargets) {
+        if (!target.hasLocalChanges) {
           continue;
         }
 
@@ -325,7 +348,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
     telemetry?.eventPushBranch();
 
     const pushedTargets: string[] = [];
-    for (const target of pushTargets) {
+    for (const target of actionableTargets) {
       const pushSpinner = !options.json
         ? yoctoSpinner({
             text: `Pushing ${target.branchName} from ${target.label}...`,
