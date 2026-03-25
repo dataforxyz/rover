@@ -12,6 +12,7 @@ import { getProjectPath, isJsonMode } from '../lib/context.js';
 import { getAvailableSandboxBackend } from '../lib/sandbox/index.js';
 import {
   ContainerBackend,
+  normalizeExtraArgs,
   resolveAgentImage,
 } from '../lib/sandbox/container-common.js';
 import {
@@ -26,8 +27,7 @@ import { exitWithError, exitWithSuccess } from '../utils/exit.js';
 import type { CommandDefinition } from '../types.js';
 import type { BuildOutput } from '../output-types.js';
 import { getTelemetry } from '../lib/telemetry.js';
-import { getUserAIAgent } from '../lib/agents/index.js';
-import { getAIAgentTool } from '../lib/agents/index.js';
+import { getUserAIAgent, getAIAgentTool } from '../lib/agents/index.js';
 
 // Language packages
 import { JavaScriptSandboxPackage } from '../lib/sandbox/languages/javascript.js';
@@ -461,7 +461,7 @@ const buildCommand = async (
     // (languages, package caches) is baked into the committed image rather
     // than going into named volumes that docker commit ignores.
     // This way the cache image is self-contained and works without volumes.
-    const configExtraArgs = projectConfig.sandboxExtraArgs ?? [];
+    const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);
     for (let i = 0; i < configExtraArgs.length; i++) {
       const arg = configExtraArgs[i];
       if (arg === '-v' || arg === '--volume') {
