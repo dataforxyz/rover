@@ -189,6 +189,58 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
   });
 
+  it('resolves project dependencies on non-cached startup after syncing repositories', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      packageManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+          packageManagers: ['npm'],
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    const repoSyncIndex = script.indexOf('Syncing external repositories');
+    const dependencyResolutionIndex = script.indexOf(
+      "cd '/workspace/frontend' && npm install 2>/dev/null || true"
+    );
+
+    expect(repoSyncIndex).toBeGreaterThanOrEqual(0);
+    expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
+  });
+
   it('includes repository metadata in workspace description', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);

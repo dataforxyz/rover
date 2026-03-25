@@ -281,11 +281,9 @@ git config --system --add safe.directory '*' 2>/dev/null || true`;
     // which can't be done during image build (/workspace is read-only).
     // Resolve deps here since /workspace is now read-write.
     let workspaceDeps = '';
-    if (useCachedImage) {
-      const depCmds = this.getDependencyResolutionCommands();
-      if (depCmds.length > 0) {
-        workspaceDeps = depCmds.join('\n');
-      }
+    const depCmds = this.getDependencyResolutionCommands();
+    if (depCmds.length > 0) {
+      workspaceDeps = depCmds.join('\n');
     }
 
     // --- package installation ---
