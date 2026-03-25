@@ -118,7 +118,7 @@ describe('SubProjectSchema', () => {
 
 describe('ProjectConfigSchema with projects', () => {
   const baseConfig = {
-    version: '1.4',
+    version: '1.5',
     languages: ['typescript'] as const,
     mcps: [],
     packageManagers: ['pnpm'] as const,
