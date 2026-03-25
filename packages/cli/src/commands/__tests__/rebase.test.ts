@@ -275,10 +275,13 @@ describe('rebase command', () => {
       force: true,
     });
 
-    expect(mockLaunchSync).toHaveBeenCalledWith(
-      'git',
-      ['-C', '/tmp/task-1/frontend', 'fetch', 'origin', 'v1.2.3']
-    );
+    expect(mockLaunchSync).toHaveBeenCalledWith('git', [
+      '-C',
+      '/tmp/task-1/frontend',
+      'fetch',
+      'origin',
+      'v1.2.3',
+    ]);
     expect(mockLaunchSync).toHaveBeenCalledWith(
       'git',
       [
