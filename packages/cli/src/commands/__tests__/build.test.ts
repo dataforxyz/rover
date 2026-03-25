@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { generateBuildEntrypoint } from '../build.js';
 
 describe('generateBuildEntrypoint', () => {
-  it('uses staged child repos and runs root plus project init scripts during cache builds', () => {
+  it('clones child repos and runs root plus project init scripts during cache builds', () => {
     const script = generateBuildEntrypoint('claude', {
       allLanguages: [],
       allPackageManagers: [],
@@ -28,20 +28,19 @@ describe('generateBuildEntrypoint', () => {
     } as any);
 
     expect(script).toContain('cp -a /workspace-src/. "$BUILD_WORKSPACE/"');
+    expect(script).toContain('Syncing external repositories for cache build');
     expect(script).toContain(
-      'Validating external repositories for cache build'
+      "git clone 'https://github.com/dataforxyz/frontend.git' '/workspace/frontend'"
     );
     expect(script).toContain(
-      "Missing child repository 'frontend' at '/workspace/frontend' in the staged build workspace"
+      "git clone 'https://github.com/dataforxyz/backend.git' '/workspace/backend'"
     );
     expect(script).toContain(
-      "Missing child repository 'backend' at '/workspace/backend' in the staged build workspace"
+      "git -C '/workspace/frontend' fetch --all --tags --prune"
     );
     expect(script).toContain(
-      'rover build does not clone child repositories from project.repository.'
+      "git -C '/workspace/backend' fetch --all --tags --prune"
     );
-    expect(script).not.toContain('git clone');
-    expect(script).not.toContain('git fetch');
     expect(script).toContain('bash "/workspace/scripts/system-init.sh"');
     expect(script).toContain('bash "/workspace/frontend/scripts/init.sh"');
     expect(script).toContain('bash "/workspace/backend/scripts/init.sh"');

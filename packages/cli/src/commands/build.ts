@@ -119,23 +119,59 @@ function generateProjectRepositorySyncSection(
     const targetPath = `/workspace/${project.path}`;
     const escapedName = shellEscape(project.name);
     const escapedPath = shellEscape(targetPath);
+    const escapedRepository = shellEscape(project.repository!);
+    const escapedRef = project.ref ? shellEscape(project.ref) : '';
 
-    return `echo "📥 Validating local child repository ${escapedName} for build cache"
-if [ ! -d ${escapedPath} ]; then
-  echo "❌ Missing child repository ${escapedName} at ${escapedPath} in the staged build workspace"
-  echo "   rover build does not clone child repositories from project.repository."
-  echo "   Make sure ${escapedName} is already materialized under ${escapedPath} before building the cache image."
+    const checkoutRef = project.ref
+      ? `
+echo "🔀 Checking out ${escapedRef} for ${escapedName}"
+if git -C ${escapedPath} rev-parse --verify refs/remotes/origin/${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout -B ${escapedRef} refs/remotes/origin/${escapedRef}
+elif git -C ${escapedPath} rev-parse --verify ${escapedRef} >/dev/null 2>&1; then
+  git -C ${escapedPath} checkout --detach ${escapedRef}
+else
+  echo "❌ Could not resolve ref ${escapedRef} in ${escapedName}"
   safe_exit 1
 fi
-echo "✅ Local child repository ${escapedName} is present for build caching"`;
+`
+      : `
+default_remote_ref=$(git -C ${escapedPath} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+if [ -z "$default_remote_ref" ]; then
+  echo "❌ Could not determine default remote branch for ${escapedName}"
+  safe_exit 1
+fi
+default_branch="\${default_remote_ref#origin/}"
+echo "🔀 Checking out default branch $default_branch for ${escapedName}"
+git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"
+`;
+
+    return `echo "📥 Syncing child repository ${escapedName} for build cache"
+mkdir -p "$(dirname ${escapedPath})"
+if [ ! -d ${escapedPath}/.git ]; then
+  rm -rf ${escapedPath}
+  git clone ${escapedRepository} ${escapedPath}
+else
+  current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
+  if [ "$current_origin" != ${escapedRepository} ]; then
+    echo "❌ Existing repository at ${escapedPath} points to a different origin"
+    safe_exit 1
+  fi
+fi
+if ! git -C ${escapedPath} fetch --all --tags --prune; then
+  echo "❌ Failed to fetch repository ${escapedName}"
+  safe_exit 1
+fi
+${checkoutRef}
+git -C ${escapedPath} reset --hard HEAD
+git -C ${escapedPath} clean -fd
+echo "✅ Repository ${escapedName} is ready for build caching"`;
   });
 
   return `
-# Validate external project repositories are already present in the staged
-# workspace so multi-repo dependency setup can be baked into the cache image
-# without requiring build-time Git credentials.
+# Materialize external project repositories into the staged workspace so
+# multi-repo dependency setup can be baked into the cache image.
 echo -e "\\n======================================="
-echo "📥 Validating external repositories for cache build"
+echo "📥 Syncing external repositories for cache build"
 echo "======================================="
 ${syncBlocks.join('\n')}
 `;
