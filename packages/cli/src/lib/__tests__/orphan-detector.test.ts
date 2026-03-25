@@ -157,6 +157,32 @@ describe('detectOrphanedTasks', () => {
     expect(console.warn).toHaveBeenCalledTimes(1);
   });
 
+  it('does not tear down services when a resume lock appears after inspect returns null', async () => {
+    const task = mockTask(34, 'IN_PROGRESS', 'container-34');
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue(null),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
+    mockedCreateSandbox.mockResolvedValue(sandbox as any);
+    mockedExistsSync.mockImplementationOnce(() => false);
+    mockedExistsSync.mockImplementationOnce(() => false);
+    mockedExistsSync.mockImplementationOnce(() => false);
+    mockedExistsSync.mockImplementationOnce(() => true);
+    mockedReadFileSync.mockReturnValue('424242');
+    vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === 424242 && signal === 0) {
+        return true;
+      }
+      throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
+    });
+
+    await detectOrphanedTasks([{ task, project: mockProject() }]);
+
+    expect(sandbox.teardownServices).not.toHaveBeenCalled();
+    expect(task.markFailed).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
   it('does not mark task as FAILED when container inspect errors', async () => {
     const task = mockTask(19, 'IN_PROGRESS', 'container-19');
     const sandbox = {

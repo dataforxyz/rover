@@ -192,6 +192,36 @@ describe('service-containers', () => {
         undefined
       );
     });
+
+    it('reports partially started containers before failing mid-loop', async () => {
+      const onContainerStarted = vi.fn();
+      const services: ServiceContainer[] = [
+        { name: 'postgres', image: 'postgres:16', readyTimeout: 60 },
+        { name: 'redis', image: 'redis:7', readyTimeout: 60 },
+      ];
+
+      mockedLaunch
+        .mockResolvedValueOnce({ stdout: '' })
+        .mockResolvedValueOnce({ stdout: '' })
+        .mockRejectedValueOnce(new Error('name already in use'));
+
+      await expect(
+        startServiceContainers(
+          ContainerBackend.Docker,
+          services,
+          'net',
+          1,
+          1,
+          undefined,
+          onContainerStarted
+        )
+      ).rejects.toThrow('name already in use');
+
+      expect(onContainerStarted).toHaveBeenCalledTimes(1);
+      expect(onContainerStarted).toHaveBeenCalledWith([
+        'rover-svc-1-1-postgres',
+      ]);
+    });
   });
 
   describe('waitForServicesReady', () => {

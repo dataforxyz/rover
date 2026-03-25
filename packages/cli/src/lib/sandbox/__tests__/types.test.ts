@@ -157,6 +157,42 @@ describe('Sandbox service cleanup', () => {
     );
   });
 
+  it('does not tear down services when stopGracefully fails to stop the task container', async () => {
+    const sandbox = new TestSandbox(
+      {
+        id: 12,
+        iterations: 3,
+      } as any,
+      undefined,
+      {
+        sandboxMetadata: {
+          serviceContext: {
+            networkName: 'rover-services-12-3',
+            containerNames: ['rover-svc-12-3-postgres'],
+            taskId: 12,
+            iteration: 3,
+          },
+        },
+      }
+    );
+    vi.spyOn(sandbox as any, 'stop').mockRejectedValue(
+      new Error('stop failed')
+    );
+
+    await sandbox.stopGracefully();
+
+    expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
+    expect((sandbox as any).serviceContext).toBeUndefined();
+    expect(sandbox.getSandboxMetadata()).toEqual({
+      serviceContext: {
+        networkName: 'rover-services-12-3',
+        containerNames: ['rover-svc-12-3-postgres'],
+        taskId: 12,
+        iteration: 3,
+      },
+    });
+  });
+
   it('does not reconstruct service names from the current project config', async () => {
     mockProjectConfigLoad.mockReturnValue({
       services: [{ name: 'renamed-postgres' }],

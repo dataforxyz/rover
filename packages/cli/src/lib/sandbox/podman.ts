@@ -401,7 +401,16 @@ export class PodmanSandbox extends Sandbox {
           services,
           networkName,
           this.task.id,
-          this.task.iterations
+          this.task.iterations,
+          undefined,
+          startedContainerNames => {
+            this.serviceContext = {
+              networkName,
+              containerNames: startedContainerNames,
+              taskId: this.task.id,
+              iteration: this.task.iterations,
+            };
+          }
         );
         this.serviceContext = {
           networkName,
@@ -547,7 +556,16 @@ export class PodmanSandbox extends Sandbox {
           interactiveServices,
           networkName,
           this.task.id,
-          this.task.iterations
+          this.task.iterations,
+          undefined,
+          startedContainerNames => {
+            this.serviceContext = {
+              networkName,
+              containerNames: startedContainerNames,
+              taskId: this.task.id,
+              iteration: this.task.iterations,
+            };
+          }
         );
         this.serviceContext = {
           networkName,

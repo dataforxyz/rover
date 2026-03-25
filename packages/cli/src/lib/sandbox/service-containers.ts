@@ -76,7 +76,8 @@ export async function startServiceContainers(
   networkName: string,
   taskId: number,
   iteration: number,
-  env?: NodeJS.ProcessEnv
+  env?: NodeJS.ProcessEnv,
+  onContainerStarted?: (containerNames: string[]) => void
 ): Promise<string[]> {
   const opts = env ? { env } : undefined;
   const containerNames: string[] = [];
@@ -140,6 +141,7 @@ export async function startServiceContainers(
 
     await launch(backend, args, opts);
     await launch(backend, ['start', name], opts);
+    onContainerStarted?.([...containerNames]);
   }
 
   return containerNames;

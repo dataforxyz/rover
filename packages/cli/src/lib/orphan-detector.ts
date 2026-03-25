@@ -119,13 +119,13 @@ export async function detectOrphanedTasks(
         }
 
         if (!state) {
-          await sandbox.teardownServices();
           // Final lock re-check after inspect returned null — another
           // process may have acquired the lock and started a replacement
-          // container between inspect() returning and this check.
+          // container after inspect() returned.
           if (isResumeLockHeld(task)) {
             return;
           }
+          await sandbox.teardownServices();
           task.markFailed(CONTAINER_EXITED_ERROR);
           warn(
             colors.yellow(

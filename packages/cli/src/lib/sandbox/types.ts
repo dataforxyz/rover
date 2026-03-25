@@ -211,11 +211,13 @@ export abstract class Sandbox {
    */
   async stopGracefully(): Promise<string> {
     let sandboxId = '';
+    let stopped = false;
     this.processManager?.addItem(
       `Stopping sandbox (${this.backend}) | Name: ${this.sandboxName}`
     );
     try {
       sandboxId = await this.stop();
+      stopped = true;
       this.processManager?.completeLastItem();
     } catch (_err: any) {
       this.processManager?.failLastItem();
@@ -223,8 +225,10 @@ export abstract class Sandbox {
       this.processManager?.finish();
     }
 
-    // Tear down service containers when the task is paused/stopped
-    await this.teardownServicesIfConfigured();
+    // Only tear down sidecars after the task container has definitely stopped.
+    if (stopped) {
+      await this.teardownServicesIfConfigured();
+    }
 
     return sandboxId;
   }

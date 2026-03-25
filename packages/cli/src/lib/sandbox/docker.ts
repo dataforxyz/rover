@@ -401,7 +401,15 @@ export class DockerSandbox extends Sandbox {
           networkName,
           this.task.id,
           this.task.iterations,
-          dockerEnv
+          dockerEnv,
+          startedContainerNames => {
+            this.serviceContext = {
+              networkName,
+              containerNames: startedContainerNames,
+              taskId: this.task.id,
+              iteration: this.task.iterations,
+            };
+          }
         );
         this.serviceContext = {
           networkName,
@@ -550,7 +558,15 @@ export class DockerSandbox extends Sandbox {
           networkName,
           this.task.id,
           this.task.iterations,
-          dockerEnv
+          dockerEnv,
+          startedContainerNames => {
+            this.serviceContext = {
+              networkName,
+              containerNames: startedContainerNames,
+              taskId: this.task.id,
+              iteration: this.task.iterations,
+            };
+          }
         );
         this.serviceContext = {
           networkName,
