@@ -5,6 +5,7 @@ import enquirer from 'enquirer';
 import {
   AI_AGENT,
   Git,
+  launchSync,
   ProjectConfigManager,
   UserSettingsManager,
 } from 'rover-core';
@@ -89,6 +90,20 @@ interface RebaseTarget {
   worktreePath: string;
   baseBranch: string;
 }
+
+const resolveSubprojectRebaseBase = (
+  worktreePath: string,
+  baseBranch: string
+): string => {
+  const remoteTrackingRef = `refs/remotes/origin/${baseBranch}`;
+  const remoteRefResult = launchSync(
+    'git',
+    ['-C', worktreePath, 'show-ref', '--verify', '--quiet', remoteTrackingRef],
+    { reject: false }
+  );
+
+  return remoteRefResult.exitCode === 0 ? `origin/${baseBranch}` : baseBranch;
+};
 
 /**
  * Rebase a task's branch onto the current branch.
@@ -407,11 +422,40 @@ export const rebaseCommand = async (
       }
 
       for (const target of rebaseTargets) {
+        // Fetch the latest base branch from origin so sub-project repos
+        // rebase onto the current upstream state, not a stale local ref.
+        if (target.label !== 'root workspace') {
+          if (spinner) {
+            spinner.text = `Fetching ${target.baseBranch} in ${target.label}...`;
+          }
+          try {
+            launchSync('git', [
+              '-C',
+              target.worktreePath,
+              'fetch',
+              'origin',
+              target.baseBranch,
+            ]);
+          } catch {
+            // Best-effort: if fetch fails, continue with local ref
+          }
+        }
+
         if (spinner) {
           spinner.text = `Rebasing ${target.label} onto ${target.baseBranch}...`;
         }
 
-        const rebaseResult = git.rebaseBranch(target.baseBranch, {
+        // Sub-project repos track origin/<branch> when that remote-tracking ref
+        // exists, but tags/SHAs must rebase against the raw detached ref.
+        const rebaseOnto =
+          target.label !== 'root workspace'
+            ? resolveSubprojectRebaseBase(
+                target.worktreePath,
+                target.baseBranch
+              )
+            : target.baseBranch;
+
+        const rebaseResult = git.rebaseBranch(rebaseOnto, {
           worktreePath: target.worktreePath,
         });
 
