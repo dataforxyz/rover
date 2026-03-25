@@ -9,7 +9,7 @@ const {
   mockRequireProjectContext,
   mockGetWorkspaceRepositories,
   mockGetAIAgentTool,
-  mockLaunchSync,
+  mockRepoGitInstance,
 } = vi.hoisted(() => ({
   mockExitWithError: vi.fn(),
   mockExitWithSuccess: vi.fn(),
@@ -17,7 +17,9 @@ const {
   mockRequireProjectContext: vi.fn(),
   mockGetWorkspaceRepositories: vi.fn(),
   mockGetAIAgentTool: vi.fn(),
-  mockLaunchSync: vi.fn(),
+  mockRepoGitInstance: {
+    getMainBranch: vi.fn().mockReturnValue('develop'),
+  },
 }));
 
 const mockGitInstance = vi.hoisted(() => ({
@@ -25,6 +27,7 @@ const mockGitInstance = vi.hoisted(() => ({
   getCurrentBranch: vi.fn(({ worktreePath } = {}) =>
     worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
   ),
+  getMainBranch: vi.fn().mockReturnValue('main'),
   hasUncommittedChanges: vi.fn().mockReturnValue(false),
   getRecentCommits: vi.fn().mockReturnValue([]),
   rebaseBranch: vi.fn().mockReturnValue({ success: true }),
@@ -75,8 +78,9 @@ vi.mock('rover-core', () => ({
   AI_AGENT: {
     Claude: 'claude',
   },
-  Git: vi.fn(() => mockGitInstance),
-  launchSync: mockLaunchSync,
+  Git: vi.fn(({ cwd }: { cwd: string }) =>
+    cwd === '/tmp/task-1/frontend' ? mockRepoGitInstance : mockGitInstance
+  ),
   ProjectConfigManager: {
     load: vi.fn().mockReturnValue({
       attribution: true,
@@ -123,8 +127,8 @@ describe('rebase command', () => {
     mockExitWithSuccess.mockResolvedValue(undefined);
     mockGetWorkspaceRepositories.mockReturnValue([]);
     mockGetAIAgentTool.mockReturnValue({});
-    mockLaunchSync.mockReset();
-    mockLaunchSync.mockReturnValue({ exitCode: 0, stdout: '' });
+    mockRepoGitInstance.getMainBranch.mockClear();
+    mockRepoGitInstance.getMainBranch.mockReturnValue('develop');
     mockRequireProjectContext.mockResolvedValue({
       path: '/repo',
       getTask: vi.fn().mockReturnValue({
@@ -206,13 +210,9 @@ describe('rebase command', () => {
       worktreePath: '/tmp/task-1/frontend',
       createIfMissing: true,
     });
-    // Sub-project repos rebase onto origin/<base> after fetching
-    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith(
-      'origin/release/x',
-      {
-        worktreePath: '/tmp/task-1/frontend',
-      }
-    );
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('release/x', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
     expect(mockExitWithSuccess).toHaveBeenCalled();
   });
 
@@ -239,62 +239,37 @@ describe('rebase command', () => {
     expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('main', {
       worktreePath: '/tmp/task-1',
     });
-    // Sub-project repos rebase onto origin/<ref> after fetching
-    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith(
-      'origin/release/1.0',
-      {
-        worktreePath: '/tmp/task-1/frontend',
-      }
-    );
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('release/1.0', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
     expect(mockExitWithSuccess).toHaveBeenCalled();
   });
 
-  it('rebases detached workspace refs against the raw ref', async () => {
+  it('rebases workspace repositories without refs onto their own default branch', async () => {
     mockGetWorkspaceRepositories.mockReturnValue([
       {
         name: 'frontend',
         relativePath: 'frontend',
         worktreePath: '/tmp/task-1/frontend',
         repository: 'https://example.com/frontend.git',
-        ref: 'v1.2.3',
       },
     ]);
     mockGitInstance.getCurrentBranch.mockImplementation(
       ({ worktreePath } = {}) =>
-        worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
+        worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'release/root'
     );
-    mockLaunchSync.mockImplementation((_command, args) => {
-      if (Array.isArray(args) && args.includes('show-ref')) {
-        return { exitCode: 1, stdout: '' };
-      }
-      return { exitCode: 0, stdout: '' };
-    });
+    mockRepoGitInstance.getMainBranch.mockReturnValue('develop');
 
     await rebaseCommand('1', {
       json: true,
       force: true,
     });
 
-    expect(mockLaunchSync).toHaveBeenCalledWith('git', [
-      '-C',
-      '/tmp/task-1/frontend',
-      'fetch',
-      'origin',
-      'v1.2.3',
-    ]);
-    expect(mockLaunchSync).toHaveBeenCalledWith(
-      'git',
-      [
-        '-C',
-        '/tmp/task-1/frontend',
-        'show-ref',
-        '--verify',
-        '--quiet',
-        'refs/remotes/origin/v1.2.3',
-      ],
-      { reject: false }
-    );
-    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('v1.2.3', {
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('release/root', {
+      worktreePath: '/tmp/task-1',
+    });
+    expect(mockRepoGitInstance.getMainBranch).toHaveBeenCalled();
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('develop', {
       worktreePath: '/tmp/task-1/frontend',
     });
     expect(mockExitWithSuccess).toHaveBeenCalled();
