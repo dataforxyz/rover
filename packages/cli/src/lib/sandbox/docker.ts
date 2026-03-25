@@ -1,33 +1,46 @@
-import { getAIAgentTool } from '../agents/index.js';
-import { join } from 'node:path';
-import { ProjectConfigManager, TaskDescriptionManager } from 'rover-core';
-import { Sandbox, SandboxOptions } from './types.js';
-import { SetupBuilder } from '../setup.js';
-import { generateRandomId, launch, ProcessManager, VERBOSE } from 'rover-core';
 import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
+import { join } from 'node:path';
+import colors from 'ansi-colors';
+import {
+  generateRandomId,
+  launch,
+  ProcessManager,
+  ProjectConfigManager,
+  TaskDescriptionManager,
+  VERBOSE,
+} from 'rover-core';
+import { getAIAgentTool } from '../agents/index.js';
+import { isJsonMode } from '../context.js';
+import { mergeNetworkConfig } from '../network-config.js';
+import { SetupBuilder } from '../setup.js';
 import {
   ContainerBackend,
   getCheckpointArgs,
   getWorktreeGitMounts,
+  normalizeExtraArgs,
   resolveAgentImage,
   resolveInitScriptPath,
-  warnIfCustomImage,
   tmpUserGroupFiles,
-  normalizeExtraArgs,
+  warnIfCustomImage,
 } from './container-common.js';
 import {
   checkImageCache,
   waitForInitAndCommit,
 } from './container-image-cache.js';
 import {
-  getDownloadCacheMounts,
   ensureDownloadCacheVolumes,
+  getDownloadCacheMounts,
 } from './download-cache.js';
 import { isContainerMissingInspectError } from './inspect-errors.js';
-import { mergeNetworkConfig } from '../network-config.js';
-import { isJsonMode } from '../context.js';
-import colors from 'ansi-colors';
+import {
+  createServiceNetwork,
+  getServiceNetworkArgs,
+  startServiceContainers,
+  teardownServiceContainers,
+  waitForServicesReady,
+} from './service-containers.js';
+import { Sandbox, SandboxOptions } from './types.js';
 import { validateSandboxWorktreePath } from './worktree-path.js';
 
 export class DockerSandbox extends Sandbox {
@@ -132,6 +145,13 @@ export class DockerSandbox extends Sandbox {
     }
 
     const dockerArgs = ['create', '--name', this.sandboxName];
+
+    // Attach to the service network if services are running
+    if (this.serviceContext) {
+      dockerArgs.push(
+        ...getServiceNetworkArgs(this.serviceContext.networkName)
+      );
+    }
 
     const rawUserInfo = userInfo();
     const userInfo_ = {
@@ -376,6 +396,58 @@ export class DockerSandbox extends Sandbox {
       this.cacheTag = undefined;
     }
 
+    // Start service containers before the task container (runtime only, not during cache builds)
+    const projectConfig = ProjectConfigManager.load(
+      this.options?.projectPath ?? process.cwd()
+    );
+    const services = projectConfig.services;
+    if (services && services.length > 0) {
+      this.processManager?.addItem('Starting service containers...');
+      const dockerEnv = this.getDockerEnv();
+      try {
+        const networkName = await createServiceNetwork(
+          ContainerBackend.Docker,
+          this.task.id,
+          this.task.iterations,
+          dockerEnv
+        );
+        const containerNames = await startServiceContainers(
+          ContainerBackend.Docker,
+          services,
+          networkName,
+          this.task.id,
+          this.task.iterations,
+          dockerEnv
+        );
+        this.serviceContext = {
+          networkName,
+          containerNames,
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
+        await waitForServicesReady(
+          ContainerBackend.Docker,
+          services,
+          containerNames,
+          dockerEnv
+        );
+        this.processManager?.completeLastItem();
+      } catch (err) {
+        this.processManager?.failLastItem();
+        // Best-effort cleanup of any partially started services
+        if (this.serviceContext) {
+          await teardownServiceContainers(
+            ContainerBackend.Docker,
+            this.serviceContext,
+            dockerEnv
+          );
+          this.serviceContext = undefined;
+        }
+        this.processManager?.finish();
+        throw err;
+      }
+    }
+
     // Cache-hit path (or phase 2 after init)
     let sandboxId = '';
     this.processManager?.addItem(
@@ -456,8 +528,47 @@ export class DockerSandbox extends Sandbox {
       projectConfig
     );
 
+    // Start service containers for interactive mode
+    const services = projectConfig.services;
+    if (services && services.length > 0 && !this.serviceContext) {
+      const dockerEnv = this.getDockerEnv();
+      const networkName = await createServiceNetwork(
+        ContainerBackend.Docker,
+        this.task.id,
+        this.task.iterations,
+        dockerEnv
+      );
+      const containerNames = await startServiceContainers(
+        ContainerBackend.Docker,
+        services,
+        networkName,
+        this.task.id,
+        this.task.iterations,
+        dockerEnv
+      );
+      this.serviceContext = {
+        networkName,
+        containerNames,
+        taskId: this.task.id,
+        iteration: this.task.iterations,
+      };
+      await waitForServicesReady(
+        ContainerBackend.Docker,
+        services,
+        containerNames,
+        dockerEnv
+      );
+    }
+
     const interactiveName = `${this.sandboxName}-i`;
     const dockerArgs = ['run', '--name', interactiveName, '-it', '--rm'];
+
+    // Attach to service network
+    if (this.serviceContext) {
+      dockerArgs.push(
+        ...getServiceNetworkArgs(this.serviceContext.networkName)
+      );
+    }
 
     const rawUserInfoInteractive = userInfo();
     const userInfo_ = {

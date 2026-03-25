@@ -105,6 +105,15 @@ export abstract class Sandbox {
       : ContainerBackend.Podman;
   }
 
+  protected getServiceEnvironment(): NodeJS.ProcessEnv | undefined {
+    const dockerHost = this.options?.sandboxMetadata?.dockerHost;
+    if (typeof dockerHost === 'string') {
+      return { ...process.env, DOCKER_HOST: dockerHost };
+    }
+
+    return undefined;
+  }
+
   async createAndStart(): Promise<string> {
     let sandboxId = '';
     this.processManager?.addItem(
@@ -151,7 +160,8 @@ export abstract class Sandbox {
     if (serviceContext) {
       await teardownServiceContainers(
         this.getContainerBackend(),
-        serviceContext
+        serviceContext,
+        this.getServiceEnvironment()
       );
       this.serviceContext = undefined;
     }
@@ -191,7 +201,8 @@ export abstract class Sandbox {
     if (serviceContext) {
       await teardownServiceContainers(
         this.getContainerBackend(),
-        serviceContext
+        serviceContext,
+        this.getServiceEnvironment()
       );
       this.serviceContext = undefined;
     }

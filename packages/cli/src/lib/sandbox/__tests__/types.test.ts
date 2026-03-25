@@ -92,12 +92,16 @@ describe('Sandbox service cleanup', () => {
     await sandbox.stopAndRemove();
 
     expect(mockProjectConfigLoad).toHaveBeenCalledWith('/repo');
-    expect(mockTeardownServiceContainers).toHaveBeenCalledWith('docker', {
-      networkName: 'rover-services-12-3',
-      containerNames: ['rover-svc-12-3-postgres', 'rover-svc-12-3-redis'],
-      taskId: 12,
-      iteration: 3,
-    });
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+      'docker',
+      {
+        networkName: 'rover-services-12-3',
+        containerNames: ['rover-svc-12-3-postgres', 'rover-svc-12-3-redis'],
+        taskId: 12,
+        iteration: 3,
+      },
+      undefined
+    );
   });
 
   it('skips teardown when no services are configured', async () => {
@@ -115,5 +119,31 @@ describe('Sandbox service cleanup', () => {
     await sandbox.stopGracefully();
 
     expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
+  });
+
+  it('forwards DOCKER_HOST when tearing down services', async () => {
+    const sandbox = new TestSandbox(
+      {
+        id: 12,
+        iterations: 3,
+      } as any,
+      undefined,
+      {
+        projectPath: '/repo',
+        sandboxMetadata: { dockerHost: 'tcp://remote:2375' },
+      }
+    );
+
+    await sandbox.stopGracefully();
+
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+      'docker',
+      expect.objectContaining({
+        networkName: 'rover-services-12-3',
+      }),
+      expect.objectContaining({
+        DOCKER_HOST: 'tcp://remote:2375',
+      })
+    );
   });
 });
