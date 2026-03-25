@@ -172,15 +172,26 @@ export async function waitForInitAndCommit(
       // Run a quick fixup container (without volumes) to set correct permissions.
       const fixupName = `${containerName}-fixup`;
       try {
-        await launch(backend, [
-          'run', '--name', fixupName,
-          '--entrypoint', '/bin/bash',
-          cacheTag,
-          '-c', 'chmod -R a+rwX /home/agent 2>/dev/null || true',
-        ], opts);
+        await launch(
+          backend,
+          [
+            'run',
+            '--name',
+            fixupName,
+            '--entrypoint',
+            '/bin/bash',
+            cacheTag,
+            '-c',
+            'chmod -R a+rwX /home/agent 2>/dev/null || true',
+          ],
+          opts
+        );
         const fixupCommitArgs = ['commit'];
         if (projectPath) {
-          fixupCommitArgs.push('--change', `LABEL rover.project.path=${projectPath}`);
+          fixupCommitArgs.push(
+            '--change',
+            `LABEL rover.project.path=${projectPath}`
+          );
         }
         if (agent) {
           fixupCommitArgs.push('--change', `LABEL rover.agent=${agent}`);
@@ -301,7 +312,9 @@ function hashMaterializedProjectContents(projectPath: string): string {
         }
 
         if (entry.isSymbolicLink()) {
-          hash.update(`symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`);
+          hash.update(
+            `symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`
+          );
         }
       }
     };

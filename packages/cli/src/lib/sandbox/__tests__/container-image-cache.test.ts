@@ -81,7 +81,9 @@ function hashDirectoryContents(dirPath: string): string {
       }
 
       if (entry.isSymbolicLink()) {
-        hash.update(`symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`);
+        hash.update(
+          `symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`
+        );
       }
     }
   };

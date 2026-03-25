@@ -217,8 +217,9 @@ describe('rebase command', () => {
         ref: 'release/1.0',
       },
     ]);
-    mockGitInstance.getCurrentBranch.mockImplementation(({ worktreePath } = {}) =>
-      worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      ({ worktreePath } = {}) =>
+        worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
     );
 
     await rebaseCommand('1', {

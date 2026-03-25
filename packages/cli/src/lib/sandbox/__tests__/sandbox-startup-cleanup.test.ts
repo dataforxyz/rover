@@ -22,7 +22,8 @@ vi.mock('../service-containers.js', () => ({
 }));
 
 vi.mock('rover-core', async () => {
-  const actual = await vi.importActual<typeof import('rover-core')>('rover-core');
+  const actual =
+    await vi.importActual<typeof import('rover-core')>('rover-core');
   return {
     ...actual,
     ProjectConfigManager: {
@@ -139,15 +140,12 @@ describe('sandbox startup cleanup', () => {
     await expect(sandbox.createAndStart()).rejects.toThrow(
       'podman create failed'
     );
-    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
-      'podman',
-      {
-        networkName: 'rover-services-1-1',
-        containerNames: ['rover-svc-1-1-postgres'],
-        taskId: 1,
-        iteration: 1,
-      }
-    );
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith('podman', {
+      networkName: 'rover-services-1-1',
+      containerNames: ['rover-svc-1-1-postgres'],
+      taskId: 1,
+      iteration: 1,
+    });
     expect((sandbox as any).serviceContext).toBeUndefined();
   });
 
