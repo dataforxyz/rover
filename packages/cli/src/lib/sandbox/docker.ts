@@ -411,6 +411,12 @@ export class DockerSandbox extends Sandbox {
           this.task.iterations,
           dockerEnv
         );
+        this.serviceContext = {
+          networkName,
+          containerNames: [],
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
         const containerNames = await startServiceContainers(
           ContainerBackend.Docker,
           services,
@@ -463,6 +469,18 @@ export class DockerSandbox extends Sandbox {
       this.processManager?.completeLastItem();
     } catch (err) {
       this.runTmpCleanups();
+      if (this.serviceContext) {
+        try {
+          await teardownServiceContainers(
+            ContainerBackend.Docker,
+            this.serviceContext,
+            this.getDockerEnv()
+          );
+        } catch {
+          // Don't mask the original sandbox startup error with cleanup failures.
+        }
+        this.serviceContext = undefined;
+      }
       this.processManager?.failLastItem();
       this.processManager?.finish();
       throw err;

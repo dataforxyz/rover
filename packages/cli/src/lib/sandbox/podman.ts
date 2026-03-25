@@ -29,6 +29,13 @@ import { mergeNetworkConfig } from '../network-config.js';
 import { isJsonMode } from '../context.js';
 import colors from 'ansi-colors';
 import { validateSandboxWorktreePath } from './worktree-path.js';
+import {
+  createServiceNetwork,
+  startServiceContainers,
+  waitForServicesReady,
+  getServiceNetworkArgs,
+  teardownServiceContainers,
+} from './service-containers.js';
 
 /**
  * Normalize UID/GID for environments that return -1 (e.g. Windows).
@@ -144,6 +151,13 @@ export class PodmanSandbox extends Sandbox {
     }
 
     const podmanArgs = ['create', '--name', this.sandboxName];
+
+    // Attach to the service network if services are running
+    if (this.serviceContext) {
+      podmanArgs.push(
+        ...getServiceNetworkArgs(this.serviceContext.networkName)
+      );
+    }
 
     const userInfo_ = normalizeUserInfo(userInfo());
 
@@ -385,6 +399,58 @@ export class PodmanSandbox extends Sandbox {
       this.cacheTag = undefined;
     }
 
+    // Start service containers before the task container (runtime only, not during cache builds)
+    const projectConfig = ProjectConfigManager.load(
+      this.options?.projectPath ?? process.cwd()
+    );
+    const services = projectConfig.services;
+    if (services && services.length > 0) {
+      this.processManager?.addItem('Starting service containers...');
+      try {
+        const networkName = await createServiceNetwork(
+          ContainerBackend.Podman,
+          this.task.id,
+          this.task.iterations
+        );
+        this.serviceContext = {
+          networkName,
+          containerNames: [],
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
+        const containerNames = await startServiceContainers(
+          ContainerBackend.Podman,
+          services,
+          networkName,
+          this.task.id,
+          this.task.iterations
+        );
+        this.serviceContext = {
+          networkName,
+          containerNames,
+          taskId: this.task.id,
+          iteration: this.task.iterations,
+        };
+        await waitForServicesReady(
+          ContainerBackend.Podman,
+          services,
+          containerNames
+        );
+        this.processManager?.completeLastItem();
+      } catch (err) {
+        this.processManager?.failLastItem();
+        if (this.serviceContext) {
+          await teardownServiceContainers(
+            ContainerBackend.Podman,
+            this.serviceContext
+          );
+          this.serviceContext = undefined;
+        }
+        this.processManager?.finish();
+        throw err;
+      }
+    }
+
     // Cache-hit path (or phase 2 after init)
     let sandboxId = '';
     this.processManager?.addItem(
@@ -400,6 +466,17 @@ export class PodmanSandbox extends Sandbox {
       this.processManager?.completeLastItem();
     } catch (err) {
       this.runTmpCleanups();
+      if (this.serviceContext) {
+        try {
+          await teardownServiceContainers(
+            ContainerBackend.Podman,
+            this.serviceContext
+          );
+        } catch {
+          // Don't mask the original sandbox startup error with cleanup failures.
+        }
+        this.serviceContext = undefined;
+      }
       this.processManager?.failLastItem();
       this.processManager?.finish();
       throw err;
@@ -465,8 +542,47 @@ export class PodmanSandbox extends Sandbox {
       projectConfig
     );
 
+    // Start service containers for interactive mode
+    const interactiveServices = projectConfig.services;
+    if (
+      interactiveServices &&
+      interactiveServices.length > 0 &&
+      !this.serviceContext
+    ) {
+      const networkName = await createServiceNetwork(
+        ContainerBackend.Podman,
+        this.task.id,
+        this.task.iterations
+      );
+      const containerNames = await startServiceContainers(
+        ContainerBackend.Podman,
+        interactiveServices,
+        networkName,
+        this.task.id,
+        this.task.iterations
+      );
+      this.serviceContext = {
+        networkName,
+        containerNames,
+        taskId: this.task.id,
+        iteration: this.task.iterations,
+      };
+      await waitForServicesReady(
+        ContainerBackend.Podman,
+        interactiveServices,
+        containerNames
+      );
+    }
+
     const interactiveName = `${this.sandboxName}-i`;
     const podmanArgs = ['run', '--name', interactiveName, '-it', '--rm'];
+
+    // Attach to service network
+    if (this.serviceContext) {
+      podmanArgs.push(
+        ...getServiceNetworkArgs(this.serviceContext.networkName)
+      );
+    }
 
     const userInfo_ = normalizeUserInfo(userInfo());
 
