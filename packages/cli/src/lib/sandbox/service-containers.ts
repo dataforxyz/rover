@@ -208,6 +208,7 @@ export async function waitForServicesReady(
       );
     }
 
+    let healthy = false;
     while (Date.now() < deadline) {
       try {
         const result = await launch(
@@ -221,6 +222,7 @@ export async function waitForServicesReady(
           if (VERBOSE) {
             console.error(`[rover] service ${service.name} is healthy`);
           }
+          healthy = true;
           break;
         }
 
@@ -240,7 +242,7 @@ export async function waitForServicesReady(
       await sleep(2000);
     }
 
-    if (Date.now() >= deadline) {
+    if (!healthy) {
       throw new Error(
         `Service "${service.name}" did not become healthy within ${service.readyTimeout}s`
       );
