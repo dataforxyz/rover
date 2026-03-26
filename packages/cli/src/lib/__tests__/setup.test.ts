@@ -528,6 +528,54 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).not.toContain("/bin/sh '/workspace/scripts/root-init.sh'");
   });
 
+  it('filters unsafe project-scoped init-script paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [
+        { script: 'scripts/root-init.sh' },
+        { script: 'scripts/bad.sh', path: '../../escape' },
+        { script: 'scripts/frontend-init.sh', path: 'frontend' },
+      ],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(
+      true,
+      'entrypoint.sh',
+      true
+    );
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain('/workspace/frontend/scripts/frontend-init.sh');
+    expect(script).not.toContain('/workspace/../../escape');
+    expect(script).not.toContain('scripts/bad.sh');
+  });
+
   it('resolves dependencies for configured sub-project package managers', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);
@@ -688,6 +736,86 @@ describe('SetupBuilder multi-repo projects', () => {
         ref: 'release/1.0',
         languages: ['python'],
         packageManagers: ['uv'],
+      }),
+    ]);
+  });
+
+  it('filters unsafe workspace project paths from persisted metadata and config', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const iterationOnePath = join(root, 'iterations', '1');
+    mkdirSync(iterationOnePath, { recursive: true });
+    writeFileSync(
+      join(iterationOnePath, 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'unsafe',
+            path: '../../outside',
+            repository: 'https://github.com/dataforxyz/unsafe.git',
+          },
+          {
+            name: 'safe',
+            path: 'frontend',
+            repository: 'https://github.com/dataforxyz/frontend.git',
+          },
+        ],
+      })
+    );
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      branchName: 'task/1',
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '2'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'also-unsafe',
+          path: '/absolute',
+          repository: 'https://github.com/dataforxyz/absolute.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(
+      true,
+      'entrypoint.sh',
+      true
+    );
+    const script = readFileSync(entrypointPath, 'utf8');
+    const descPath = builder.generateWorkspaceDescription();
+    const description = JSON.parse(readFileSync(descPath!, 'utf8'));
+
+    expect(script).toContain('/workspace/frontend');
+    expect(script).not.toContain('../../outside');
+    expect(script).not.toContain('/workspace/../../outside');
+    expect(script).not.toContain('/workspace//absolute');
+    expect(description.projects).toEqual([
+      expect.objectContaining({
+        name: 'safe',
+        path: 'frontend',
       }),
     ]);
   });

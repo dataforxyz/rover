@@ -31,10 +31,10 @@ import colors from 'ansi-colors';
 import { validateSandboxWorktreePath } from './worktree-path.js';
 import {
   createServiceNetwork,
-  startServiceContainers,
-  waitForServicesReady,
   getServiceNetworkArgs,
+  startServiceContainers,
   teardownServiceContainers,
+  waitForServicesReady,
 } from './service-containers.js';
 
 /**
@@ -540,54 +540,10 @@ export class PodmanSandbox extends Sandbox {
     let startedInteractiveServices = false;
 
     try {
-      // Start service containers for interactive mode
-      const interactiveServices = projectConfig.services;
-      const existingServiceContext = this.resolveServiceContext();
-      if (
-        interactiveServices &&
-        interactiveServices.length > 0 &&
-        !existingServiceContext
-      ) {
-        const networkName = await createServiceNetwork(
-          ContainerBackend.Podman,
-          this.task.id,
-          this.task.iterations
-        );
-        this.serviceContext = {
-          networkName,
-          containerNames: [],
-          taskId: this.task.id,
-          iteration: this.task.iterations,
-        };
-        startedInteractiveServices = true;
-        const containerNames = await startServiceContainers(
-          ContainerBackend.Podman,
-          interactiveServices,
-          networkName,
-          this.task.id,
-          this.task.iterations,
-          undefined,
-          startedContainerNames => {
-            this.serviceContext = {
-              networkName,
-              containerNames: startedContainerNames,
-              taskId: this.task.id,
-              iteration: this.task.iterations,
-            };
-          }
-        );
-        this.serviceContext = {
-          networkName,
-          containerNames,
-          taskId: this.task.id,
-          iteration: this.task.iterations,
-        };
-        await waitForServicesReady(
-          ContainerBackend.Podman,
-          interactiveServices,
-          containerNames
-        );
-      }
+      const ensuredServiceContext = await this.ensureServiceContext(
+        projectConfig.services
+      );
+      startedInteractiveServices = ensuredServiceContext.started;
 
       const interactiveName = `${this.sandboxName}-i`;
       const podmanArgs = ['run', '--name', interactiveName, '-it', '--rm'];
@@ -845,6 +801,11 @@ export class PodmanSandbox extends Sandbox {
       '/bin/bash',
     ];
 
+    const ensuredServiceContext = await this.ensureServiceContext(
+      projectConfig.services
+    );
+    const startedShellServices = ensuredServiceContext.started;
+
     const serviceContext = this.resolveServiceContext();
     if (serviceContext) {
       podmanArgs.splice(
@@ -854,12 +815,26 @@ export class PodmanSandbox extends Sandbox {
       );
     }
 
-    // Start Podman container with direct stdio inheritance for true interactivity
-    // Use detached: false to ensure proper TTY signal handling and job control
-    return await launch('podman', podmanArgs, {
-      reject: false,
-      stdio: 'inherit', // This gives full control to the user
-      detached: false,
-    });
+    try {
+      // Start Podman container with direct stdio inheritance for true interactivity
+      // Use detached: false to ensure proper TTY signal handling and job control
+      return await launch('podman', podmanArgs, {
+        reject: false,
+        stdio: 'inherit', // This gives full control to the user
+        detached: false,
+      });
+    } finally {
+      if (startedShellServices && this.serviceContext) {
+        try {
+          await teardownServiceContainers(
+            ContainerBackend.Podman,
+            this.serviceContext
+          );
+        } catch {
+          // Shell exit status takes precedence over sidecar cleanup.
+        }
+        this.serviceContext = undefined;
+      }
+    }
   }
 }

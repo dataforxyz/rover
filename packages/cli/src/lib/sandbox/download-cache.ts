@@ -1,7 +1,9 @@
 import { launch, launchSync, ProjectConfigManager, VERBOSE } from 'rover-core';
+import type { Language, PackageManager } from 'rover-schemas';
 import { ContainerBackend } from './container-common.js';
 
 const VOLUME_PREFIX = 'rover-dlcache';
+type CacheTrigger = Language | PackageManager;
 
 interface DownloadCacheEntry {
   /** Docker/Podman named volume name */
@@ -21,7 +23,7 @@ interface DownloadCacheEntry {
  * re-downloading the same files from the network.
  */
 const CACHE_DEFINITIONS: Array<{
-  triggers: string[];
+  triggers: CacheTrigger[];
   volume: string;
   containerPath: string;
 }> = [

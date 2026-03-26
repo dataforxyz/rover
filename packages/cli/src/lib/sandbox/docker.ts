@@ -539,53 +539,10 @@ export class DockerSandbox extends Sandbox {
     let startedInteractiveServices = false;
 
     try {
-      // Start service containers for interactive mode
-      const services = projectConfig.services;
-      const existingServiceContext = this.resolveServiceContext();
-      if (services && services.length > 0 && !existingServiceContext) {
-        const dockerEnv = this.getDockerEnv();
-        const networkName = await createServiceNetwork(
-          ContainerBackend.Docker,
-          this.task.id,
-          this.task.iterations,
-          dockerEnv
-        );
-        this.serviceContext = {
-          networkName,
-          containerNames: [],
-          taskId: this.task.id,
-          iteration: this.task.iterations,
-        };
-        startedInteractiveServices = true;
-        const containerNames = await startServiceContainers(
-          ContainerBackend.Docker,
-          services,
-          networkName,
-          this.task.id,
-          this.task.iterations,
-          dockerEnv,
-          startedContainerNames => {
-            this.serviceContext = {
-              networkName,
-              containerNames: startedContainerNames,
-              taskId: this.task.id,
-              iteration: this.task.iterations,
-            };
-          }
-        );
-        this.serviceContext = {
-          networkName,
-          containerNames,
-          taskId: this.task.id,
-          iteration: this.task.iterations,
-        };
-        await waitForServicesReady(
-          ContainerBackend.Docker,
-          services,
-          containerNames,
-          dockerEnv
-        );
-      }
+      const ensuredServiceContext = await this.ensureServiceContext(
+        projectConfig.services
+      );
+      startedInteractiveServices = ensuredServiceContext.started;
 
       const interactiveName = `${this.sandboxName}-i`;
       const dockerArgs = ['run', '--name', interactiveName, '-it', '--rm'];
@@ -872,6 +829,11 @@ export class DockerSandbox extends Sandbox {
       '/bin/bash',
     ];
 
+    const ensuredServiceContext = await this.ensureServiceContext(
+      projectConfig.services
+    );
+    const startedShellServices = ensuredServiceContext.started;
+
     const serviceContext = this.resolveServiceContext();
     if (serviceContext) {
       dockerArgs.splice(
@@ -881,12 +843,27 @@ export class DockerSandbox extends Sandbox {
       );
     }
 
-    // Start Docker container with direct stdio inheritance for true interactivity
-    // Use detached: false to ensure proper TTY signal handling and job control
-    return await launch('docker', dockerArgs, {
-      reject: false,
-      stdio: 'inherit', // This gives full control to the user
-      detached: false,
-    });
+    try {
+      // Start Docker container with direct stdio inheritance for true interactivity
+      // Use detached: false to ensure proper TTY signal handling and job control
+      return await launch('docker', dockerArgs, {
+        reject: false,
+        stdio: 'inherit', // This gives full control to the user
+        detached: false,
+      });
+    } finally {
+      if (startedShellServices && this.serviceContext) {
+        try {
+          await teardownServiceContainers(
+            ContainerBackend.Docker,
+            this.serviceContext,
+            this.getDockerEnv()
+          );
+        } catch {
+          // Shell exit status takes precedence over sidecar cleanup.
+        }
+        this.serviceContext = undefined;
+      }
+    }
   }
 }

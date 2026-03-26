@@ -26,8 +26,8 @@ const {
 
 const mockGitInstance = vi.hoisted(() => ({
   isGitRepo: vi.fn().mockReturnValue(true),
-  getCurrentBranch: vi.fn(({ worktreePath } = {}) =>
-    worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+  getCurrentBranch: vi.fn((options?: { worktreePath?: string }): string =>
+    options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
   ),
   getMainBranch: vi.fn().mockReturnValue('main'),
   hasUncommittedChanges: vi.fn().mockReturnValue(false),
@@ -242,8 +242,10 @@ describe('rebase command', () => {
       },
     ]);
     mockGitInstance.getCurrentBranch.mockImplementation(
-      ({ worktreePath } = {}) =>
-        worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend'
+          ? 'task/1'
+          : 'main'
     );
 
     await rebaseCommand('1', {
@@ -280,8 +282,10 @@ describe('rebase command', () => {
       },
     ]);
     mockGitInstance.getCurrentBranch.mockImplementation(
-      ({ worktreePath } = {}) =>
-        worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'release/root'
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend'
+          ? 'task/1'
+          : 'release/root'
     );
     mockRepoGitInstance.getMainBranch.mockReturnValue('develop');
 

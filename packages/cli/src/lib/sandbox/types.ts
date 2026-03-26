@@ -11,9 +11,14 @@ import {
 import { AIAgentTool } from '../agents/index.js';
 import { ContainerBackend } from './container-common.js';
 import {
+  createServiceNetwork,
+  isServiceContainerContextAvailable,
+  startServiceContainers,
   type ServiceContainerContext,
   teardownServiceContainers,
+  waitForServicesReady,
 } from './service-containers.js';
+import type { ServiceContainer } from 'rover-schemas';
 
 const SERVICE_CONTEXT_METADATA_KEY = 'serviceContext';
 
@@ -150,6 +155,98 @@ export abstract class Sandbox {
     );
     this.serviceContext = undefined;
     this.servicesTornDown = true;
+  }
+
+  protected async ensureServiceContext(
+    services: ServiceContainer[] | undefined
+  ): Promise<{ started: boolean; serviceContext?: ServiceContainerContext }> {
+    if (!services || services.length === 0) {
+      return {
+        started: false,
+        serviceContext: this.resolveServiceContext(),
+      };
+    }
+
+    const env = this.getServiceEnvironment();
+    const existingServiceContext = this.resolveServiceContext();
+    if (existingServiceContext) {
+      const isAvailable = await isServiceContainerContextAvailable(
+        this.getContainerBackend(),
+        existingServiceContext,
+        env
+      );
+      if (isAvailable) {
+        return {
+          started: false,
+          serviceContext: existingServiceContext,
+        };
+      }
+
+      await teardownServiceContainers(
+        this.getContainerBackend(),
+        existingServiceContext,
+        env
+      );
+      this.serviceContext = undefined;
+    }
+
+    const networkName = await createServiceNetwork(
+      this.getContainerBackend(),
+      this.task.id,
+      this.task.iterations,
+      env
+    );
+    this.serviceContext = {
+      networkName,
+      containerNames: [],
+      taskId: this.task.id,
+      iteration: this.task.iterations,
+    };
+
+    try {
+      const containerNames = await startServiceContainers(
+        this.getContainerBackend(),
+        services,
+        networkName,
+        this.task.id,
+        this.task.iterations,
+        env,
+        startedContainerNames => {
+          this.serviceContext = {
+            networkName,
+            containerNames: startedContainerNames,
+            taskId: this.task.id,
+            iteration: this.task.iterations,
+          };
+        }
+      );
+      this.serviceContext = {
+        networkName,
+        containerNames,
+        taskId: this.task.id,
+        iteration: this.task.iterations,
+      };
+      await waitForServicesReady(
+        this.getContainerBackend(),
+        services,
+        containerNames,
+        env
+      );
+      return {
+        started: true,
+        serviceContext: this.serviceContext,
+      };
+    } catch (error) {
+      if (this.serviceContext) {
+        await teardownServiceContainers(
+          this.getContainerBackend(),
+          this.serviceContext,
+          env
+        );
+      }
+      this.serviceContext = undefined;
+      throw error;
+    }
   }
 
   async teardownServices(): Promise<void> {

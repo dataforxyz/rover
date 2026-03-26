@@ -9,6 +9,7 @@ const {
   mockCreateServiceNetwork,
   mockStartServiceContainers,
   mockWaitForServicesReady,
+  mockIsServiceContainerContextAvailable,
   mockTeardownServiceContainers,
   mockTmpUserGroupFiles,
   mockEnsureDownloadCacheVolumes,
@@ -21,6 +22,7 @@ const {
   mockCreateServiceNetwork: vi.fn(),
   mockStartServiceContainers: vi.fn(),
   mockWaitForServicesReady: vi.fn(),
+  mockIsServiceContainerContextAvailable: vi.fn(),
   mockTeardownServiceContainers: vi.fn(),
   mockTmpUserGroupFiles: vi.fn(),
   mockEnsureDownloadCacheVolumes: vi.fn(),
@@ -97,6 +99,7 @@ vi.mock('../container-common.js', () => ({
 vi.mock('../service-containers.js', () => ({
   createServiceNetwork: mockCreateServiceNetwork,
   getServiceNetworkArgs: mockGetServiceNetworkArgs,
+  isServiceContainerContextAvailable: mockIsServiceContainerContextAvailable,
   startServiceContainers: mockStartServiceContainers,
   teardownServiceContainers: mockTeardownServiceContainers,
   waitForServicesReady: mockWaitForServicesReady,
@@ -138,6 +141,7 @@ describe('interactive sandbox cleanup', () => {
       projectRoot: '/repo',
     });
     mockCreateServiceNetwork.mockResolvedValue('rover-services-1-1');
+    mockIsServiceContainerContextAvailable.mockResolvedValue(false);
     mockStartServiceContainers.mockResolvedValue(['rover-svc-1-1-postgres']);
     mockWaitForServicesReady.mockResolvedValue(undefined);
     mockTmpUserGroupFiles.mockResolvedValue({
@@ -221,15 +225,19 @@ describe('interactive sandbox cleanup', () => {
           taskId: 1,
           iteration: 1,
         },
-        expect.any(Object)
+        undefined
       );
     } else {
-      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(backend, {
-        networkName: 'rover-services-1-1',
-        containerNames: [],
-        taskId: 1,
-        iteration: 1,
-      });
+      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+        backend,
+        {
+          networkName: 'rover-services-1-1',
+          containerNames: [],
+          taskId: 1,
+          iteration: 1,
+        },
+        undefined
+      );
     }
     expect((sandbox as any).serviceContext).toBeUndefined();
   });
@@ -255,6 +263,8 @@ describe('interactive sandbox cleanup', () => {
     ['docker', DockerSandbox],
     ['podman', PodmanSandbox],
   ])('reuses persisted %s sidecars for interactive sessions', async (_label, SandboxCtor) => {
+    mockIsServiceContainerContextAvailable.mockResolvedValueOnce(true);
+
     const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
       projectPath: '/repo',
       sandboxMetadata: {
@@ -290,6 +300,8 @@ describe('interactive sandbox cleanup', () => {
     ['docker', DockerSandbox, 'docker'],
     ['podman', PodmanSandbox, 'podman'],
   ])('attaches %s workspace shells to the persisted service network', async (_label, SandboxCtor, backend) => {
+    mockIsServiceContainerContextAvailable.mockResolvedValueOnce(true);
+
     const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
       projectPath: '/repo',
       sandboxMetadata: {
@@ -321,5 +333,49 @@ describe('interactive sandbox cleanup', () => {
         stdio: 'inherit',
       })
     );
+  });
+
+  it.each([
+    ['docker', DockerSandbox, 'docker'],
+    ['podman', PodmanSandbox, 'podman'],
+  ])('recreates stale %s sidecars for workspace shells', async (_label, SandboxCtor, backend) => {
+    mockIsServiceContainerContextAvailable.mockResolvedValueOnce(false);
+
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    await sandbox.openShellAtWorktree();
+
+    if (backend === 'docker') {
+      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+        backend,
+        {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+        expect.any(Object)
+      );
+    } else {
+      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(backend, {
+        networkName: 'rover-services-1-1',
+        containerNames: ['rover-svc-1-1-postgres'],
+        taskId: 1,
+        iteration: 1,
+      });
+    }
+    expect(mockCreateServiceNetwork).toHaveBeenCalled();
+    expect(mockStartServiceContainers).toHaveBeenCalled();
+    expect(mockWaitForServicesReady).toHaveBeenCalled();
   });
 });

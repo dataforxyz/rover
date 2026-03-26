@@ -129,7 +129,8 @@ describe('shell command', () => {
   it.each([
     ['COMPLETED', (task: TaskDescriptionManager) => task.markCompleted()],
     ['FAILED', (task: TaskDescriptionManager) => task.markFailed('boom')],
-  ])('omits persisted serviceContext for %s tasks in container shells', async (_status, setTerminalStatus) => {
+    ['PAUSED', (task: TaskDescriptionManager) => task.markPaused('paused')],
+  ])('preserves sandbox metadata for %s tasks in container shells', async (_status, setTerminalStatus) => {
     const task = createTestTask(1, 'Terminal task');
     setTerminalStatus(task);
     task.setContainerInfo('container-1', 'running', {
@@ -152,6 +153,12 @@ describe('shell command', () => {
       projectPath: testDir,
       sandboxMetadata: {
         dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
       },
     });
   });

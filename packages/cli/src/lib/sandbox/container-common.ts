@@ -11,6 +11,10 @@ import {
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, UserInfo } from 'node:os';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../../utils/path-safety.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -131,16 +135,19 @@ export function resolveInitScriptPath(
     return rootRelative;
   }
 
-  if (projectPath) {
+  if (
+    projectPath &&
+    isSafeRelativePath(projectPath) &&
+    resolvePathWithinRoot(projectRoot, projectPath) !== null
+  ) {
     const projectRelative = join(projectRoot, projectPath, scriptPath);
     if (existsSync(projectRelative)) {
       return projectRelative;
     }
+    return projectRelative;
   }
 
-  return projectPath
-    ? join(projectRoot, projectPath, scriptPath)
-    : rootRelative;
+  return rootRelative;
 }
 
 /**

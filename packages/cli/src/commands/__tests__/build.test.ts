@@ -79,4 +79,35 @@ describe('generateBuildEntrypoint', () => {
     expect(repoSyncIndex).toBeGreaterThan(credentialInstallIndex);
     expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
   });
+
+  it('filters unsafe project and init-script paths from cache builds', () => {
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [
+        { script: 'scripts/system-init.sh' },
+        { path: '../../escape', script: 'scripts/bad.sh' },
+        { path: 'frontend', script: 'scripts/init.sh' },
+      ],
+      projects: [
+        {
+          name: 'unsafe',
+          path: '../../escape',
+          repository: 'https://github.com/dataforxyz/unsafe.git',
+        },
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+        },
+      ],
+      mcps: [],
+      projectRoot: '/repo',
+    } as any);
+
+    expect(script).toContain('/workspace/frontend');
+    expect(script).not.toContain('/workspace/../../escape');
+    expect(script).not.toContain('scripts/bad.sh');
+  });
 });

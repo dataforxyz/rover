@@ -14,33 +14,6 @@ import {
 } from '../lib/sandbox/index.js';
 import type { CommandDefinition } from '../types.js';
 
-function getShellSandboxMetadata(task: {
-  sandboxMetadata?: Record<string, unknown>;
-  isInProgress?: () => boolean;
-  isIterating?: () => boolean;
-  status?: string;
-}): Record<string, unknown> | undefined {
-  const metadata = task.sandboxMetadata;
-  if (!metadata) {
-    return undefined;
-  }
-
-  const shouldReuseServiceContext =
-    task.isInProgress?.() === true ||
-    task.isIterating?.() === true ||
-    task.status === 'IN_PROGRESS' ||
-    task.status === 'ITERATING';
-
-  if (shouldReuseServiceContext) {
-    return metadata;
-  }
-
-  const { serviceContext: _serviceContext, ...remainingMetadata } = metadata;
-  return Object.keys(remainingMetadata).length > 0
-    ? remainingMetadata
-    : undefined;
-}
-
 /**
  * Open an interactive shell in a task's workspace for manual testing.
  *
@@ -137,7 +110,7 @@ const shellCommand = async (
       try {
         const sandbox = await createSandbox(task, undefined, {
           projectPath: project.path,
-          sandboxMetadata: getShellSandboxMetadata(task),
+          sandboxMetadata: task.sandboxMetadata,
         });
 
         spinner.success('Shell started');

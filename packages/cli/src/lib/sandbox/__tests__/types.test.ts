@@ -9,7 +9,11 @@ const { mockTeardownServiceContainers, mockProjectConfigLoad } = vi.hoisted(
 );
 
 vi.mock('../service-containers.js', () => ({
+  createServiceNetwork: vi.fn(),
+  isServiceContainerContextAvailable: vi.fn(),
+  startServiceContainers: vi.fn(),
   teardownServiceContainers: mockTeardownServiceContainers,
+  waitForServicesReady: vi.fn(),
 }));
 
 vi.mock('rover-core', () => ({

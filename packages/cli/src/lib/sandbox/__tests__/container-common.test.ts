@@ -234,4 +234,15 @@ describe('resolveInitScriptPath', () => {
       rootScript
     );
   });
+
+  it('ignores unsafe project paths when resolving init scripts', () => {
+    const dir = createTmpDir();
+    mkdirSync(join(dir, 'scripts'), { recursive: true });
+    const rootScript = join(dir, 'scripts', 'setup.sh');
+    writeFileSync(rootScript, '#!/bin/sh\necho root\n');
+
+    expect(resolveInitScriptPath(dir, 'scripts/setup.sh', '../../escape')).toBe(
+      rootScript
+    );
+  });
 });

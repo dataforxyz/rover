@@ -7,6 +7,7 @@
  */
 
 import { shellEscape } from '../utils/shell.js';
+import { isSafeRelativePath } from '../utils/path-safety.js';
 
 interface DependencyLocation {
   path: string;
@@ -36,11 +37,13 @@ export function getDependencyResolutionCommands(
       packageManagers: config.rootPackageManagers,
       label: 'workspace root',
     },
-    ...(config.projects ?? []).map(project => ({
-      path: `/workspace/${project.path}`,
-      packageManagers: project.packageManagers ?? [],
-      label: project.path,
-    })),
+    ...(config.projects ?? [])
+      .filter(project => isSafeRelativePath(project.path))
+      .map(project => ({
+        path: `/workspace/${project.path}`,
+        packageManagers: project.packageManagers ?? [],
+        label: project.path,
+      })),
   ];
 
   for (const location of locations) {
@@ -53,7 +56,7 @@ export function getDependencyResolutionCommands(
         `  echo "📦 Resolving Python dependencies (uv) in ${location.label}..."`,
         `  cd ${quotedPath} && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true`
       );
-      if (config.addVenvPathExports) {
+      if (config.addVenvPathExports && location.path === '/workspace') {
         commands.push(
           `  if [ -d ${quotedPath}/.venv/bin ]; then`,
           `    export PATH="${location.path}/.venv/bin:$PATH"`,

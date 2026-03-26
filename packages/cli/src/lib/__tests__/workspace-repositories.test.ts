@@ -1,4 +1,10 @@
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  mkdirSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -281,6 +287,30 @@ describe('workspace-repositories', () => {
       expect(result).toHaveLength(0);
     });
 
+    it('rejects projects whose path escapes through a symlink in workspace description', () => {
+      const dir = makeTmpDir();
+      const outsideRepo = mkdtempSync(join(tmpdir(), 'rover-ws-outside-'));
+      testRoots.push(outsideRepo);
+      symlinkSync(outsideRepo, join(dir, 'services'));
+
+      const iterationDir = makeIterationDir(dir, 1);
+      writeFileSync(
+        join(iterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'escaped',
+              path: 'services/api',
+              repository: 'https://example.com/evil.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(dir);
+      expect(result).toEqual([]);
+    });
+
     it('rejects projects with path traversal in project config', () => {
       const dir = makeTmpDir();
       const config = {
@@ -301,6 +331,26 @@ describe('workspace-repositories', () => {
       const result = getConfiguredWorkspaceRepositories(dir, config);
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('safe');
+    });
+
+    it('rejects configured projects whose path escapes through a symlink', () => {
+      const dir = makeTmpDir();
+      const outsideRepo = mkdtempSync(join(tmpdir(), 'rover-ws-outside-'));
+      testRoots.push(outsideRepo);
+      symlinkSync(outsideRepo, join(dir, 'services'));
+
+      const config = {
+        projects: [
+          {
+            name: 'escaped',
+            path: 'services/api',
+            repository: 'https://example.com/evil.git',
+          },
+        ],
+      } as any;
+
+      const result = getConfiguredWorkspaceRepositories(dir, config);
+      expect(result).toEqual([]);
     });
   });
 

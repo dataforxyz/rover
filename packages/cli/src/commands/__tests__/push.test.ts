@@ -38,6 +38,9 @@ const mockGitInstance = vi.hoisted(() => ({
   push: vi.fn(),
   remoteUrl: vi.fn(),
   checkoutBranch: vi.fn(),
+  getCurrentBranch: vi.fn((options?: { worktreePath?: string }) =>
+    options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+  ),
 }));
 
 vi.mock('../../utils/exit.js', () => ({
@@ -127,9 +130,6 @@ describe('push command', () => {
     mockGitInstance.addAndCommit.mockReturnValue(undefined);
     mockGitInstance.push.mockReturnValue(undefined);
     mockGitInstance.remoteUrl.mockReturnValue('');
-    mockGitInstance.getCurrentBranch = vi.fn(({ worktreePath } = {}) =>
-      worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
-    );
     mockGetWorkspaceRepositories.mockReturnValue([]);
 
     const task = {
@@ -179,20 +179,20 @@ describe('push command', () => {
       },
     ]);
     mockGitInstance.getCurrentBranch.mockImplementation(
-      ({ worktreePath } = {}) =>
-        worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
     );
     mockGitInstance.uncommittedChanges.mockImplementation(
-      ({ worktreePath } = {}) =>
-        worktreePath === '/tmp/task-1/frontend' ? [' M src/app.ts'] : []
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? [' M src/app.ts'] : []
     );
     mockGitInstance.hasUnmergedCommits.mockImplementation(
-      (_branchName, { worktreePath } = {}) =>
-        worktreePath !== '/tmp/task-1/frontend'
+      (_branchName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
     );
     mockGitInstance.branchExists.mockImplementation(
-      (_branchName, { worktreePath } = {}) =>
-        worktreePath !== '/tmp/task-1/frontend'
+      (_branchName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
     );
 
     await pushCommandModule.action('1', { json: true });
@@ -219,15 +219,17 @@ describe('push command', () => {
       },
     ]);
     mockGitInstance.getCurrentBranch.mockImplementation(
-      ({ worktreePath } = {}) =>
-        worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
     );
     mockGitInstance.uncommittedChanges.mockReturnValue([]);
     mockGitInstance.hasUnmergedCommits.mockImplementation(
-      (_branchName, { worktreePath } = {}) => worktreePath === '/tmp/task-1'
+      (_branchName, options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1'
     );
     mockGitInstance.branchExists.mockImplementation(
-      (_branchName, { worktreePath } = {}) => worktreePath === '/tmp/task-1'
+      (_branchName, options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1'
     );
 
     await pushCommandModule.action('1', { json: true });

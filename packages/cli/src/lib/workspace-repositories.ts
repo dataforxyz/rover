@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { ProjectConfigManager } from 'rover-core';
+import { resolvePathWithinRoot } from '../utils/path-safety.js';
 
 export interface WorkspaceRepository {
   name: string;
@@ -19,19 +20,6 @@ interface WorkspaceDescriptionProject {
 
 interface WorkspaceDescription {
   projects?: WorkspaceDescriptionProject[];
-}
-
-/**
- * Validate that a project path stays within the task worktree root.
- * Rejects absolute paths and paths containing `..` traversal sequences.
- */
-function isPathWithinRoot(rootPath: string, projectPath: string): boolean {
-  if (isAbsolute(projectPath)) {
-    return false;
-  }
-  const resolved = resolve(rootPath, projectPath);
-  const rel = relative(rootPath, resolved);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 function getLatestIterationWorkspaceDescriptionPath(
@@ -85,15 +73,22 @@ function parseWorkspaceDescription(
           typeof project?.name === 'string' &&
           typeof project?.path === 'string' &&
           typeof project?.repository === 'string' &&
-          isPathWithinRoot(taskWorktreePath, project.path as string)
+          resolvePathWithinRoot(taskWorktreePath, project.path as string) !==
+            null
       )
-      .map(project => ({
-        name: project.name,
-        relativePath: project.path,
-        worktreePath: join(taskWorktreePath, project.path),
-        repository: project.repository,
-        ref: typeof project.ref === 'string' ? project.ref : undefined,
-      }));
+      .map(project => {
+        const resolvedPath = resolvePathWithinRoot(
+          taskWorktreePath,
+          project.path
+        );
+        return {
+          name: project.name,
+          relativePath: project.path,
+          worktreePath: resolvedPath ?? join(taskWorktreePath, project.path),
+          repository: project.repository,
+          ref: typeof project.ref === 'string' ? project.ref : undefined,
+        };
+      });
   } catch {
     return [];
   }
@@ -136,15 +131,21 @@ export function getConfiguredWorkspaceRepositories(
         typeof project.name === 'string' &&
         typeof project.path === 'string' &&
         typeof project.repository === 'string' &&
-        isPathWithinRoot(taskWorktreePath, project.path)
+        resolvePathWithinRoot(taskWorktreePath, project.path) !== null
     )
-    .map(project => ({
-      name: project.name,
-      relativePath: project.path,
-      worktreePath: join(taskWorktreePath, project.path),
-      repository: project.repository,
-      ref: project.ref,
-    }));
+    .map(project => {
+      const resolvedPath = resolvePathWithinRoot(
+        taskWorktreePath,
+        project.path
+      );
+      return {
+        name: project.name,
+        relativePath: project.path,
+        worktreePath: resolvedPath ?? join(taskWorktreePath, project.path),
+        repository: project.repository,
+        ref: project.ref,
+      };
+    });
 }
 
 export function getWorkspaceRepositories(

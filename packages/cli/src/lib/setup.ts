@@ -24,20 +24,9 @@ import { mergeNetworkConfig, generateNetworkScript } from './network-config.js';
 import { initWorkflowStore } from './workflow.js';
 import { getDependencyResolutionCommands } from './dependency-resolution.js';
 import { shellEscape } from '../utils/shell.js';
+import { isSafeRelativePath } from '../utils/path-safety.js';
 
 import { getPackagesFromConfig } from './sandbox/packages.js';
-
-function isSafeWorkspaceProjectPath(projectPath: string): boolean {
-  if (projectPath.startsWith('/') || projectPath.length === 0) {
-    return false;
-  }
-
-  const normalized = projectPath
-    .split('/')
-    .filter(segment => segment.length > 0);
-
-  return normalized.length > 0 && normalized.every(segment => segment !== '..');
-}
 
 /**
  * SetupBuilder class - Consolidates Docker setup script generation
@@ -124,7 +113,7 @@ export class SetupBuilder {
             ]
           : []
       )
-      .filter(project => isSafeWorkspaceProjectPath(project.path));
+      .filter(project => isSafeRelativePath(project.path));
   }
 
   private getPersistedWorkspaceProjects():
@@ -199,7 +188,7 @@ export class SetupBuilder {
                 ]
               : []
           )
-          .filter(project => isSafeWorkspaceProjectPath(project.path));
+          .filter(project => isSafeRelativePath(project.path));
       } catch {
         continue;
       }
@@ -452,7 +441,11 @@ echo -e "\\n📦 Done installing MCP servers"`;
     let initScriptExecution = '';
     const allInitScripts = this.projectConfig.allInitScripts;
     const executableInitScripts = allInitScripts.flatMap((entry, index) =>
-      useCachedImage && !entry.path ? [] : [{ entry, index }]
+      useCachedImage && !entry.path
+        ? []
+        : !entry.path || isSafeRelativePath(entry.path)
+          ? [{ entry, index }]
+          : []
     );
     if (executableInitScripts.length > 0) {
       const scriptBlocks: string[] = [];

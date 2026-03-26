@@ -57,6 +57,24 @@ describe('getDependencyResolutionCommands', () => {
     expect(joined).toContain('$HOME/.profile');
   });
 
+  it('does not export subproject uv environments onto the global PATH', () => {
+    const result = getDependencyResolutionCommands({
+      rootPackageManagers: [],
+      projects: [
+        { path: 'api', packageManagers: ['uv'] },
+        { path: 'worker', packageManagers: ['uv'] },
+      ],
+      addVenvPathExports: true,
+    });
+    const joined = result.join('\n');
+
+    expect(joined).toContain("cd '/workspace/api' && uv sync");
+    expect(joined).toContain("cd '/workspace/worker' && uv sync");
+    expect(joined).not.toContain('/workspace/api/.venv/bin:$PATH');
+    expect(joined).not.toContain('/workspace/worker/.venv/bin:$PATH');
+    expect(joined).not.toContain('$HOME/.profile');
+  });
+
   it('generates poetry commands', () => {
     const result = getDependencyResolutionCommands({
       rootPackageManagers: ['poetry'],
@@ -182,5 +200,21 @@ describe('getDependencyResolutionCommands', () => {
     expect(joined).not.toContain("'/workspace/it's-a-test'");
     expect(joined).toContain('it');
     expect(joined).toContain('npm');
+  });
+
+  it('filters unsafe project paths before generating dependency commands', () => {
+    const result = getDependencyResolutionCommands({
+      rootPackageManagers: [],
+      projects: [
+        { path: '../../escape', packageManagers: ['npm'] },
+        { path: '/absolute', packageManagers: ['pip'] },
+        { path: 'frontend', packageManagers: ['pnpm'] },
+      ],
+    });
+    const joined = result.join('\n');
+
+    expect(joined).toContain("'/workspace/frontend'");
+    expect(joined).not.toContain('/workspace/../../escape');
+    expect(joined).not.toContain('/workspace//absolute');
   });
 });

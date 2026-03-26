@@ -256,6 +256,34 @@ export function getServiceNetworkArgs(networkName: string): string[] {
   return ['--network', networkName];
 }
 
+export async function isServiceContainerContextAvailable(
+  backend: ContainerBackend,
+  context: ServiceContainerContext,
+  env?: NodeJS.ProcessEnv
+): Promise<boolean> {
+  const opts = env
+    ? { env, reject: false as const }
+    : { reject: false as const };
+
+  const networkInspect = await launch(
+    backend,
+    ['network', 'inspect', context.networkName],
+    opts
+  );
+  if (networkInspect.exitCode !== 0) {
+    return false;
+  }
+
+  for (const name of context.containerNames) {
+    const containerInspect = await launch(backend, ['inspect', name], opts);
+    if (containerInspect.exitCode !== 0) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Teardown
 // ---------------------------------------------------------------------------

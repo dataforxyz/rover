@@ -31,13 +31,23 @@ import { getUserAIAgent, getAIAgentTool } from '../lib/agents/index.js';
 
 import { getPackagesFromConfig } from '../lib/sandbox/packages.js';
 import { getDependencyResolutionCommands } from '../lib/dependency-resolution.js';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../utils/path-safety.js';
 import { shellEscape } from '../utils/shell.js';
 
 function generateProjectRepositorySyncSection(
   projectConfig: ProjectConfigManager
 ): string {
   const projectsWithRepositories = (projectConfig.projects || []).filter(
-    project => project.repository
+    project =>
+      project.repository &&
+      typeof project.path === 'string' &&
+      (typeof projectConfig.projectRoot !== 'string'
+        ? isSafeRelativePath(project.path)
+        : resolvePathWithinRoot(projectConfig.projectRoot, project.path) !==
+          null)
   );
 
   if (projectsWithRepositories.length === 0) {
@@ -134,18 +144,22 @@ function generateBuildEntrypoint(
   }
 
   const rootInitScripts = projectConfig.allInitScripts ?? [];
-  const initScriptBlocks = rootInitScripts.map(entry => {
-    const workspaceScript = entry.path
-      ? `/workspace/${entry.path}/${entry.script}`
-      : `/workspace/${entry.script}`;
-    const workspaceDir = entry.path ? `/workspace/${entry.path}` : '/workspace';
-    const label = entry.path ? ` (${entry.path})` : '';
+  const initScriptBlocks = rootInitScripts
+    .filter(entry => !entry.path || isSafeRelativePath(entry.path))
+    .map(entry => {
+      const workspaceScript = entry.path
+        ? `/workspace/${entry.path}/${entry.script}`
+        : `/workspace/${entry.script}`;
+      const workspaceDir = entry.path
+        ? `/workspace/${entry.path}`
+        : '/workspace';
+      const label = entry.path ? ` (${entry.path})` : '';
 
-    return `echo "🔧 Running initialization script${label}"
+      return `echo "🔧 Running initialization script${label}"
 cd ${JSON.stringify(workspaceDir)}
 bash ${JSON.stringify(workspaceScript)}
 echo "✅ Initialization script${label} completed successfully"`;
-  });
+    });
 
   const initScriptSection =
     initScriptBlocks.length > 0
