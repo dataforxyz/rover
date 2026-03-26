@@ -134,6 +134,7 @@ export class PodmanSandbox extends Sandbox {
     );
     const inputsPath = setupBuilder.generateInputs();
     const workflowPath = setupBuilder.saveWorkflow(this.task.workflowName);
+    const repositoryMounts = setupBuilder.getRepositoryMounts();
 
     // Get agent-specific container mounts
     const agent = getAIAgentTool(this.task.agent!);
@@ -215,6 +216,13 @@ export class PodmanSandbox extends Sandbox {
       '-v',
       `${iteration.fileDescriptionPath}:/task/description.json:Z,ro`
     );
+
+    for (const repositoryMount of repositoryMounts) {
+      podmanArgs.push(
+        '-v',
+        `${repositoryMount.hostPath}:${repositoryMount.containerPath}:Z,ro`
+      );
+    }
 
     // Mount context directory if available (read-only)
     const contextDir = join(iteration.iterationPath, 'context');
@@ -371,6 +379,9 @@ export class PodmanSandbox extends Sandbox {
         throw err;
       }
 
+      // Clean up Phase 1 temp files before entering Phase 2
+      this.runTmpCleanups();
+
       // Phase 2: create + start the real container from cached image
       this.initMode = false;
       this.shouldCommitCache = false;
@@ -477,6 +488,7 @@ export class PodmanSandbox extends Sandbox {
       'entrypoint-iterate.sh',
       hasCachedImage
     );
+    const repositoryMounts = setupBuilder.getRepositoryMounts();
     // Get agent-specific container mounts and environment variables
     const agent = getAIAgentTool(this.task.agent!);
     const containerMounts: string[] = agent.getContainerMounts();
@@ -547,6 +559,13 @@ export class PodmanSandbox extends Sandbox {
         `${entrypointScriptPath}:/entrypoint.sh:Z,ro`
       );
 
+      for (const repositoryMount of repositoryMounts) {
+        podmanArgs.push(
+          '-v',
+          `${repositoryMount.hostPath}:${repositoryMount.containerPath}:Z,ro`
+        );
+      }
+
       // Mount context directory if available (read-only)
       const contextDir = join(iteration.iterationPath, 'context');
       const hasContext = existsSync(contextDir);
@@ -616,6 +635,7 @@ export class PodmanSandbox extends Sandbox {
         detached: false,
       });
     } finally {
+      this.runTmpCleanups();
       if (startedInteractiveServices && this.serviceContext) {
         try {
           await teardownServiceContainers(
@@ -756,8 +776,14 @@ export class PodmanSandbox extends Sandbox {
 
     const serviceContext = this.resolveServiceContext();
     if (serviceContext) {
+      // Insert network args before the first '-v' flag so they don't land
+      // between '-v' and its volume argument. Using indexOf is resilient to
+      // extraArgs shifting earlier positions.
+      const volumeFlagIndex = podmanArgs.indexOf('-v');
+      const insertAt =
+        volumeFlagIndex !== -1 ? volumeFlagIndex : podmanArgs.length;
       podmanArgs.splice(
-        6,
+        insertAt,
         0,
         ...getServiceNetworkArgs(serviceContext.networkName)
       );

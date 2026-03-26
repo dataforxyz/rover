@@ -125,6 +125,7 @@ export class DockerSandbox extends Sandbox {
     );
     const inputsPath = setupBuilder.generateInputs();
     const workflowPath = setupBuilder.saveWorkflow(this.task.workflowName);
+    const repositoryMounts = setupBuilder.getRepositoryMounts();
 
     // Get agent-specific Docker mounts and environment variables
     const agent = getAIAgentTool(this.task.agent!);
@@ -210,6 +211,13 @@ export class DockerSandbox extends Sandbox {
       '-v',
       `${iteration.fileDescriptionPath}:/task/description.json:Z,ro`
     );
+
+    for (const repositoryMount of repositoryMounts) {
+      dockerArgs.push(
+        '-v',
+        `${repositoryMount.hostPath}:${repositoryMount.containerPath}:Z,ro`
+      );
+    }
 
     // Mount context directory if available (read-only)
     const contextDir = join(iteration.iterationPath, 'context');
@@ -364,6 +372,9 @@ export class DockerSandbox extends Sandbox {
         throw err;
       }
 
+      // Clean up Phase 1 temp files before entering Phase 2
+      this.runTmpCleanups();
+
       // Phase 2: create + start the real container from cached image
       this.initMode = false;
       this.shouldCommitCache = false;
@@ -471,6 +482,7 @@ export class DockerSandbox extends Sandbox {
       'entrypoint-iterate.sh',
       hasCachedImage
     );
+    const repositoryMounts = setupBuilder.getRepositoryMounts();
     // Get agent-specific Docker mounts and environment variables
     const agent = getAIAgentTool(this.task.agent!);
     const dockerMounts: string[] = agent.getContainerMounts();
@@ -548,6 +560,13 @@ export class DockerSandbox extends Sandbox {
         `${entrypointScriptPath}:/entrypoint.sh:Z,ro`
       );
 
+      for (const repositoryMount of repositoryMounts) {
+        dockerArgs.push(
+          '-v',
+          `${repositoryMount.hostPath}:${repositoryMount.containerPath}:Z,ro`
+        );
+      }
+
       // Mount context directory if available (read-only)
       const contextDir = join(iteration.iterationPath, 'context');
       const hasContext = existsSync(contextDir);
@@ -617,6 +636,7 @@ export class DockerSandbox extends Sandbox {
         detached: false,
       });
     } finally {
+      this.runTmpCleanups();
       if (startedInteractiveServices && this.serviceContext) {
         try {
           await teardownServiceContainers(
@@ -779,8 +799,14 @@ export class DockerSandbox extends Sandbox {
 
     const serviceContext = this.resolveServiceContext();
     if (serviceContext) {
+      // Insert network args before the first '-v' flag so they don't land
+      // between '-v' and its volume argument. Using indexOf is resilient to
+      // extraArgs shifting earlier positions.
+      const volumeFlagIndex = dockerArgs.indexOf('-v');
+      const insertAt =
+        volumeFlagIndex !== -1 ? volumeFlagIndex : dockerArgs.length;
       dockerArgs.splice(
-        6,
+        insertAt,
         0,
         ...getServiceNetworkArgs(serviceContext.networkName)
       );
