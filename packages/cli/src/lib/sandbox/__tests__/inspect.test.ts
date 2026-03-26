@@ -5,6 +5,7 @@ const {
   mockTeardownServiceContainers,
   mockGetServiceNetworkArgs,
   mockCheckImageCache,
+  mockGetRepositoryMounts,
 } = vi.hoisted(() => ({
   mockLaunch: vi.fn(),
   mockTeardownServiceContainers: vi.fn(),
@@ -13,6 +14,9 @@ const {
     hasCachedImage: true,
     cacheTag: 'rover-cache:test',
   })),
+  mockGetRepositoryMounts: vi.fn<
+    () => Array<{ hostPath: string; containerPath: string }>
+  >(() => []),
 }));
 
 vi.mock('rover-core', () => ({
@@ -62,6 +66,10 @@ vi.mock('../../setup.js', () => ({
 
     generateWorkspaceDescription() {
       return undefined;
+    }
+
+    getRepositoryMounts() {
+      return mockGetRepositoryMounts();
     }
   },
 }));
@@ -136,6 +144,7 @@ function createTaskFixture() {
 describe('sandbox inspect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetRepositoryMounts.mockReturnValue([]);
   });
 
   it.each([
@@ -308,6 +317,36 @@ describe('sandbox inspect', () => {
         'rover-task-1-1',
         '--network',
         'rover-services-1-1',
+      ])
+    );
+  });
+
+  it.each([
+    ['docker', DockerSandbox, 'docker'],
+    ['podman', PodmanSandbox, 'podman'],
+  ])('mounts local workspace repositories into %s task containers', async (_label, SandboxCtor, backend) => {
+    mockGetRepositoryMounts.mockReturnValue([
+      {
+        hostPath: '/repo/repos/frontend.git',
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+    });
+
+    mockLaunch
+      .mockResolvedValueOnce({ stdout: '' })
+      .mockResolvedValueOnce({ stdout: 'container-1' });
+
+    await expect((sandbox as any).create()).resolves.toBe('container-1');
+
+    expect(mockLaunch.mock.calls[1]?.[0]).toBe(backend);
+    expect(mockLaunch.mock.calls[1]?.[1]).toEqual(
+      expect.arrayContaining([
+        '-v',
+        '/repo/repos/frontend.git:/workspace-repos/0:Z,ro',
       ])
     );
   });

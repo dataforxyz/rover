@@ -182,17 +182,23 @@ describe('SetupBuilder multi-repo projects', () => {
     );
   });
 
-  it('runs repository sync before dependency resolution in the runtime entrypoint template', () => {
+  it('runs repository sync before package install, init scripts, and dependency resolution in the runtime entrypoint template', () => {
     const script = readFileSync(
       new URL('../entrypoint.sh', import.meta.url),
       'utf8'
     );
 
     const repoSyncIndex = script.indexOf('{projectRepositoriesSection}');
+    const packageInstallIndex = script.indexOf('{installAllPackages}');
+    const initScriptIndex = script.indexOf('{initScriptExecution}');
     const dependencyResolutionIndex = script.indexOf('{workspaceDeps}');
+    const sudoersRemovalIndex = script.indexOf('{sudoersRemoval}');
 
     expect(repoSyncIndex).toBeGreaterThanOrEqual(0);
-    expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
+    expect(packageInstallIndex).toBeGreaterThan(repoSyncIndex);
+    expect(initScriptIndex).toBeGreaterThan(packageInstallIndex);
+    expect(dependencyResolutionIndex).toBeGreaterThan(initScriptIndex);
+    expect(sudoersRemovalIndex).toBeGreaterThan(initScriptIndex);
   });
 
   it('resolves project dependencies on non-cached startup after syncing repositories', () => {
@@ -247,6 +253,111 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
   });
 
+  it('runs init scripts before dependency resolution and sudo removal on non-cached startup', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      packageManagers: ['uv'],
+      mcps: [],
+      initScript: 'scripts/root-init.sh',
+      allInitScripts: [{ script: 'scripts/root-init.sh' }],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    const initScriptIndex = script.indexOf(
+      "bash '/workspace/scripts/root-init.sh'"
+    );
+    const dependencyResolutionIndex = script.indexOf(
+      "cd '/workspace' && uv sync"
+    );
+    const sudoersRemovalIndex = script.indexOf(
+      'sudo rm -f /etc/sudoers.d/1-agent-setup'
+    );
+
+    expect(initScriptIndex).toBeGreaterThanOrEqual(0);
+    expect(dependencyResolutionIndex).toBeGreaterThan(initScriptIndex);
+    expect(sudoersRemovalIndex).toBeGreaterThan(initScriptIndex);
+  });
+
+  it('syncs repositories before installing languages on non-cached startup', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: ['go'],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      packageManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'backend',
+          path: 'backend',
+          repository: 'https://github.com/dataforxyz/backend.git',
+          languages: ['go'],
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    const repoSyncIndex = script.indexOf('Syncing external repositories');
+    const installGoIndex = script.indexOf('📦 Installing go...');
+    const goVersionProbeIndex = script.indexOf(
+      'if [ -f /workspace/go.mod ]; then'
+    );
+
+    expect(repoSyncIndex).toBeGreaterThanOrEqual(0);
+    expect(installGoIndex).toBeGreaterThan(repoSyncIndex);
+    expect(goVersionProbeIndex).toBeGreaterThan(repoSyncIndex);
+  });
+
   it('includes repository metadata in workspace description', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);
@@ -298,6 +409,108 @@ describe('SetupBuilder multi-repo projects', () => {
       ref: 'develop',
       languages: ['python'],
       packageManagers: ['pip'],
+    });
+  });
+
+  it('mounts local child repositories and clones them via container-visible paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: './repos/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(script).toContain(
+      "git clone '/workspace-repos/0' '/workspace/frontend'"
+    );
+  });
+
+  it('preserves original local child repository values in workspace description', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: './repos/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const descPath = builder.generateWorkspaceDescription();
+    const description = JSON.parse(readFileSync(descPath!, 'utf8'));
+
+    expect(description.projects[0]).toMatchObject({
+      name: 'frontend',
+      path: 'frontend',
+      repository: './repos/frontend.git',
     });
   });
 
@@ -652,6 +865,12 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain('Resolving Python dependencies (uv) in e2e');
     expect(script).toContain(
       "cd '/workspace/e2e' && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true"
+    );
+    expect(script).not.toContain(
+      'export PATH="/workspace/e2e/.venv/bin:$PATH"'
+    );
+    expect(script).not.toContain(
+      `echo 'export PATH="/workspace/e2e/.venv/bin:$PATH"' >> $HOME/.profile`
     );
   });
 

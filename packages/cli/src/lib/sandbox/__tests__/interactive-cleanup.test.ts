@@ -16,6 +16,7 @@ const {
   mockGetDownloadCacheMounts,
   mockGetServiceNetworkArgs,
   mockValidateSandboxWorktreePath,
+  mockGetRepositoryMounts,
 } = vi.hoisted(() => ({
   mockLaunch: vi.fn(),
   mockProjectConfigLoad: vi.fn(),
@@ -29,6 +30,9 @@ const {
   mockGetDownloadCacheMounts: vi.fn(),
   mockGetServiceNetworkArgs: vi.fn(),
   mockValidateSandboxWorktreePath: vi.fn(),
+  mockGetRepositoryMounts: vi.fn<
+    () => Array<{ hostPath: string; containerPath: string }>
+  >(() => []),
 }));
 
 vi.mock('rover-core', () => ({
@@ -65,6 +69,10 @@ vi.mock('../../setup.js', () => ({
 
     generateWorkspaceDescription() {
       return undefined;
+    }
+
+    getRepositoryMounts() {
+      return mockGetRepositoryMounts();
     }
   },
 }));
@@ -163,6 +171,7 @@ describe('interactive sandbox cleanup', () => {
       '--network',
       'rover-services-1-1',
     ]);
+    mockGetRepositoryMounts.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -208,6 +217,37 @@ describe('interactive sandbox cleanup', () => {
       });
     }
     expect((sandbox as any).serviceContext).toBeUndefined();
+  });
+
+  it.each([
+    ['docker', DockerSandbox, 'docker'],
+    ['podman', PodmanSandbox, 'podman'],
+  ])('mounts local workspace repositories for interactive %s sessions', async (_label, SandboxCtor, backend) => {
+    mockGetRepositoryMounts.mockReturnValue([
+      {
+        hostPath: '/repo/repos/frontend.git',
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+    });
+
+    await sandbox.runInteractive('fix the bug');
+
+    expect(mockLaunch).toHaveBeenCalledWith(
+      backend,
+      expect.arrayContaining([
+        '-v',
+        '/repo/repos/frontend.git:/workspace-repos/0:Z,ro',
+      ]),
+      expect.objectContaining({
+        detached: false,
+        reject: false,
+        stdio: 'inherit',
+      })
+    );
   });
 
   it.each([
