@@ -198,6 +198,26 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       });
     }
 
+    const workspaceRepositories = getWorkspaceRepositories(
+      task.worktreePath,
+      task.getBasePath(),
+      projectConfig
+    );
+    const missingWorkspaceRepositories = workspaceRepositories.filter(
+      repo =>
+        !existsSync(repo.worktreePath) ||
+        !existsSync(join(repo.worktreePath, '.git'))
+    );
+
+    if (missingWorkspaceRepositories.length > 0) {
+      const missingLabels = missingWorkspaceRepositories
+        .map(repo => `${repo.name} (${repo.relativePath})`)
+        .join(', ');
+      result.error = `Configured workspace repositories are missing or invalid: ${missingLabels}`;
+      await exitWithError(result, { telemetry });
+      return;
+    }
+
     const pushTargets: PushTarget[] = [
       {
         label: 'root workspace',
@@ -210,23 +230,17 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         hasLocalChanges: false,
         hasUnpushedCommits: false,
       },
-      ...getWorkspaceRepositories(
-        task.worktreePath,
-        task.getBasePath(),
-        projectConfig
-      )
-        .filter(repo => existsSync(join(repo.worktreePath, '.git')))
-        .map(repo => ({
-          label: repo.name,
-          branchName: task.branchName,
-          currentBranch:
-            git.getCurrentBranch({ worktreePath: repo.worktreePath }) ||
-            'unknown',
-          worktreePath: repo.worktreePath,
-          remoteUrl: git.remoteUrl({ worktreePath: repo.worktreePath }),
-          hasLocalChanges: false,
-          hasUnpushedCommits: false,
-        })),
+      ...workspaceRepositories.map(repo => ({
+        label: repo.name,
+        branchName: task.branchName,
+        currentBranch:
+          git.getCurrentBranch({ worktreePath: repo.worktreePath }) ||
+          'unknown',
+        worktreePath: repo.worktreePath,
+        remoteUrl: git.remoteUrl({ worktreePath: repo.worktreePath }),
+        hasLocalChanges: false,
+        hasUnpushedCommits: false,
+      })),
     ];
 
     for (const target of pushTargets) {
@@ -246,14 +260,38 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         continue;
       }
 
-      try {
+      const hasRemoteTaskBranch = git.remoteBranchExists(
+        target.branchName,
+        'origin',
+        {
+          worktreePath: target.worktreePath,
+        }
+      );
+
+      if (hasRemoteTaskBranch) {
+        try {
+          target.hasUnpushedCommits = git.hasUnmergedCommits(
+            target.branchName,
+            {
+              targetBranch: `origin/${target.branchName}`,
+              worktreePath: target.worktreePath,
+            }
+          );
+        } catch {
+          target.hasUnpushedCommits = true;
+        }
+        continue;
+      }
+
+      if (target.currentBranch !== target.branchName) {
         target.hasUnpushedCommits = git.hasUnmergedCommits(target.branchName, {
-          targetBranch: `origin/${target.branchName}`,
+          targetBranch: target.currentBranch,
           worktreePath: target.worktreePath,
         });
-      } catch {
-        target.hasUnpushedCommits = true;
+        continue;
       }
+
+      target.hasUnpushedCommits = true;
     }
 
     const actionableTargets = pushTargets.filter(
