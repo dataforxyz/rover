@@ -1,6 +1,13 @@
 import colors from 'ansi-colors';
-import { writeFileSync, chmodSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  writeFileSync,
+  chmodSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+} from 'node:fs';
+import { join, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
 import {
   ProjectConfigManager,
@@ -36,6 +43,66 @@ import {
   resolvePathWithinRoot,
 } from '../utils/path-safety.js';
 import { shellEscape } from '../utils/shell.js';
+
+interface BuildRepositoryMount {
+  hostPath: string;
+  containerPath: string;
+}
+
+function isLocalRepositoryReference(repository: string): boolean {
+  return (
+    repository.startsWith('file://') ||
+    isAbsolute(repository) ||
+    repository === '.' ||
+    repository === '..' ||
+    repository.startsWith('./') ||
+    repository.startsWith('../')
+  );
+}
+
+export function prepareBuildProjectConfig(
+  projectPath: string,
+  projectConfig: ProjectConfigManager
+): {
+  buildProjectConfig: ProjectConfigManager;
+  repositoryMounts: BuildRepositoryMount[];
+} {
+  const repositoryMounts: BuildRepositoryMount[] = [];
+  const buildProjects = (projectConfig.projects ?? []).map((project, index) => {
+    if (
+      typeof project.repository !== 'string' ||
+      !isLocalRepositoryReference(project.repository)
+    ) {
+      return project;
+    }
+
+    const hostPath = project.repository.startsWith('file://')
+      ? fileURLToPath(project.repository)
+      : resolve(projectPath, project.repository);
+
+    if (!existsSync(hostPath)) {
+      throw new Error(
+        `Local workspace repository for ${project.name} not found: ${hostPath}`
+      );
+    }
+
+    const containerPath = `/workspace-repos/${index}`;
+    repositoryMounts.push({ hostPath, containerPath });
+
+    return {
+      ...project,
+      repository: containerPath,
+    };
+  });
+
+  return {
+    buildProjectConfig: {
+      ...projectConfig,
+      projects: buildProjects,
+    } as ProjectConfigManager,
+    repositoryMounts,
+  };
+}
 
 function generateProjectRepositorySyncSection(
   projectConfig: ProjectConfigManager
@@ -201,31 +268,54 @@ ${dependencyResolutionCommands.join('\n')}
   let mcpSection = '';
   if (mcps.length > 0) {
     const mcpCmds = mcps.map(mcp => {
-      let cmd = `rover-agent config mcp ${agent} '${mcp.name}' --transport '${mcp.transport}'`;
-      for (const env of mcp.envs ?? []) cmd += ` --env '${env}'`;
-      for (const header of mcp.headers ?? []) cmd += ` --header '${header}'`;
-      cmd += ` '${mcp.commandOrUrl}'`;
+      let cmd = `rover-agent config mcp ${shellEscape(agent)} ${shellEscape(mcp.name)} --transport ${shellEscape(mcp.transport)}`;
+      for (const env of mcp.envs ?? []) cmd += ` --env ${shellEscape(env)}`;
+      for (const header of mcp.headers ?? [])
+        cmd += ` --header ${shellEscape(header)}`;
+      cmd += ` ${shellEscape(mcp.commandOrUrl)}`;
       return cmd;
     });
     mcpSection = `
 # Configure MCPs
-rover-agent config mcp ${agent} package-manager --transport "http" http://127.0.0.1:8090/mcp
+rover-agent config mcp ${shellEscape(agent)} package-manager --transport "http" http://127.0.0.1:8090/mcp
 ${mcpCmds.join('\n')}
 `;
   } else {
     mcpSection = `
 # Configure built-in MCP
-rover-agent config mcp ${agent} package-manager --transport "http" http://127.0.0.1:8090/mcp
+rover-agent config mcp ${shellEscape(agent)} package-manager --transport "http" http://127.0.0.1:8090/mcp
 `;
   }
 
   return `#!/usr/bin/env bash
 set -euo pipefail
 
-AGENT="${agent}"
+AGENT=${shellEscape(agent)}
 
 safe_exit() {
   exit "\${1:-1}"
+}
+
+# Detect sudo availability once for use throughout the build script.
+_SUDO=""
+if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
+  _SUDO="sudo"
+fi
+
+run_as_root() {
+  if [ -n "$_SUDO" ]; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
+
+run_as_root_with_env() {
+  if [ -n "$_SUDO" ]; then
+    sudo -E "$@"
+  else
+    "$@"
+  fi
 }
 
 # Home setup — running as root during build
@@ -237,7 +327,7 @@ source $HOME/.profile
 
 # Update package lists
 if [[ -f /etc/debian_version ]]; then
-  sudo apt-get update -qq
+  run_as_root apt-get update -qq
 fi
 
 # Create a writable build workspace from the read-only host project mount.
@@ -252,25 +342,26 @@ cp -a /workspace-src/. "$BUILD_WORKSPACE/"
 rm -rf /workspace 2>/dev/null || true
 ln -s "$BUILD_WORKSPACE" /workspace
 
-# Install languages, package managers, task managers
-${installScripts.join('\n')}
-
 echo "Installing agent CLI ($AGENT)..."
-sudo -E rover-agent install $AGENT || echo "Agent install failed (non-fatal for build)"
-sudo chown -R $(id -u):$(id -g) $HOME
+run_as_root_with_env rover-agent install $AGENT || echo "Agent install failed (non-fatal for build)"
+run_as_root chown -R $(id -u):$(id -g) $HOME
 
 # Copy credentials
 echo "Copying agent credentials..."
-sudo rover-agent-install $AGENT || true
+run_as_root rover-agent-install $AGENT || true
 for _cred_dir in $HOME/.codex $HOME/.claude $HOME/.config/github-copilot $HOME/.gemini $HOME/.qwen $HOME/.opencode; do
-  [ -d "$_cred_dir" ] && sudo chown -R $(id -u):$(id -g) "$_cred_dir"
+  [ -d "$_cred_dir" ] && run_as_root chown -R $(id -u):$(id -g) "$_cred_dir"
 done
 
 ${generateProjectRepositorySyncSection(projectConfig)}
 
-${dependencyResolutionSection}
+# Install languages, package managers, task managers after child repositories
+# are synced so installers can inspect child-repo manifests for versions.
+${installScripts.join('\n')}
 
 ${initScriptSection}
+
+${dependencyResolutionSection}
 
 ${mcpSection}
 
@@ -308,6 +399,10 @@ const buildCommand = async (
   try {
     const projectPath = getProjectPath() || process.cwd();
     const projectConfig = ProjectConfigManager.load(projectPath);
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      projectPath,
+      projectConfig
+    );
     const agent = options.agent ?? getUserAIAgent() ?? 'claude';
 
     if (!isJsonMode()) {
@@ -379,7 +474,12 @@ const buildCommand = async (
     const hostUser = userInfo();
     writeFileSync(
       entrypointPath,
-      generateBuildEntrypoint(agent, projectConfig, hostUser.uid, hostUser.gid)
+      generateBuildEntrypoint(
+        agent,
+        buildProjectConfig,
+        hostUser.uid,
+        hostUser.gid
+      )
     );
     chmodSync(entrypointPath, 0o755);
 
@@ -407,6 +507,13 @@ const buildCommand = async (
       '--entrypoint',
       '/entrypoint.sh',
     ];
+
+    for (const repositoryMount of repositoryMounts) {
+      dockerArgs.push(
+        '-v',
+        `${repositoryMount.hostPath}:${repositoryMount.containerPath}:Z,ro`
+      );
+    }
 
     // Add agent-specific mounts (credential files)
     try {
