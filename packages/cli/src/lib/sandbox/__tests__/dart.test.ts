@@ -21,7 +21,9 @@ describe('DartSandboxPackage', () => {
   it('scans child project .fvmrc files when selecting Flutter versions', () => {
     const script = new DartSandboxPackage(['apps/mobile']).installScript();
 
-    expect(script).toContain("for fvmrc_path in '/workspace/.fvmrc' '/workspace/apps/mobile/.fvmrc'; do");
+    expect(script).toContain(
+      "for fvmrc_path in '/workspace/.fvmrc' '/workspace/apps/mobile/.fvmrc'; do"
+    );
     expect(script).toContain('Using Flutter version from $fvmrc_path');
   });
 });

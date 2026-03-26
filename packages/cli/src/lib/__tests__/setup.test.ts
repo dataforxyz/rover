@@ -744,7 +744,9 @@ describe('SetupBuilder multi-repo projects', () => {
     );
     expect(script).not.toContain("\n'/workspace/scripts/root-init.sh'\n");
     expect(script).not.toContain("/bin/sh '/workspace/scripts/root-init.sh'");
-    expect(script).not.toContain("workspace_root_script_1='/workspace/scripts/frontend-init.sh'");
+    expect(script).not.toContain(
+      "workspace_root_script_1='/workspace/scripts/frontend-init.sh'"
+    );
   });
 
   it('filters unsafe project-scoped init-script paths', () => {
