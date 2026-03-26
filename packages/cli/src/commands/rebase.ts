@@ -256,8 +256,22 @@ export const rebaseCommand = async (
             task.worktreePath,
             task.getBasePath(),
             projectConfig
-          ).filter(repo => existsSync(join(repo.worktreePath, '.git')))
+          )
         : [];
+    const missingWorkspaceRepositories = workspaceRepositories.filter(
+      repo =>
+        !existsSync(repo.worktreePath) ||
+        !existsSync(join(repo.worktreePath, '.git'))
+    );
+
+    if (missingWorkspaceRepositories.length > 0) {
+      const missingLabels = missingWorkspaceRepositories
+        .map(repo => `${repo.name} (${repo.relativePath})`)
+        .join(', ');
+      jsonOutput.error = `Configured workspace repositories are missing or invalid: ${missingLabels}`;
+      await exitWithError(jsonOutput, { telemetry });
+      return;
+    }
 
     const rebaseTargets: RebaseTarget[] = [
       {

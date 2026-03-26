@@ -11,6 +11,7 @@ const {
   mockGetAIAgentTool,
   mockRepoGitInstance,
   mockLaunchSync,
+  mockExistsSync,
 } = vi.hoisted(() => ({
   mockExitWithError: vi.fn(),
   mockExitWithSuccess: vi.fn(),
@@ -22,6 +23,7 @@ const {
     getMainBranch: vi.fn().mockReturnValue('develop'),
   },
   mockLaunchSync: vi.fn(),
+  mockExistsSync: vi.fn(),
 }));
 
 const mockGitInstance = vi.hoisted(() => ({
@@ -72,7 +74,7 @@ vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
     ...actual,
-    existsSync: vi.fn().mockReturnValue(true),
+    existsSync: mockExistsSync,
   };
 });
 
@@ -134,6 +136,7 @@ describe('rebase command', () => {
     mockRepoGitInstance.getMainBranch.mockReturnValue('develop');
     mockLaunchSync.mockReset();
     mockLaunchSync.mockReturnValue({ exitCode: 0, stdout: '' });
+    mockExistsSync.mockReturnValue(true);
     mockRequireProjectContext.mockResolvedValue({
       path: '/repo',
       getTask: vi.fn().mockReturnValue({
@@ -311,5 +314,41 @@ describe('rebase command', () => {
       }
     );
     expect(mockExitWithSuccess).toHaveBeenCalled();
+  });
+
+  it('fails when a configured workspace repository is missing from the task workspace', async () => {
+    mockGetWorkspaceRepositories.mockReturnValue([
+      {
+        name: 'frontend',
+        relativePath: 'frontend',
+        worktreePath: '/tmp/task-1/frontend',
+        repository: 'https://example.com/frontend.git',
+      },
+    ]);
+    mockExistsSync.mockImplementation((targetPath: string) => {
+      if (targetPath === '/tmp/task-1/frontend') {
+        return false;
+      }
+      return true;
+    });
+
+    await rebaseCommand('1', {
+      json: true,
+      force: true,
+    });
+
+    expect(mockGitInstance.rebaseBranch).not.toHaveBeenCalledWith(
+      expect.any(String),
+      {
+        worktreePath: '/tmp/task-1/frontend',
+      }
+    );
+    expect(mockExitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error:
+          'Configured workspace repositories are missing or invalid: frontend (frontend)',
+      }),
+      expect.anything()
+    );
   });
 });
