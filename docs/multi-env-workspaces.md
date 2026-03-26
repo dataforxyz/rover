@@ -81,8 +81,8 @@ At task startup Rover now:
 - installs the union of all languages, package managers, and task managers
 - clones each configured project repository into its configured `path`
 - creates or reuses the task branch in each cloned repository
-- resolves dependencies for the root workspace and each configured project
 - runs the root init script and each project init script
+- resolves dependencies for the root workspace and each configured project
 
 During follow-up commands:
 

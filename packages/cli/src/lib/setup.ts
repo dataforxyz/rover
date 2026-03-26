@@ -7,7 +7,8 @@ import {
   readFileSync,
   readdirSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   TaskDescriptionManager,
   IterationManager,
@@ -33,6 +34,10 @@ import { getPackagesFromConfig } from './sandbox/packages.js';
  * Replaces the existing docker-setup.sh and docker-setup-gemini.sh files
  */
 export class SetupBuilder {
+  private repositoryMounts: Array<{
+    hostPath: string;
+    containerPath: string;
+  }> = [];
   private agent: string;
   private task: TaskDescriptionManager;
   private taskBasePath: string;
@@ -44,6 +49,7 @@ export class SetupBuilder {
     name: string;
     path: string;
     repository?: string;
+    runtimeRepository?: string;
     ref?: string;
     languages?: string[];
     packageManagers?: string[];
@@ -89,6 +95,7 @@ export class SetupBuilder {
     name: string;
     path: string;
     repository?: string;
+    runtimeRepository?: string;
     ref?: string;
     languages?: string[];
     packageManagers?: string[];
@@ -99,20 +106,32 @@ export class SetupBuilder {
     }
 
     return (this.projectConfig.projects ?? [])
-      .flatMap(project =>
-        typeof project?.name === 'string' && typeof project?.path === 'string'
-          ? [
-              {
-                name: project.name,
-                path: project.path,
-                repository: project.repository,
-                ref: project.ref,
-                languages: project.languages ?? [],
-                packageManagers: project.packageManagers ?? [],
-              },
-            ]
-          : []
-      )
+      .flatMap((project, index) => {
+        if (
+          typeof project?.name !== 'string' ||
+          typeof project?.path !== 'string'
+        ) {
+          return [];
+        }
+
+        const repositoryMount = this.resolveRepositoryMount(
+          project.repository,
+          index
+        );
+
+        return [
+          {
+            name: project.name,
+            path: project.path,
+            repository: project.repository,
+            runtimeRepository:
+              repositoryMount?.containerPath ?? project.repository,
+            ref: project.ref,
+            languages: project.languages ?? [],
+            packageManagers: project.packageManagers ?? [],
+          },
+        ];
+      })
       .filter(project => isSafeRelativePath(project.path));
   }
 
@@ -121,6 +140,7 @@ export class SetupBuilder {
         name: string;
         path: string;
         repository?: string;
+        runtimeRepository?: string;
         ref?: string;
         languages?: string[];
         packageManagers?: string[];
@@ -160,34 +180,44 @@ export class SetupBuilder {
         };
 
         return (Array.isArray(parsed.projects) ? parsed.projects : [])
-          .flatMap(project =>
-            typeof project?.name === 'string' &&
-            typeof project?.path === 'string'
-              ? [
-                  {
-                    name: project.name,
-                    path: project.path,
-                    repository:
-                      typeof project.repository === 'string'
-                        ? project.repository
-                        : undefined,
-                    ref:
-                      typeof project.ref === 'string' ? project.ref : undefined,
-                    languages: Array.isArray(project.languages)
-                      ? project.languages.filter(
-                          (language): language is string =>
-                            typeof language === 'string'
-                        )
-                      : [],
-                    packageManagers: Array.isArray(project.packageManagers)
-                      ? project.packageManagers.filter(
-                          (pm): pm is string => typeof pm === 'string'
-                        )
-                      : [],
-                  },
-                ]
-              : []
-          )
+          .flatMap((project, index) => {
+            if (
+              typeof project?.name !== 'string' ||
+              typeof project?.path !== 'string'
+            ) {
+              return [];
+            }
+
+            const repository =
+              typeof project.repository === 'string'
+                ? project.repository
+                : undefined;
+            const repositoryMount = this.resolveRepositoryMount(
+              repository,
+              index
+            );
+
+            return [
+              {
+                name: project.name,
+                path: project.path,
+                repository,
+                runtimeRepository: repositoryMount?.containerPath ?? repository,
+                ref: typeof project.ref === 'string' ? project.ref : undefined,
+                languages: Array.isArray(project.languages)
+                  ? project.languages.filter(
+                      (language): language is string =>
+                        typeof language === 'string'
+                    )
+                  : [],
+                packageManagers: Array.isArray(project.packageManagers)
+                  ? project.packageManagers.filter(
+                      (pm): pm is string => typeof pm === 'string'
+                    )
+                  : [],
+              },
+            ];
+          })
           .filter(project => isSafeRelativePath(project.path));
       } catch {
         continue;
@@ -195,6 +225,41 @@ export class SetupBuilder {
     }
 
     return undefined;
+  }
+
+  private isLocalRepositoryReference(repository: string): boolean {
+    return (
+      repository.startsWith('file://') ||
+      isAbsolute(repository) ||
+      repository === '.' ||
+      repository === '..' ||
+      repository.startsWith('./') ||
+      repository.startsWith('../')
+    );
+  }
+
+  private resolveRepositoryMount(
+    repository: unknown,
+    index: number
+  ): { hostPath: string; containerPath: string } | undefined {
+    if (
+      typeof repository !== 'string' ||
+      !this.isLocalRepositoryReference(repository)
+    ) {
+      return undefined;
+    }
+
+    const hostPath = repository.startsWith('file://')
+      ? fileURLToPath(repository)
+      : resolve(this.projectConfig.projectRoot, repository);
+
+    if (!existsSync(hostPath)) {
+      throw new Error(`Local workspace repository not found: ${hostPath}`);
+    }
+
+    const containerPath = `/workspace-repos/${index}`;
+    this.repositoryMounts.push({ hostPath, containerPath });
+    return { hostPath, containerPath };
   }
 
   private getDependencyResolutionCommands(): string[] {
@@ -590,7 +655,9 @@ NODE
         const targetPath = `/workspace/${project.path}`;
         const escapedName = shellEscape(project.name);
         const escapedPath = shellEscape(targetPath);
-        const escapedRepository = shellEscape(project.repository!);
+        const escapedRepository = shellEscape(
+          project.runtimeRepository ?? project.repository!
+        );
         const escapedRef = project.ref ? shellEscape(project.ref) : '';
         const checkpointLookupScript = shellEscape(
           `const fs=require('fs'); const checkpoint=JSON.parse(fs.readFileSync('/output/checkpoint.json','utf8')); const entry=(checkpoint.externalRepositories||[]).find(repo => repo.path === ${JSON.stringify(project.path)}); if (!entry) process.exit(2); process.stdout.write([entry.head, entry.trackedDiffHash, entry.untrackedHash].join('\\t'));`
@@ -706,7 +773,11 @@ sudo rm -f /etc/sudoers.d/1-agent-setup`;
       this.projectConfig.network,
       this.task.networkConfig
     );
-    const networkConfigSection = generateNetworkScript(effectiveNetworkConfig);
+    const networkConfigSection = generateNetworkScript(effectiveNetworkConfig, {
+      serviceHostnames: (this.projectConfig.services ?? []).map(
+        service => service.name
+      ),
+    });
 
     // Generate template variables for task-related sections
     const validateTaskFileFunction = includeTaskSetup
@@ -840,6 +911,10 @@ echo "======================================="
     writeFileSync(filePath, JSON.stringify(description, null, 2), 'utf-8');
 
     return filePath;
+  }
+
+  getRepositoryMounts(): Array<{ hostPath: string; containerPath: string }> {
+    return [...this.repositoryMounts];
   }
 
   /**

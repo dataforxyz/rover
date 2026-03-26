@@ -167,11 +167,12 @@ done
 
 echo "✅ Package manager MCP is ready"
 {taskDataSection}
-{installAllPackages}
 {agentInstallSection}
 {credentialInstallSection}
-{mcpConfigSection}
 {projectRepositoriesSection}
+{installAllPackages}
+{mcpConfigSection}
+{initScriptExecution}
 {workspaceDeps}
 {exportTaskVariables}
 
@@ -184,6 +185,5 @@ done
 
 {networkConfigSection}
 {sudoersRemoval}
-{initScriptExecution}
 {workflowExecutionSection}
 "$@"
