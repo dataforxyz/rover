@@ -1,29 +1,38 @@
 import { SandboxPackage } from '../types.js';
 
 export class GoSandboxPackage extends SandboxPackage {
+  constructor(private readonly workspaceProjectPaths: string[] = []) {
+    super();
+  }
+
   // Name of the package
   name = 'go';
 
   installScript(): string {
+    const goModPaths = ['/workspace/go.mod', '/workspace/src/go.mod'];
+    for (const projectPath of this.workspaceProjectPaths) {
+      goModPaths.push(`/workspace/${projectPath}/go.mod`);
+      goModPaths.push(`/workspace/${projectPath}/src/go.mod`);
+    }
+
+    const uniqueGoModPaths = [...new Set(goModPaths)];
+    const escapedPaths = uniqueGoModPaths
+      .map(path => `'${path.replaceAll("'", "'\"'\"'")}'`)
+      .join(' ');
+
     // Install Go from official binaries.
     // Reads go.mod for the required version, falls back to latest stable.
     // Uses the official dl.google.com archive for the exact version needed.
     return `
 GO_VERSION=""
-if [ -f /workspace/go.mod ]; then
-  GO_VERSION=$(grep -oP '^go \\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' /workspace/go.mod | head -1)
-elif [ -f /workspace/src/go.mod ]; then
-  GO_VERSION=$(grep -oP '^go \\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' /workspace/src/go.mod | head -1)
-fi
-
-# If go.mod specifies a toolchain line, prefer that (more precise)
-if [ -f /workspace/go.mod ]; then
-  TC_VERSION=$(grep -oP '^toolchain go\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' /workspace/go.mod | head -1)
-  [ -n "$TC_VERSION" ] && GO_VERSION="$TC_VERSION"
-elif [ -f /workspace/src/go.mod ]; then
-  TC_VERSION=$(grep -oP '^toolchain go\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' /workspace/src/go.mod | head -1)
-  [ -n "$TC_VERSION" ] && GO_VERSION="$TC_VERSION"
-fi
+for go_mod_path in ${escapedPaths}; do
+  if [ -f "$go_mod_path" ]; then
+    GO_VERSION=$(grep -oP '^go \\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' "$go_mod_path" | head -1)
+    TC_VERSION=$(grep -oP '^toolchain go\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' "$go_mod_path" | head -1)
+    [ -n "$TC_VERSION" ] && GO_VERSION="$TC_VERSION"
+    [ -n "$GO_VERSION" ] && break
+  fi
+done
 
 if [ -z "$GO_VERSION" ]; then
   # Fallback: fetch latest stable version

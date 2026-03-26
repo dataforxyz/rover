@@ -1,4 +1,5 @@
 import type { ProjectConfigManager } from 'rover-core';
+import { isSafeRelativePath } from '../../utils/path-safety.js';
 
 // Language packages
 import { JavaScriptSandboxPackage } from './languages/javascript.js';
@@ -30,15 +31,18 @@ import { TaskSandboxPackage } from './task-managers/task.js';
 
 import type { SandboxPackage } from './types.js';
 
-const langMap: Record<string, () => SandboxPackage> = {
+const langMap: Record<
+  string,
+  (options: { workspaceProjectPaths: string[] }) => SandboxPackage
+> = {
   javascript: () => new JavaScriptSandboxPackage(),
   typescript: () => new TypeScriptSandboxPackage(),
   php: () => new PHPSandboxPackage(),
   rust: () => new RustSandboxPackage(),
-  go: () => new GoSandboxPackage(),
+  go: options => new GoSandboxPackage(options.workspaceProjectPaths),
   python: () => new PythonSandboxPackage(),
   ruby: () => new RubySandboxPackage(),
-  dart: () => new DartSandboxPackage(),
+  dart: options => new DartSandboxPackage(options.workspaceProjectPaths),
 };
 
 const pmMap: Record<string, () => SandboxPackage> = {
@@ -70,9 +74,15 @@ export function getPackagesFromConfig(
   projectConfig: ProjectConfigManager
 ): SandboxPackage[] {
   const packages: SandboxPackage[] = [];
+  const workspaceProjectPaths = (projectConfig.projects ?? []).flatMap(
+    project =>
+      typeof project?.path === 'string' && isSafeRelativePath(project.path)
+        ? [project.path]
+        : []
+  );
 
   for (const lang of projectConfig.allLanguages ?? []) {
-    if (langMap[lang]) packages.push(langMap[lang]());
+    if (langMap[lang]) packages.push(langMap[lang]({ workspaceProjectPaths }));
   }
   for (const pm of projectConfig.allPackageManagers ?? []) {
     if (pmMap[pm]) packages.push(pmMap[pm]());

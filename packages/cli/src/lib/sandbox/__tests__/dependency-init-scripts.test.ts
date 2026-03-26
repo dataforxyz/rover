@@ -24,4 +24,13 @@ describe('sandbox dependency init scripts', () => {
     expect(script).toContain('flutter precache');
     expect(script).not.toContain('flutter pub get');
   });
+
+  it('scans child project go.mod files before falling back to latest Go', () => {
+    const script = new GoSandboxPackage(['services/api']).installScript();
+
+    expect(script).toContain(
+      "for go_mod_path in '/workspace/go.mod' '/workspace/src/go.mod' '/workspace/services/api/go.mod' '/workspace/services/api/src/go.mod'; do"
+    );
+    expect(script).toContain('TC_VERSION=$(grep -oP');
+  });
 });

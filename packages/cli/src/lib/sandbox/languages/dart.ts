@@ -1,10 +1,27 @@
 import { SandboxPackage } from '../types.js';
 
 export class DartSandboxPackage extends SandboxPackage {
+  constructor(private readonly workspaceProjectPaths: string[] = []) {
+    super();
+  }
+
+  private getEscapedFvmrcPaths(): string {
+    const fvmrcPaths = ['/workspace/.fvmrc'];
+    for (const projectPath of this.workspaceProjectPaths) {
+      fvmrcPaths.push(`/workspace/${projectPath}/.fvmrc`);
+    }
+
+    return [...new Set(fvmrcPaths)]
+      .map(path => `'${path.replaceAll("'", "'\"'\"'")}'`)
+      .join(' ');
+  }
+
   // Name of the package
   name = 'dart';
 
   installScript(): string {
+    const escapedPaths = this.getEscapedFvmrcPaths();
+
     // Install Flutter SDK (includes Dart SDK) and Linux desktop build deps.
     // Reads .fvmrc for project-pinned version, falls back to stable.
     // Uses the git repo for the channel name and the archive for pinned versions.
@@ -21,18 +38,21 @@ if getent group systemd-network >/dev/null 2>&1; then
 fi
 
 FLUTTER_VERSION="stable"
-if [ -f /workspace/.fvmrc ]; then
-  FVM_VER=$(cat /workspace/.fvmrc | grep -oP '"flutter"\\s*:\\s*"\\K[^"]+' 2>/dev/null || cat /workspace/.fvmrc | tr -d '{}\" ' | grep -oP 'flutter:\\K[^,]+' 2>/dev/null)
-  if [ -n "$FVM_VER" ]; then
-    # Validate version looks like a semver string or channel name to prevent injection
-    if echo "$FVM_VER" | grep -qP '^[0-9]+\\.[0-9]+\\.[0-9]+([._-].*)?$' || echo "$FVM_VER" | grep -qP '^(stable|beta|master|dev)$'; then
-      FLUTTER_VERSION="$FVM_VER"
-      echo "Using Flutter version from .fvmrc: $FLUTTER_VERSION"
-    else
-      echo "Warning: Invalid Flutter version in .fvmrc ($FVM_VER), using stable"
+for fvmrc_path in ${escapedPaths}; do
+  if [ -f "$fvmrc_path" ]; then
+    FVM_VER=$(cat "$fvmrc_path" | grep -oP '"flutter"\\s*:\\s*"\\K[^"]+' 2>/dev/null || cat "$fvmrc_path" | tr -d '{}\" ' | grep -oP 'flutter:\\K[^,]+' 2>/dev/null)
+    if [ -n "$FVM_VER" ]; then
+      # Validate version looks like a semver string or channel name to prevent injection
+      if echo "$FVM_VER" | grep -qP '^[0-9]+\\.[0-9]+\\.[0-9]+([._-].*)?$' || echo "$FVM_VER" | grep -qP '^(stable|beta|master|dev)$'; then
+        FLUTTER_VERSION="$FVM_VER"
+        echo "Using Flutter version from $fvmrc_path: $FLUTTER_VERSION"
+        break
+      else
+        echo "Warning: Invalid Flutter version in $fvmrc_path ($FVM_VER), using stable"
+      fi
     fi
   fi
-fi
+done
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64) FLUTTER_ARCH="x64" ;;
@@ -73,6 +93,8 @@ fi
   }
 
   initScript(): string {
+    const escapedPaths = this.getEscapedFvmrcPaths();
+
     // Add Flutter and Dart to PATH and run precache for linux desktop only.
     // Also reconcile Flutter version: the cache image may have been built
     // without /workspace mounted, so .fvmrc was unavailable during install.
@@ -82,39 +104,42 @@ echo 'export PUB_CACHE="$HOME/.pub-cache"' >> $HOME/.profile
 source $HOME/.profile
 
 # Reconcile Flutter version: cache may have been built without .fvmrc
-if [ -f /workspace/.fvmrc ]; then
-  WANT_VER=$(cat /workspace/.fvmrc | grep -oP '"flutter"\\s*:\\s*"\\K[^"]+' 2>/dev/null || cat /workspace/.fvmrc | tr -d '{}\" ' | grep -oP 'flutter:\\K[^,]+' 2>/dev/null)
-  # Validate version before using it
-  if [ -n "$WANT_VER" ] && ! (echo "$WANT_VER" | grep -qP '^[0-9]+\\.[0-9]+\\.[0-9]+([._-].*)?$' || echo "$WANT_VER" | grep -qP '^(stable|beta|master|dev)$'); then
-    echo "Warning: Invalid Flutter version in .fvmrc ($WANT_VER), skipping reconciliation"
-    WANT_VER=""
-  fi
-  if [ -n "$WANT_VER" ]; then
-    HAVE_VER=$($HOME/.flutter/bin/flutter --version --machine 2>/dev/null | grep -oP '"frameworkVersion"\\s*:\\s*"\\K[^"]+' 2>/dev/null || echo "")
-    if [ "$HAVE_VER" != "$WANT_VER" ]; then
-      echo "Flutter version mismatch: have=$HAVE_VER want=$WANT_VER — upgrading..."
-      ARCH=$(uname -m)
-      case "$ARCH" in
-        x86_64) FLUTTER_ARCH="x64" ;;
-        aarch64) FLUTTER_ARCH="arm64" ;;
-        *) FLUTTER_ARCH="x64" ;;
-      esac
-      FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_\${WANT_VER}-stable.tar.xz"
-      if curl -fsSL "$FLUTTER_URL" -o /tmp/flutter.tar.xz 2>/dev/null; then
-        rm -rf $HOME/.flutter
-        tar xf /tmp/flutter.tar.xz -C $HOME --strip-components=0
-        mv $HOME/flutter $HOME/.flutter
-        rm -f /tmp/flutter.tar.xz
-        echo "Flutter upgraded to $WANT_VER"
-      else
-        echo "Archive download failed, trying git..."
-        rm -rf $HOME/.flutter
-        git clone --depth 1 --branch "$WANT_VER" https://github.com/flutter/flutter.git $HOME/.flutter 2>/dev/null || true
+for fvmrc_path in ${escapedPaths}; do
+  if [ -f "$fvmrc_path" ]; then
+    WANT_VER=$(cat "$fvmrc_path" | grep -oP '"flutter"\\s*:\\s*"\\K[^"]+' 2>/dev/null || cat "$fvmrc_path" | tr -d '{}\" ' | grep -oP 'flutter:\\K[^,]+' 2>/dev/null)
+    # Validate version before using it
+    if [ -n "$WANT_VER" ] && ! (echo "$WANT_VER" | grep -qP '^[0-9]+\\.[0-9]+\\.[0-9]+([._-].*)?$' || echo "$WANT_VER" | grep -qP '^(stable|beta|master|dev)$'); then
+      echo "Warning: Invalid Flutter version in $fvmrc_path ($WANT_VER), skipping reconciliation"
+      WANT_VER=""
+    fi
+    if [ -n "$WANT_VER" ]; then
+      HAVE_VER=$($HOME/.flutter/bin/flutter --version --machine 2>/dev/null | grep -oP '"frameworkVersion"\\s*:\\s*"\\K[^"]+' 2>/dev/null || echo "")
+      if [ "$HAVE_VER" != "$WANT_VER" ]; then
+        echo "Flutter version mismatch: have=$HAVE_VER want=$WANT_VER from $fvmrc_path — upgrading..."
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          x86_64) FLUTTER_ARCH="x64" ;;
+          aarch64) FLUTTER_ARCH="arm64" ;;
+          *) FLUTTER_ARCH="x64" ;;
+        esac
+        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_\${WANT_VER}-stable.tar.xz"
+        if curl -fsSL "$FLUTTER_URL" -o /tmp/flutter.tar.xz 2>/dev/null; then
+          rm -rf $HOME/.flutter
+          tar xf /tmp/flutter.tar.xz -C $HOME --strip-components=0
+          mv $HOME/flutter $HOME/.flutter
+          rm -f /tmp/flutter.tar.xz
+          echo "Flutter upgraded to $WANT_VER"
+        else
+          echo "Archive download failed, trying git..."
+          rm -rf $HOME/.flutter
+          git clone --depth 1 --branch "$WANT_VER" https://github.com/flutter/flutter.git $HOME/.flutter 2>/dev/null || true
+        fi
+        source $HOME/.profile
       fi
-      source $HOME/.profile
+      break
     fi
   fi
-fi
+done
 
 flutter precache --no-ios --no-macos --no-windows --no-fuchsia --no-universal-apk --no-web 2>/dev/null || true`;
   }
