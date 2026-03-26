@@ -57,6 +57,7 @@ export async function detectOrphanedTasks(
   tasks: Array<{
     task: TaskDescriptionManager;
     project: ProjectManager | null;
+    forceInspect?: boolean;
   }>,
   options: { suppressWarnings?: boolean } = {}
 ): Promise<void> {
@@ -69,8 +70,8 @@ export async function detectOrphanedTasks(
   // Tasks we can reconcile either by inspecting a known container or by
   // timing out a restart/resume that never recorded replacement metadata.
   const candidates = tasks.filter(
-    ({ task, project }) =>
-      (task.isInProgress() || task.isIterating()) &&
+    ({ task, project, forceInspect }) =>
+      (task.isInProgress() || task.isIterating() || forceInspect === true) &&
       project != null &&
       !isResumeLockHeld(task) &&
       !isRestartStartupInFlight(task) &&
@@ -125,7 +126,16 @@ export async function detectOrphanedTasks(
           if (isResumeLockHeld(task)) {
             return;
           }
-          await sandbox.teardownServices();
+          try {
+            await sandbox.teardownServices();
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            warn(
+              colors.yellow(
+                `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+              )
+            );
+          }
           task.markFailed(CONTAINER_EXITED_ERROR);
           warn(
             colors.yellow(
@@ -142,6 +152,21 @@ export async function detectOrphanedTasks(
           containerStatus === 'restarting' ||
           containerStatus === 'paused'
         ) {
+          return;
+        }
+
+        try {
+          await sandbox.teardownServices();
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          warn(
+            colors.yellow(
+              `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+            )
+          );
+        }
+
+        if (!task.isInProgress() && !task.isIterating()) {
           return;
         }
 

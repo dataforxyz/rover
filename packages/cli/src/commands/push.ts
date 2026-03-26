@@ -210,7 +210,11 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         hasLocalChanges: false,
         hasUnpushedCommits: false,
       },
-      ...getWorkspaceRepositories(task.worktreePath, projectConfig)
+      ...getWorkspaceRepositories(
+        task.worktreePath,
+        task.getBasePath(),
+        projectConfig
+      )
         .filter(repo => existsSync(join(repo.worktreePath, '.git')))
         .map(repo => ({
           label: repo.name,

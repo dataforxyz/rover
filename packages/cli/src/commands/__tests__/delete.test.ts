@@ -69,6 +69,13 @@ vi.mock('../../utils/display.js', () => ({
   showRoverChat: vi.fn(),
 }));
 
+vi.mock('../../lib/sandbox/index.js', () => ({
+  createSandbox: vi.fn().mockResolvedValue({
+    stopAndRemove: vi.fn().mockResolvedValue(undefined),
+    teardownServices: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
 describe('delete command', () => {
   let originalCwd: string;
 
@@ -302,6 +309,50 @@ describe('delete command', () => {
         })
       );
       expect(existsSync('.rover/tasks/4')).toBe(false);
+    });
+
+    it('cleans up persisted sidecars before deleting a paused task without a container id', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const sandbox = {
+        stopAndRemove: vi.fn().mockResolvedValue(undefined),
+        teardownServices: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createSandbox).mockResolvedValueOnce(sandbox as any);
+
+      const task = createTestTask(21, 'Paused Task');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-21-1',
+          containerNames: ['rover-svc-21-1-postgres'],
+          taskId: 21,
+          iteration: 1,
+        },
+      });
+
+      await deleteCommand(['21'], { json: true });
+
+      expect(createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 21 }),
+        undefined,
+        {
+          projectPath: testDir,
+          sandboxMetadata: {
+            dockerHost: 'tcp://remote:2375',
+            serviceContext: {
+              networkName: 'rover-services-21-1',
+              containerNames: ['rover-svc-21-1-postgres'],
+              taskId: 21,
+              iteration: 1,
+            },
+          },
+        }
+      );
+      expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
+      expect(
+        TaskDescriptionManager.exists(join(testDir, '.rover', 'tasks', '21'))
+      ).toBe(false);
     });
   });
 

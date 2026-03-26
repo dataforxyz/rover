@@ -117,7 +117,7 @@ describe('generateBuildEntrypoint', () => {
     expect(script).not.toContain('scripts/bad.sh');
   });
 
-  it('prefers root-relative project init scripts during cache builds', () => {
+  it('prefers project-relative init scripts during cache builds', () => {
     const script = generateBuildEntrypoint('claude', {
       allLanguages: [],
       allPackageManagers: [],
@@ -140,8 +140,8 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain(
       "workspace_project_script_0='/workspace/frontend/scripts/init.sh'"
     );
-    expect(script).toContain("workspace_dir_0='/workspace'");
     expect(script).toContain("workspace_dir_0='/workspace/frontend'");
+    expect(script).toContain('if [ -f "$workspace_project_script_0" ]; then');
     expect(script).toContain('bash "$workspace_script_0"');
   });
 });

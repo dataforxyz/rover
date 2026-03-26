@@ -90,6 +90,13 @@ const stopCommand = async (
       });
 
       await sandbox.stopAndRemove();
+    } else if (task.sandboxMetadata) {
+      const sandbox = await createSandbox(task, processManager, {
+        projectPath: project.path,
+        sandboxMetadata: task.sandboxMetadata,
+      });
+
+      await sandbox.teardownServices();
     }
 
     processManager?.completeLastItem();

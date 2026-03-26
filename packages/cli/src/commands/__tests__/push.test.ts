@@ -138,6 +138,7 @@ describe('push command', () => {
       branchName: 'task/1',
       baseCommit: 'abc123',
       worktreePath: '/tmp/task-1',
+      getBasePath: () => '/tmp/tasks/1',
       status: 'COMPLETED',
       isInProgress: () => false,
       isIterating: () => false,
@@ -184,7 +185,9 @@ describe('push command', () => {
     );
     mockGitInstance.uncommittedChanges.mockImplementation(
       (options?: { worktreePath?: string }) =>
-        options?.worktreePath === '/tmp/task-1/frontend' ? [' M src/app.ts'] : []
+        options?.worktreePath === '/tmp/task-1/frontend'
+          ? [' M src/app.ts']
+          : []
     );
     mockGitInstance.hasUnmergedCommits.mockImplementation(
       (_branchName, options?: { worktreePath?: string }) =>

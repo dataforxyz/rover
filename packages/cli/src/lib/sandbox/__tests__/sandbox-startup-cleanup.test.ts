@@ -16,6 +16,15 @@ const {
 }));
 
 vi.mock('../service-containers.js', () => ({
+  buildServiceContainerContext: vi.fn((services, taskId, iteration) => ({
+    networkName: `rover-services-${taskId}-${iteration}`,
+    containerNames: services.map(
+      (service: { name: string }) =>
+        `rover-svc-${taskId}-${iteration}-${service.name}`
+    ),
+    taskId,
+    iteration,
+  })),
   createServiceNetwork: mockCreateServiceNetwork,
   getServiceNetworkArgs: vi.fn(() => []),
   isServiceContainerContextAvailable: mockIsServiceContainerContextAvailable,

@@ -200,6 +200,47 @@ describe('restart command', async () => {
       expect(reloadedTask.lastRestartAt).toBeDefined();
     });
 
+    it('passes persisted sandboxMetadata when starting the replacement sandbox', async () => {
+      const taskId = 902;
+      const taskDir = join(testDir, '.rover', 'tasks', taskId.toString());
+
+      const task = TaskDescriptionManager.create(taskDir, {
+        id: taskId,
+        title: 'Failed Task With Sidecars',
+        description: 'A failed task',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+      task.markFailed('failed');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-902-1',
+          containerNames: ['rover-svc-902-1-postgres'],
+          taskId,
+          iteration: 1,
+        },
+      });
+
+      await restartCommand(taskId.toString(), { json: true });
+
+      const startupCall = mockedCreateSandbox.mock.calls.at(-1);
+      expect(startupCall?.[2]).toEqual(
+        expect.objectContaining({
+          projectPath: testDir,
+          sandboxMetadata: {
+            dockerHost: 'tcp://remote:2375',
+            serviceContext: {
+              networkName: 'rover-services-902-1',
+              containerNames: ['rover-svc-902-1-postgres'],
+              taskId: 902,
+              iteration: 1,
+            },
+          },
+        })
+      );
+    });
+
     it('should track multiple restart attempts', async () => {
       // Create a failed task
       const taskId = 456;

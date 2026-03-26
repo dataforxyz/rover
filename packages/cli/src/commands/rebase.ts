@@ -252,9 +252,11 @@ export const rebaseCommand = async (
 
     const workspaceRepositories =
       projectConfig && task.worktreePath
-        ? getWorkspaceRepositories(task.worktreePath, projectConfig).filter(
-            repo => existsSync(join(repo.worktreePath, '.git'))
-          )
+        ? getWorkspaceRepositories(
+            task.worktreePath,
+            task.getBasePath(),
+            projectConfig
+          ).filter(repo => existsSync(join(repo.worktreePath, '.git')))
         : [];
 
     const rebaseTargets: RebaseTarget[] = [

@@ -120,8 +120,9 @@ const pauseCommand = async (
     // We detect this by watching for the task status to change or
     // the container to exit.
     let agentExited = false;
+    let sandbox: Awaited<ReturnType<typeof createSandbox>> | undefined;
     if (task.containerId) {
-      const sandbox = await createSandbox(task, undefined, {
+      sandbox = await createSandbox(task, undefined, {
         projectPath: project.path,
         sandboxMetadata: task.sandboxMetadata,
       });
@@ -134,6 +135,10 @@ const pauseCommand = async (
           break;
         }
         await new Promise(resolve => setTimeout(resolve, POLL_MS));
+      }
+
+      if (agentExited) {
+        await sandbox.teardownServices();
       }
 
       // If the agent is still running, fall back to SIGTERM
@@ -165,11 +170,22 @@ const pauseCommand = async (
 
     processManager?.completeLastItem();
 
-    const hasCheckpoint = existsSync(checkpointPath);
+    if (!agentExited) {
+      jsonOutput.error = `Task ${numericTaskId} did not exit after pause request and SIGTERM; task is still running`;
+      await exitWithError(jsonOutput, { telemetry });
+      return;
+    }
 
-    // Mark the task as PAUSED and clear container info
+    const hasCheckpoint = existsSync(checkpointPath);
+    const sandboxMetadata =
+      typeof sandbox?.getSandboxMetadata === 'function'
+        ? sandbox.getSandboxMetadata()
+        : task.sandboxMetadata;
+
+    // Mark the task as PAUSED and clear the task container identity while
+    // preserving any sandbox metadata still needed for resume.
     task.markPaused(reason);
-    task.setContainerInfo('', '');
+    task.setContainerInfo('', '', sandboxMetadata);
 
     if (!isJsonMode()) {
       if (hasCheckpoint) {
@@ -178,16 +194,10 @@ const pauseCommand = async (
             '  Checkpoint saved — task can be resumed from where it left off'
           )
         );
-      } else if (agentExited) {
+      } else {
         console.log(
           colors.yellow(
             '  No checkpoint detected — resume will restart the current iteration'
-          )
-        );
-      } else {
-        console.log(
-          colors.red(
-            '  Agent did not exit cleanly — task marked PAUSED but may need manual intervention'
           )
         );
       }

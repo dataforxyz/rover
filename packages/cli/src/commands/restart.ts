@@ -329,6 +329,7 @@ const restartCommand = async (
       try {
         const sandbox = await createSandbox(task, undefined, {
           projectPath: project.path,
+          sandboxMetadata: task.sandboxMetadata,
           iterationLogsPath: project.getTaskIterationLogsPath(
             task.id,
             task.iterations

@@ -121,20 +121,15 @@ export function warnIfCustomImage(projectConfig?: ProjectConfigManager): void {
 }
 
 /**
- * Resolve the path of an init script from the workspace root first.
- * If the root-relative file is missing, fall back to the sub-project path
- * to preserve compatibility with older configs.
+ * Resolve the path of an init script from the sub-project first when one is
+ * provided. If the project-relative file is missing, fall back to the
+ * workspace root to preserve compatibility with older configs.
  */
 export function resolveInitScriptPath(
   projectRoot: string,
   scriptPath: string,
   projectPath?: string
 ): string {
-  const rootRelative = join(projectRoot, scriptPath);
-  if (existsSync(rootRelative)) {
-    return rootRelative;
-  }
-
   if (
     projectPath &&
     isSafeRelativePath(projectPath) &&
@@ -144,7 +139,11 @@ export function resolveInitScriptPath(
     if (existsSync(projectRelative)) {
       return projectRelative;
     }
-    return projectRelative;
+  }
+
+  const rootRelative = join(projectRoot, scriptPath);
+  if (existsSync(rootRelative)) {
+    return rootRelative;
   }
 
   return rootRelative;

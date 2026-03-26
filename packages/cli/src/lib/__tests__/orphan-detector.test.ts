@@ -76,11 +76,13 @@ describe('detectOrphanedTasks', () => {
     const task = mockTask(1, 'IN_PROGRESS', 'container-1');
     const sandbox = {
       inspect: vi.fn().mockResolvedValue({ status: 'exited' }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
     };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
     );
@@ -247,11 +249,13 @@ describe('detectOrphanedTasks', () => {
     const task = mockTask(4, 'ITERATING', 'container-4');
     const sandbox = {
       inspect: vi.fn().mockResolvedValue({ status: 'exited' }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
     };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
     );
@@ -350,11 +354,13 @@ describe('detectOrphanedTasks', () => {
     });
     const sandbox = {
       inspect: vi.fn().mockResolvedValue({ status: 'exited', exitCode: 0 }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
     };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
     expect(task.markCompleted).toHaveBeenCalledTimes(1);
     expect(task.markFailed).not.toHaveBeenCalled();
@@ -401,11 +407,13 @@ describe('detectOrphanedTasks', () => {
     });
     const sandbox = {
       inspect: vi.fn().mockResolvedValue({ status: 'exited', exitCode: 2 }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
     };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
     expect(task.markPaused).toHaveBeenCalledWith(
       'Workflow paused due to retryable error (e.g. credit limit)'
@@ -422,11 +430,13 @@ describe('detectOrphanedTasks', () => {
     });
     const sandbox = {
       inspect: vi.fn().mockResolvedValue({ status: 'exited', exitCode: 2 }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
     };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
     expect(task.markPaused).not.toHaveBeenCalled();
     expect(task.markFailed).not.toHaveBeenCalled();
@@ -460,11 +470,13 @@ describe('detectOrphanedTasks', () => {
     });
     const sandbox = {
       inspect: vi.fn().mockResolvedValue({ status: 'exited', exitCode: 1 }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
     };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
     // Should NOT call markFailed again since updateStatusFromIteration already set FAILED
     expect(task.markFailed).not.toHaveBeenCalled();
@@ -476,11 +488,13 @@ describe('detectOrphanedTasks', () => {
     });
     const sandbox = {
       inspect: vi.fn().mockResolvedValue({ status: 'exited', exitCode: 1 }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
     };
     mockedCreateSandbox.mockResolvedValue(sandbox as any);
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
@@ -576,5 +590,28 @@ describe('detectOrphanedTasks', () => {
         },
       },
     });
+  });
+
+  it('tears down sidecars for force-inspected tasks that already refreshed to COMPLETED', async () => {
+    const task = mockTask(35, 'COMPLETED', 'container-35', {
+      updateStatusFromIteration: vi.fn(),
+    });
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue({ status: 'exited', exitCode: 0 }),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
+    mockedCreateSandbox.mockResolvedValue(sandbox as any);
+
+    await detectOrphanedTasks(
+      [{ task, project: mockProject(), forceInspect: true }],
+      {
+        suppressWarnings: true,
+      }
+    );
+
+    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
+    expect(task.markCompleted).not.toHaveBeenCalled();
+    expect(task.markFailed).not.toHaveBeenCalled();
+    expect(task.markPaused).not.toHaveBeenCalled();
   });
 });

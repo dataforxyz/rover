@@ -192,4 +192,37 @@ describe('ProjectConfigSchema with projects', () => {
       })
     ).toThrow(/Duplicate project path/);
   });
+
+  it('should accept valid sandbox service names', () => {
+    const result = ProjectConfigSchema.parse({
+      ...baseConfig,
+      sandbox: {
+        services: [{ name: 'postgres-1', image: 'postgres:16' }],
+      },
+    });
+
+    expect(result.sandbox?.services?.[0]?.name).toBe('postgres-1');
+  });
+
+  it('should reject invalid sandbox service names', () => {
+    expect(() =>
+      ProjectConfigSchema.parse({
+        ...baseConfig,
+        sandbox: {
+          services: [{ name: 'Postgres DB', image: 'postgres:16' }],
+        },
+      })
+    ).toThrow(/valid lowercase hostname label/);
+  });
+
+  it('should reject sandbox service names longer than 63 characters', () => {
+    expect(() =>
+      ProjectConfigSchema.parse({
+        ...baseConfig,
+        sandbox: {
+          services: [{ name: `a${'b'.repeat(62)}c`, image: 'postgres:16' }],
+        },
+      })
+    ).toThrow(/valid lowercase hostname label/);
+  });
 });

@@ -109,6 +109,10 @@ interface TaskWithProject {
   project: ProjectManager | null;
 }
 
+interface OrphanCandidate extends TaskWithProject {
+  forceInspect?: boolean;
+}
+
 /**
  * Helper to safely get iteration status
  */
@@ -349,16 +353,26 @@ const listCommand = async (
     }
 
     const refreshedTasksWithProjects: TaskWithProject[] = [];
-    const orphanCandidates: TaskWithProject[] = [];
+    const orphanCandidates: OrphanCandidate[] = [];
     for (const { task, project: projectData } of tasksWithProjects) {
+      const wasActiveBeforeRefresh =
+        task.status === 'IN_PROGRESS' || task.status === 'ITERATING';
       try {
         if (task.status !== 'PAUSED' && task.status !== 'FAILED') {
           task.updateStatusFromIteration();
         }
-        orphanCandidates.push({ task, project: projectData });
+        orphanCandidates.push({
+          task,
+          project: projectData,
+          forceInspect: wasActiveBeforeRefresh,
+        });
         refreshedTasksWithProjects.push({ task, project: projectData });
       } catch (err) {
-        orphanCandidates.push({ task, project: projectData });
+        orphanCandidates.push({
+          task,
+          project: projectData,
+          forceInspect: wasActiveBeforeRefresh,
+        });
         refreshedTasksWithProjects.push({ task, project: projectData });
         if (!isJsonMode()) {
           console.log(

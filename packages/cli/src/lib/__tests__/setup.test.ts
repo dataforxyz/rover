@@ -522,8 +522,8 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain(
       "workspace_project_script_1='/workspace/frontend/scripts/frontend-init.sh'"
     );
-    expect(script).toContain("workspace_dir_1='/workspace'");
     expect(script).toContain("workspace_dir_1='/workspace/frontend'");
+    expect(script).toContain('if [ -f "$workspace_project_script_1" ]; then');
     expect(script).toContain('bash "$workspace_script_1"');
     expect(script).not.toContain('/bin/sh /init-script-0.sh');
     expect(script).not.toContain(

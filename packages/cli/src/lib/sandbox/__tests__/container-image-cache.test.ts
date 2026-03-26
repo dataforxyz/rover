@@ -963,7 +963,7 @@ describe('checkImageCache', () => {
     expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
   });
 
-  it('hashes sub-project init scripts using the root-relative configured path', () => {
+  it('hashes sub-project init scripts using the project-relative path first', () => {
     const projectRoot = createTmpDir();
     mkdirSync(join(projectRoot, 'packages', 'api', 'scripts'), {
       recursive: true,
@@ -1017,7 +1017,7 @@ describe('checkImageCache', () => {
           localContentHash: hashDirectoryContents(
             join(projectRoot, 'packages', 'api')
           ),
-          initScriptContent: '#!/bin/sh\necho root\n',
+          initScriptContent: '#!/bin/sh\necho subproject\n',
         },
       ],
     });

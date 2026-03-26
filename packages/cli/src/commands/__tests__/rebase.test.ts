@@ -143,6 +143,7 @@ describe('rebase command', () => {
         branchName: 'task/1',
         baseCommit: 'base',
         worktreePath: '/tmp/task-1',
+        getBasePath: () => '/tmp/tasks/1',
         status: 'COMPLETED',
         iterations: 1,
         isInProgress: () => false,
@@ -243,9 +244,7 @@ describe('rebase command', () => {
     ]);
     mockGitInstance.getCurrentBranch.mockImplementation(
       (options?: { worktreePath?: string }) =>
-        options?.worktreePath === '/tmp/task-1/frontend'
-          ? 'task/1'
-          : 'main'
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
     );
 
     await rebaseCommand('1', {

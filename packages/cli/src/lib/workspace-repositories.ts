@@ -23,9 +23,8 @@ interface WorkspaceDescription {
 }
 
 function getLatestIterationWorkspaceDescriptionPath(
-  taskWorktreePath: string
+  taskBasePath: string
 ): string | undefined {
-  const taskBasePath = dirname(taskWorktreePath);
   const iterationsPath = join(taskBasePath, 'iterations');
 
   if (!existsSync(iterationsPath)) {
@@ -61,44 +60,41 @@ function parseWorkspaceDescription(
     const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
 
     return projects
-      .filter(
-        (
-          project
-        ): project is {
-          name: string;
-          path: string;
-          repository: string;
-          ref?: string;
-        } =>
-          typeof project?.name === 'string' &&
-          typeof project?.path === 'string' &&
-          typeof project?.repository === 'string' &&
-          resolvePathWithinRoot(taskWorktreePath, project.path as string) !==
-            null
-      )
       .map(project => {
+        if (
+          typeof project?.name !== 'string' ||
+          typeof project?.path !== 'string' ||
+          typeof project?.repository !== 'string'
+        ) {
+          return null;
+        }
         const resolvedPath = resolvePathWithinRoot(
           taskWorktreePath,
-          project.path
+          project.path as string
         );
+        if (resolvedPath === null) {
+          return null;
+        }
         return {
-          name: project.name,
-          relativePath: project.path,
-          worktreePath: resolvedPath ?? join(taskWorktreePath, project.path),
-          repository: project.repository,
+          name: project.name as string,
+          relativePath: project.path as string,
+          worktreePath: resolvedPath,
+          repository: project.repository as string,
           ref: typeof project.ref === 'string' ? project.ref : undefined,
         };
-      });
+      })
+      .filter((entry): entry is WorkspaceRepository => entry !== null);
   } catch {
     return [];
   }
 }
 
 export function getWorkspaceDescriptionRepositories(
-  taskWorktreePath: string
+  taskWorktreePath: string,
+  taskBasePath: string = dirname(taskWorktreePath)
 ): WorkspaceRepository[] {
   const persistedDescriptionPath =
-    getLatestIterationWorkspaceDescriptionPath(taskWorktreePath);
+    getLatestIterationWorkspaceDescriptionPath(taskBasePath);
   if (persistedDescriptionPath) {
     return parseWorkspaceDescription(
       persistedDescriptionPath,
@@ -119,40 +115,41 @@ export function getConfiguredWorkspaceRepositories(
   projectConfig: ProjectConfigManager
 ): WorkspaceRepository[] {
   return (projectConfig.projects ?? [])
-    .filter(
-      (
-        project
-      ): project is {
-        name: string;
-        path: string;
-        repository: string;
-        ref?: string;
-      } =>
-        typeof project.name === 'string' &&
-        typeof project.path === 'string' &&
-        typeof project.repository === 'string' &&
-        resolvePathWithinRoot(taskWorktreePath, project.path) !== null
-    )
     .map(project => {
+      if (
+        typeof project.name !== 'string' ||
+        typeof project.path !== 'string' ||
+        typeof project.repository !== 'string'
+      ) {
+        return null;
+      }
       const resolvedPath = resolvePathWithinRoot(
         taskWorktreePath,
         project.path
       );
+      if (resolvedPath === null) {
+        return null;
+      }
       return {
         name: project.name,
         relativePath: project.path,
-        worktreePath: resolvedPath ?? join(taskWorktreePath, project.path),
+        worktreePath: resolvedPath,
         repository: project.repository,
         ref: project.ref,
       };
-    });
+    })
+    .filter((entry): entry is WorkspaceRepository => entry !== null);
 }
 
 export function getWorkspaceRepositories(
   taskWorktreePath: string,
+  taskBasePath: string,
   projectConfig: ProjectConfigManager
 ): WorkspaceRepository[] {
-  const fromDescription = getWorkspaceDescriptionRepositories(taskWorktreePath);
+  const fromDescription = getWorkspaceDescriptionRepositories(
+    taskWorktreePath,
+    taskBasePath
+  );
   if (fromDescription.length > 0) {
     return fromDescription;
   }

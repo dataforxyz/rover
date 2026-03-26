@@ -25,6 +25,20 @@ describe('workspace-repositories', () => {
     return worktreeDir;
   }
 
+  function makeCentralTaskDirs(): {
+    rootDir: string;
+    taskDir: string;
+    worktreeDir: string;
+  } {
+    const rootDir = mkdtempSync(join(tmpdir(), 'rover-ws-repo-central-test-'));
+    const taskDir = join(rootDir, 'tasks', '42');
+    const worktreeDir = join(rootDir, 'workspaces', '42');
+    mkdirSync(taskDir, { recursive: true });
+    mkdirSync(worktreeDir, { recursive: true });
+    testRoots.push(rootDir);
+    return { rootDir, taskDir, worktreeDir };
+  }
+
   function makeIterationDir(worktreeDir: string, iteration: number): string {
     const iterationDir = join(
       worktreeDir,
@@ -236,6 +250,35 @@ describe('workspace-repositories', () => {
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('legacy');
     });
+
+    it('reads persisted metadata from the task directory for centralized workspaces', () => {
+      const { taskDir, worktreeDir } = makeCentralTaskDirs();
+      const iterationDir = join(taskDir, 'iterations', '3');
+      mkdirSync(iterationDir, { recursive: true });
+      writeFileSync(
+        join(iterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: 'https://example.com/frontend.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(worktreeDir, taskDir);
+      expect(result).toEqual([
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: join(worktreeDir, 'frontend'),
+          repository: 'https://example.com/frontend.git',
+          ref: undefined,
+        },
+      ]);
+    });
   });
 
   // ── path traversal protection ─────────────────────────────────────
@@ -433,7 +476,7 @@ describe('workspace-repositories', () => {
         ],
       } as any;
 
-      const result = getWorkspaceRepositories(dir, config);
+      const result = getWorkspaceRepositories(dir, dir, config);
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('from-description');
     });
@@ -450,7 +493,7 @@ describe('workspace-repositories', () => {
         ],
       } as any;
 
-      const result = getWorkspaceRepositories(dir, config);
+      const result = getWorkspaceRepositories(dir, dir, config);
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('from-config');
     });
@@ -472,7 +515,7 @@ describe('workspace-repositories', () => {
         ],
       } as any;
 
-      const result = getWorkspaceRepositories(dir, config);
+      const result = getWorkspaceRepositories(dir, dir, config);
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('fallback');
     });

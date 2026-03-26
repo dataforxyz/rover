@@ -120,7 +120,12 @@ export const ServiceHealthcheckSchema = z.object({
  */
 export const ServiceContainerSchema = z.object({
   /** Service name — used as the hostname on the task network */
-  name: z.string(),
+  name: z
+    .string()
+    .refine(value => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value), {
+      message:
+        'Service name must be a valid lowercase hostname label (1-63 chars, letters, numbers, and hyphens only)',
+    }),
   /** Docker/Podman image to use */
   image: z.string(),
   /** Container ports (informational — all ports are reachable on the task network) */

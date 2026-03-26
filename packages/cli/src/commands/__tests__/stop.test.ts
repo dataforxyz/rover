@@ -54,6 +54,7 @@ vi.mock('../../utils/exit.js', () => ({
 vi.mock('../../lib/sandbox/index.js', () => ({
   createSandbox: vi.fn().mockResolvedValue({
     stopAndRemove: vi.fn().mockResolvedValue(undefined),
+    teardownServices: vi.fn().mockResolvedValue(undefined),
   }),
 }));
 
@@ -242,6 +243,85 @@ describe('stop command', () => {
 
       // Verify sandbox was not created since there's no container
       expect(createSandbox).not.toHaveBeenCalled();
+    });
+
+    it('should tear down persisted sidecars even when task has no container id', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const sandbox = {
+        stopAndRemove: vi.fn().mockResolvedValue(undefined),
+        teardownServices: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createSandbox).mockResolvedValueOnce(sandbox as any);
+
+      const task = createTestTask(17, 'Paused task with sidecars');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-17-1',
+          containerNames: ['rover-svc-17-1-postgres'],
+          taskId: 17,
+          iteration: 1,
+        },
+      });
+
+      await stopCommand('17', { json: true });
+
+      expect(createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 17 }),
+        undefined,
+        {
+          projectPath: testDir,
+          sandboxMetadata: {
+            dockerHost: 'tcp://remote:2375',
+            serviceContext: {
+              networkName: 'rover-services-17-1',
+              containerNames: ['rover-svc-17-1-postgres'],
+              taskId: 17,
+              iteration: 1,
+            },
+          },
+        }
+      );
+      expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
+      expect(sandbox.stopAndRemove).not.toHaveBeenCalled();
+    });
+
+    it('should not clear task metadata when sandbox stopAndRemove fails', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const { exitWithError, exitWithSuccess } = await import(
+        '../../utils/exit.js'
+      );
+      vi.mocked(createSandbox).mockResolvedValueOnce({
+        stopAndRemove: vi.fn().mockRejectedValue(new Error('remove failed')),
+      } as any);
+
+      const task = createTestTask(16, 'Task with failing stop');
+      task.setContainerInfo('container-16', 'running', {
+        dockerHost: 'tcp://remote:2375',
+      });
+      task.markInProgress();
+
+      await stopCommand('16', { json: true });
+
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '16'),
+        16
+      );
+      expect(reloadedTask.status).toBe('IN_PROGRESS');
+      expect(reloadedTask.containerId).toBe('container-16');
+      expect(reloadedTask.sandboxMetadata).toEqual({
+        dockerHost: 'tcp://remote:2375',
+      });
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('remove failed'),
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+      expect(exitWithSuccess).not.toHaveBeenCalled();
     });
   });
 

@@ -198,7 +198,7 @@ describe('resolveInitScriptPath', () => {
     tmpDirs.length = 0;
   });
 
-  it('resolves sub-project init scripts from the workspace root first', () => {
+  it('resolves sub-project init scripts from the project path first', () => {
     const dir = createTmpDir();
     mkdirSync(join(dir, 'packages', 'api', 'scripts'), { recursive: true });
     mkdirSync(join(dir, 'scripts'), { recursive: true });
@@ -209,7 +209,7 @@ describe('resolveInitScriptPath', () => {
     writeFileSync(rootScript, '#!/bin/sh\necho root\n');
 
     expect(resolveInitScriptPath(dir, 'scripts/setup.sh', 'packages/api')).toBe(
-      rootScript
+      projectScript
     );
   });
 
@@ -243,6 +243,14 @@ describe('resolveInitScriptPath', () => {
 
     expect(resolveInitScriptPath(dir, 'scripts/setup.sh', '../../escape')).toBe(
       rootScript
+    );
+  });
+
+  it('falls back to the workspace root when neither location contains the script', () => {
+    const dir = createTmpDir();
+
+    expect(resolveInitScriptPath(dir, 'scripts/setup.sh', 'packages/api')).toBe(
+      join(dir, 'scripts', 'setup.sh')
     );
   });
 });

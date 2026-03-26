@@ -20,6 +20,7 @@ import {
   setJsonMode,
   requireProjectContext,
 } from '../lib/context.js';
+import { createSandbox } from '../lib/sandbox/index.js';
 import type { CommandDefinition } from '../types.js';
 
 const { prompt } = enquirer;
@@ -178,6 +179,20 @@ const deleteCommand = async (
   try {
     for (const task of tasksToDelete) {
       try {
+        if (task.containerId) {
+          const sandbox = await createSandbox(task, undefined, {
+            projectPath: project.path,
+            sandboxMetadata: task.sandboxMetadata,
+          });
+          await sandbox.stopAndRemove();
+        } else if (task.sandboxMetadata) {
+          const sandbox = await createSandbox(task, undefined, {
+            projectPath: project.path,
+            sandboxMetadata: task.sandboxMetadata,
+          });
+          await sandbox.teardownServices();
+        }
+
         // Delete the task using ProjectManager
         telemetry?.eventDeleteTask();
         project.deleteTask(task);

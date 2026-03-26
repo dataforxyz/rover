@@ -153,12 +153,12 @@ function generateBuildEntrypoint(
         return `echo "🔧 Running initialization script${label}"
 workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
 workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
-if [ -f "$workspace_root_script_${index}" ]; then
-  workspace_script_${index}="$workspace_root_script_${index}"
-  workspace_dir_${index}='/workspace'
-elif [ -f "$workspace_project_script_${index}" ]; then
+if [ -f "$workspace_project_script_${index}" ]; then
   workspace_script_${index}="$workspace_project_script_${index}"
   workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
+elif [ -f "$workspace_root_script_${index}" ]; then
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
 else
   workspace_script_${index}="$workspace_root_script_${index}"
   workspace_dir_${index}='/workspace'

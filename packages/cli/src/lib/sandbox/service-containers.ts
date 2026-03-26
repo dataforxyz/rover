@@ -168,8 +168,8 @@ export async function startServiceContainers(
     }
 
     await launch(backend, args, opts);
-    await launch(backend, ['start', name], opts);
     onContainerStarted?.([...containerNames]);
+    await launch(backend, ['start', name], opts);
   }
 
   return containerNames;

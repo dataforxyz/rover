@@ -10,7 +10,9 @@ import {
 } from '../../utils/env-variables.js';
 import { AIAgentTool } from '../agents/index.js';
 import { ContainerBackend } from './container-common.js';
+import { isContainerMissingInspectError } from './inspect-errors.js';
 import {
+  buildServiceContainerContext,
   createServiceNetwork,
   isServiceContainerContextAvailable,
   startServiceContainers,
@@ -116,12 +118,12 @@ export abstract class Sandbox {
   }
 
   protected resolveServiceContext(): ServiceContainerContext | undefined {
-    if (this.servicesTornDown) {
-      return undefined;
-    }
-
     if (this.serviceContext) {
       return this.serviceContext;
+    }
+
+    if (this.servicesTornDown) {
+      return undefined;
     }
 
     return this.getPersistedServiceContext();
@@ -160,26 +162,60 @@ export abstract class Sandbox {
   protected async ensureServiceContext(
     services: ServiceContainer[] | undefined
   ): Promise<{ started: boolean; serviceContext?: ServiceContainerContext }> {
+    const env = this.getServiceEnvironment();
+    const existingServiceContext = this.resolveServiceContext();
+
     if (!services || services.length === 0) {
+      if (existingServiceContext) {
+        try {
+          await teardownServiceContainers(
+            this.getContainerBackend(),
+            existingServiceContext,
+            env
+          );
+        } catch {
+          // The current config no longer uses services, so stale cleanup
+          // failures should not block startup or shell flows.
+        }
+        this.serviceContext = undefined;
+        this.servicesTornDown = true;
+      }
       return {
         started: false,
-        serviceContext: this.resolveServiceContext(),
+        serviceContext: undefined,
       };
     }
 
-    const env = this.getServiceEnvironment();
-    const existingServiceContext = this.resolveServiceContext();
+    const expectedServiceContext = buildServiceContainerContext(
+      services,
+      this.task.id,
+      this.task.iterations
+    );
+
     if (existingServiceContext) {
-      const isAvailable = await isServiceContainerContextAvailable(
-        this.getContainerBackend(),
-        existingServiceContext,
-        env
-      );
-      if (isAvailable) {
-        return {
-          started: false,
-          serviceContext: existingServiceContext,
-        };
+      const matchesConfiguredServices =
+        existingServiceContext.networkName ===
+          expectedServiceContext.networkName &&
+        existingServiceContext.taskId === expectedServiceContext.taskId &&
+        existingServiceContext.iteration === expectedServiceContext.iteration &&
+        existingServiceContext.containerNames.length ===
+          expectedServiceContext.containerNames.length &&
+        existingServiceContext.containerNames.every(
+          (name, index) => name === expectedServiceContext.containerNames[index]
+        );
+
+      if (matchesConfiguredServices) {
+        const isAvailable = await isServiceContainerContextAvailable(
+          this.getContainerBackend(),
+          existingServiceContext,
+          env
+        );
+        if (isAvailable) {
+          return {
+            started: false,
+            serviceContext: existingServiceContext,
+          };
+        }
       }
 
       await teardownServiceContainers(
@@ -196,6 +232,7 @@ export abstract class Sandbox {
       this.task.iterations,
       env
     );
+    this.servicesTornDown = false;
     this.serviceContext = {
       networkName,
       containerNames: [],
@@ -312,23 +349,33 @@ export abstract class Sandbox {
    */
   async stopGracefully(): Promise<string> {
     let sandboxId = '';
-    let stopped = false;
+    let stoppedOrMissing = false;
+    let stopError: unknown;
     this.processManager?.addItem(
       `Stopping sandbox (${this.backend}) | Name: ${this.sandboxName}`
     );
     try {
       sandboxId = await this.stop();
-      stopped = true;
+      stoppedOrMissing = true;
       this.processManager?.completeLastItem();
     } catch (_err: any) {
+      if (isContainerMissingInspectError(_err)) {
+        stoppedOrMissing = true;
+      } else {
+        stopError = _err;
+      }
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
     }
 
     // Only tear down sidecars after the task container has definitely stopped.
-    if (stopped) {
+    if (stoppedOrMissing) {
       await this.teardownServicesIfConfigured();
+    }
+
+    if (stopError) {
+      throw stopError;
     }
 
     return sandboxId;
@@ -336,7 +383,9 @@ export abstract class Sandbox {
 
   async stopAndRemove(): Promise<string> {
     let sandboxId = '';
-    let removed = false;
+    let removedOrMissing = false;
+    let stopError: unknown;
+    let removeError: unknown;
     this.processManager?.addItem(
       `Stopping sandbox (${this.backend}) | Name: ${this.sandboxName}`
     );
@@ -344,6 +393,11 @@ export abstract class Sandbox {
       sandboxId = await this.stop();
       this.processManager?.completeLastItem();
     } catch (_err: any) {
+      if (isContainerMissingInspectError(_err)) {
+        removedOrMissing = true;
+      } else {
+        stopError = _err;
+      }
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
@@ -355,9 +409,14 @@ export abstract class Sandbox {
 
     try {
       sandboxId = await this.remove();
-      removed = true;
+      removedOrMissing = true;
       this.processManager?.completeLastItem();
     } catch (_err: any) {
+      if (isContainerMissingInspectError(_err)) {
+        removedOrMissing = true;
+      } else {
+        removeError = _err;
+      }
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
@@ -365,8 +424,12 @@ export abstract class Sandbox {
 
     // Tear down service containers and network only after the task container
     // is definitely gone.
-    if (removed) {
+    if (removedOrMissing) {
       await this.teardownServicesIfConfigured();
+    }
+
+    if (!removedOrMissing) {
+      throw removeError ?? stopError ?? new Error('Failed to stop sandbox');
     }
 
     return sandboxId;
