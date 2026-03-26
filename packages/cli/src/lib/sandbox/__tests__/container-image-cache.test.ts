@@ -42,6 +42,7 @@ function makeInputs(overrides: Partial<SetupHashInputs> = {}): SetupHashInputs {
     taskManagers: ['make'],
     agent: 'claude',
     roverVersion: '1.0.0',
+    initScriptPath: '',
     initScriptContent: '',
     cacheFilesContent: '',
     mcps: [],
@@ -145,6 +146,22 @@ describe('computeSetupHash', () => {
     const a = computeSetupHash(makeInputs({ initScriptContent: '' }));
     const b = computeSetupHash(
       makeInputs({ initScriptContent: 'apt-get install -y vim' })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when initScriptPath changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        initScriptPath: 'scripts/setup.sh',
+        initScriptContent: '#!/bin/sh\necho hi\n',
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        initScriptPath: 'scripts/bootstrap.sh',
+        initScriptContent: '#!/bin/sh\necho hi\n',
+      })
     );
     expect(a).not.toBe(b);
   });
@@ -351,13 +368,53 @@ describe('computeSetupHash', () => {
   it('changes when project initScriptContent changes', () => {
     const a = computeSetupHash(
       makeInputs({
-        projects: [{ name: 'api', path: 'api', initScriptContent: '' }],
+        projects: [
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/setup.sh',
+            initScriptContent: '',
+          },
+        ],
       })
     );
     const b = computeSetupHash(
       makeInputs({
         projects: [
-          { name: 'api', path: 'api', initScriptContent: 'npm install' },
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/setup.sh',
+            initScriptContent: 'npm install',
+          },
+        ],
+      })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when project initScriptPath changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/setup.sh',
+            initScriptContent: '#!/bin/sh\necho api\n',
+          },
+        ],
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/bootstrap.sh',
+            initScriptContent: '#!/bin/sh\necho api\n',
+          },
         ],
       })
     );
@@ -1017,6 +1074,7 @@ describe('checkImageCache', () => {
           localContentHash: hashDirectoryContents(
             join(projectRoot, 'packages', 'api')
           ),
+          initScriptPath: 'scripts/setup.sh',
           initScriptContent: '#!/bin/sh\necho subproject\n',
         },
       ],
@@ -1079,6 +1137,45 @@ describe('checkImageCache', () => {
       1,
       'git',
       ['ls-remote', 'https://github.com/dataforxyz/api.git', 'main'],
+      { reject: false }
+    );
+  });
+
+  it('resolves relative local project repositories against projectRoot for cache hashing', () => {
+    const projectRoot = createTmpDir();
+    mkdirSync(join(projectRoot, 'repos', 'api.git'), { recursive: true });
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: './repos/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', join(projectRoot, 'repos', 'api.git'), 'main'],
       { reject: false }
     );
   });

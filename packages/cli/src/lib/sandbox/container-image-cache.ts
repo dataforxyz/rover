@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   launch,
   launchSync,
@@ -40,6 +41,7 @@ export interface SetupHashInputs {
   taskManagers: string[];
   agent: string;
   roverVersion: string;
+  initScriptPath?: string;
   initScriptContent: string;
   cacheFilesContent: string;
   mcps: Array<{
@@ -59,6 +61,7 @@ export interface SetupHashInputs {
     languages?: string[];
     packageManagers?: string[];
     taskManagers?: string[];
+    initScriptPath?: string;
     initScriptContent?: string;
   }>;
 }
@@ -76,6 +79,7 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
     taskManagers: [...inputs.taskManagers].sort(),
     agent: inputs.agent,
     roverVersion: inputs.roverVersion,
+    initScriptPath: inputs.initScriptPath || '',
     initScriptContent: inputs.initScriptContent,
     cacheFilesContent: inputs.cacheFilesContent,
     mcps: [...inputs.mcps]
@@ -100,6 +104,7 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
       languages: [...(p.languages || [])].sort(),
       packageManagers: [...(p.packageManagers || [])].sort(),
       taskManagers: [...(p.taskManagers || [])].sort(),
+      initScriptPath: p.initScriptPath || '',
       initScriptContent: p.initScriptContent || '',
     }));
   }
@@ -261,17 +266,46 @@ function resolveImageId(backend: ContainerBackend, imageTag: string): string {
   }
 }
 
-function resolveRepositoryRevision(repository: string, ref?: string): string {
+function resolveRepositoryForLookup(
+  projectRoot: string,
+  repository: string
+): string {
+  if (repository.startsWith('file://')) {
+    return fileURLToPath(repository);
+  }
+
+  if (
+    isAbsolute(repository) ||
+    repository === '.' ||
+    repository === '..' ||
+    repository.startsWith('./') ||
+    repository.startsWith('../')
+  ) {
+    return resolve(projectRoot, repository);
+  }
+
+  return repository;
+}
+
+function resolveRepositoryRevision(
+  projectRoot: string,
+  repository: string,
+  ref?: string
+): string {
   try {
     const target = ref || 'HEAD';
-    const result = launchSync('git', ['ls-remote', repository, target], {
+    const lookupRepository = resolveRepositoryForLookup(
+      projectRoot,
+      repository
+    );
+    const result = launchSync('git', ['ls-remote', lookupRepository, target], {
       reject: false,
     });
     const line = result.stdout?.toString().trim().split('\n')[0]?.trim();
     if (!line) {
       if (VERBOSE) {
         console.warn(
-          `[rover] git ls-remote returned no output for ${repository} ref=${target} — cache hash will not include this repo's revision`
+          `[rover] git ls-remote returned no output for ${lookupRepository} ref=${target} — cache hash will not include this repo's revision`
         );
       }
       return '';
@@ -353,7 +387,9 @@ export function checkImageCache(
     projectConfig.allTaskManagers ?? projectConfig.taskManagers ?? [];
 
   let initScriptContent = '';
+  let initScriptPath = '';
   if (projectConfig.initScript) {
+    initScriptPath = projectConfig.initScript;
     try {
       const initScriptAbsPath = join(
         projectConfig.projectRoot,
@@ -405,7 +441,11 @@ export function checkImageCache(
         ref: p.ref,
         repositoryRevision:
           typeof p.repository === 'string'
-            ? resolveRepositoryRevision(p.repository, p.ref)
+            ? resolveRepositoryRevision(
+                projectConfig.projectRoot,
+                p.repository,
+                p.ref
+              )
             : '',
         localContentHash:
           typeof p.repository === 'string'
@@ -416,6 +456,7 @@ export function checkImageCache(
         languages: p.languages,
         packageManagers: p.packageManagers,
         taskManagers: p.taskManagers,
+        initScriptPath: p.initScript,
         initScriptContent: projectInitContent,
       };
     });
@@ -429,6 +470,7 @@ export function checkImageCache(
     taskManagers,
     agent,
     roverVersion: getVersion(),
+    initScriptPath,
     initScriptContent,
     cacheFilesContent,
     mcps: projectConfig.mcps,
