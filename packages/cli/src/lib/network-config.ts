@@ -91,7 +91,8 @@ function isIPOrCIDR(host: string): boolean {
  * Returns empty string if network filtering is disabled.
  */
 export function generateNetworkScript(
-  config: NetworkConfig | undefined
+  config: NetworkConfig | undefined,
+  options: { serviceHostnames?: string[] } = {}
 ): string {
   if (!config || config.mode === 'allowall') {
     return '';
@@ -134,9 +135,9 @@ export function generateNetworkScript(
   ];
 
   if (config.mode === 'allowlist') {
-    lines.push(...generateAllowlistScript(config));
+    lines.push(...generateAllowlistScript(config, options.serviceHostnames));
   } else if (config.mode === 'blocklist') {
-    lines.push(...generateBlocklistScript(config));
+    lines.push(...generateBlocklistScript(config, options.serviceHostnames));
   }
 
   lines.push(
@@ -155,7 +156,11 @@ export function generateNetworkScript(
 /**
  * Generate iptables rules for allowlist mode (deny all except listed).
  */
-function generateAllowlistScript(config: NetworkConfig): string[] {
+function generateAllowlistScript(
+  config: NetworkConfig,
+  serviceHostnames: string[] = []
+): string[] {
+  const hasServiceHostnames = serviceHostnames.some(Boolean);
   const lines: string[] = [
     '  # Allowlist mode: Block all traffic except explicitly allowed',
     '',
@@ -169,18 +174,22 @@ function generateAllowlistScript(config: NetworkConfig): string[] {
     '',
   ];
 
-  if (config.allowLocalhost !== false) {
+  if (config.allowLocalhost !== false || hasServiceHostnames) {
     lines.push(
-      '  # Allow localhost/loopback traffic',
+      config.allowLocalhost === false && hasServiceHostnames
+        ? '  # Allow loopback traffic required for sidecar service discovery'
+        : '  # Allow localhost/loopback traffic',
       '  sudo iptables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true',
       '  sudo ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true',
       ''
     );
   }
 
-  if (config.allowDns !== false) {
+  if (config.allowDns !== false || hasServiceHostnames) {
     lines.push(
-      '  # Allow DNS resolution',
+      config.allowDns === false && hasServiceHostnames
+        ? '  # Allow DNS required for sidecar service discovery'
+        : '  # Allow DNS resolution',
       '  sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true',
       '  sudo iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT 2>/dev/null || true',
       '  sudo ip6tables -A OUTPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true',
@@ -188,6 +197,8 @@ function generateAllowlistScript(config: NetworkConfig): string[] {
       ''
     );
   }
+
+  lines.push(...generateServiceHostnameRules(serviceHostnames));
 
   // Add rules for each allowed host
   if (config.rules && config.rules.length > 0) {
@@ -229,11 +240,16 @@ function generateAllowlistScript(config: NetworkConfig): string[] {
 /**
  * Generate iptables rules for blocklist mode (allow all except listed).
  */
-function generateBlocklistScript(config: NetworkConfig): string[] {
+function generateBlocklistScript(
+  config: NetworkConfig,
+  serviceHostnames: string[] = []
+): string[] {
   const lines: string[] = [
     '  # Blocklist mode: Allow all traffic except explicitly blocked',
     '',
   ];
+
+  lines.push(...generateServiceHostnameRules(serviceHostnames));
 
   // Add rules for each blocked host
   if (config.rules && config.rules.length > 0) {
@@ -269,6 +285,35 @@ function generateBlocklistScript(config: NetworkConfig): string[] {
     }
   }
 
+  return lines;
+}
+
+function generateServiceHostnameRules(serviceHostnames: string[]): string[] {
+  const uniqueHostnames = [...new Set(serviceHostnames.filter(Boolean))];
+  if (uniqueHostnames.length === 0) {
+    return [];
+  }
+
+  const lines: string[] = [
+    '  # Always allow service container traffic on the task network',
+  ];
+
+  for (const hostname of uniqueHostnames) {
+    lines.push(`  # ${hostname}`);
+    lines.push(`  for ip in $(resolve_host "${hostname}"); do`);
+    lines.push('    if [[ "$ip" =~ : ]]; then');
+    lines.push(
+      '      sudo ip6tables -A OUTPUT -d "$ip" -j ACCEPT 2>/dev/null || true'
+    );
+    lines.push('    else');
+    lines.push(
+      '      sudo iptables -A OUTPUT -d "$ip" -j ACCEPT 2>/dev/null || true'
+    );
+    lines.push('    fi');
+    lines.push('  done');
+  }
+
+  lines.push('');
   return lines;
 }
 

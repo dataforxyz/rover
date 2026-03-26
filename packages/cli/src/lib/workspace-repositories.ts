@@ -60,7 +60,7 @@ function parseWorkspaceDescription(
     const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
 
     return projects
-      .map(project => {
+      .map<WorkspaceRepository | null>(project => {
         if (
           typeof project?.name !== 'string' ||
           typeof project?.path !== 'string' ||
@@ -80,7 +80,7 @@ function parseWorkspaceDescription(
           relativePath: project.path as string,
           worktreePath: resolvedPath,
           repository: project.repository as string,
-          ref: typeof project.ref === 'string' ? project.ref : undefined,
+          ...(typeof project.ref === 'string' ? { ref: project.ref } : {}),
         };
       })
       .filter((entry): entry is WorkspaceRepository => entry !== null);
@@ -115,7 +115,7 @@ export function getConfiguredWorkspaceRepositories(
   projectConfig: ProjectConfigManager
 ): WorkspaceRepository[] {
   return (projectConfig.projects ?? [])
-    .map(project => {
+    .map<WorkspaceRepository | null>(project => {
       if (
         typeof project.name !== 'string' ||
         typeof project.path !== 'string' ||
@@ -135,7 +135,7 @@ export function getConfiguredWorkspaceRepositories(
         relativePath: project.path,
         worktreePath: resolvedPath,
         repository: project.repository,
-        ref: project.ref,
+        ...(typeof project.ref === 'string' ? { ref: project.ref } : {}),
       };
     })
     .filter((entry): entry is WorkspaceRepository => entry !== null);
