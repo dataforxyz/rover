@@ -27,6 +27,18 @@ import { shellEscape } from '../utils/shell.js';
 
 import { getPackagesFromConfig } from './sandbox/packages.js';
 
+function isSafeWorkspaceProjectPath(projectPath: string): boolean {
+  if (projectPath.startsWith('/') || projectPath.length === 0) {
+    return false;
+  }
+
+  const normalized = projectPath
+    .split('/')
+    .filter(segment => segment.length > 0);
+
+  return normalized.length > 0 && normalized.every(segment => segment !== '..');
+}
+
 /**
  * SetupBuilder class - Consolidates Docker setup script generation
  * Replaces the existing docker-setup.sh and docker-setup-gemini.sh files
@@ -98,27 +110,21 @@ export class SetupBuilder {
     }
 
     return (this.projectConfig.projects ?? [])
-      .filter(
-        (
-          project
-        ): project is {
-          name: string;
-          path: string;
-          repository?: string;
-          ref?: string;
-          languages?: string[];
-          packageManagers?: string[];
-        } =>
-          typeof project?.name === 'string' && typeof project?.path === 'string'
+      .flatMap(project =>
+        typeof project?.name === 'string' && typeof project?.path === 'string'
+          ? [
+              {
+                name: project.name,
+                path: project.path,
+                repository: project.repository,
+                ref: project.ref,
+                languages: project.languages ?? [],
+                packageManagers: project.packageManagers ?? [],
+              },
+            ]
+          : []
       )
-      .map(project => ({
-        name: project.name,
-        path: project.path,
-        repository: project.repository,
-        ref: project.ref,
-        languages: project.languages ?? [],
-        packageManagers: project.packageManagers ?? [],
-      }));
+      .filter(project => isSafeWorkspaceProjectPath(project.path));
   }
 
   private getPersistedWorkspaceProjects():
@@ -165,39 +171,35 @@ export class SetupBuilder {
         };
 
         return (Array.isArray(parsed.projects) ? parsed.projects : [])
-          .filter(
-            (
-              project
-            ): project is {
-              name: string;
-              path: string;
-              repository?: string;
-              ref?: string;
-              languages?: string[];
-              packageManagers?: string[];
-            } =>
-              typeof project?.name === 'string' &&
-              typeof project?.path === 'string'
+          .flatMap(project =>
+            typeof project?.name === 'string' &&
+            typeof project?.path === 'string'
+              ? [
+                  {
+                    name: project.name,
+                    path: project.path,
+                    repository:
+                      typeof project.repository === 'string'
+                        ? project.repository
+                        : undefined,
+                    ref:
+                      typeof project.ref === 'string' ? project.ref : undefined,
+                    languages: Array.isArray(project.languages)
+                      ? project.languages.filter(
+                          (language): language is string =>
+                            typeof language === 'string'
+                        )
+                      : [],
+                    packageManagers: Array.isArray(project.packageManagers)
+                      ? project.packageManagers.filter(
+                          (pm): pm is string => typeof pm === 'string'
+                        )
+                      : [],
+                  },
+                ]
+              : []
           )
-          .map(project => ({
-            name: project.name,
-            path: project.path,
-            repository:
-              typeof project.repository === 'string'
-                ? project.repository
-                : undefined,
-            ref: typeof project.ref === 'string' ? project.ref : undefined,
-            languages: Array.isArray(project.languages)
-              ? project.languages.filter(
-                  (language): language is string => typeof language === 'string'
-                )
-              : [],
-            packageManagers: Array.isArray(project.packageManagers)
-              ? project.packageManagers.filter(
-                  (pm): pm is string => typeof pm === 'string'
-                )
-              : [],
-          }));
+          .filter(project => isSafeWorkspaceProjectPath(project.path));
       } catch {
         continue;
       }
@@ -648,7 +650,10 @@ echo "✅ Repository ${escapedName} is ready for checkpoint resume"`;
 mkdir -p "$(dirname ${escapedPath})"
 if [ ! -d ${escapedPath}/.git ]; then
   rm -rf ${escapedPath}
-  git clone ${escapedRepository} ${escapedPath}
+  if ! git clone ${escapedRepository} ${escapedPath}; then
+    echo "❌ Failed to clone repository ${escapedName}"
+    safe_exit 1
+  fi
 else
   current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
   if [ "$current_origin" != ${escapedRepository} ]; then

@@ -24,8 +24,13 @@ FLUTTER_VERSION="stable"
 if [ -f /workspace/.fvmrc ]; then
   FVM_VER=$(cat /workspace/.fvmrc | grep -oP '"flutter"\\s*:\\s*"\\K[^"]+' 2>/dev/null || cat /workspace/.fvmrc | tr -d '{}\" ' | grep -oP 'flutter:\\K[^,]+' 2>/dev/null)
   if [ -n "$FVM_VER" ]; then
-    FLUTTER_VERSION="$FVM_VER"
-    echo "Using Flutter version from .fvmrc: $FLUTTER_VERSION"
+    # Validate version looks like a semver string or channel name to prevent injection
+    if echo "$FVM_VER" | grep -qP '^[0-9]+\\.[0-9]+\\.[0-9]+([._-].*)?$' || echo "$FVM_VER" | grep -qP '^(stable|beta|master|dev)$'; then
+      FLUTTER_VERSION="$FVM_VER"
+      echo "Using Flutter version from .fvmrc: $FLUTTER_VERSION"
+    else
+      echo "Warning: Invalid Flutter version in .fvmrc ($FVM_VER), using stable"
+    fi
   fi
 fi
 ARCH=$(uname -m)
@@ -80,6 +85,11 @@ source $HOME/.profile
 # Reconcile Flutter version: cache may have been built without .fvmrc
 if [ -f /workspace/.fvmrc ]; then
   WANT_VER=$(cat /workspace/.fvmrc | grep -oP '"flutter"\\s*:\\s*"\\K[^"]+' 2>/dev/null || cat /workspace/.fvmrc | tr -d '{}\" ' | grep -oP 'flutter:\\K[^,]+' 2>/dev/null)
+  # Validate version before using it
+  if [ -n "$WANT_VER" ] && ! (echo "$WANT_VER" | grep -qP '^[0-9]+\\.[0-9]+\\.[0-9]+([._-].*)?$' || echo "$WANT_VER" | grep -qP '^(stable|beta|master|dev)$'); then
+    echo "Warning: Invalid Flutter version in .fvmrc ($WANT_VER), skipping reconciliation"
+    WANT_VER=""
+  fi
   if [ -n "$WANT_VER" ]; then
     HAVE_VER=$($HOME/.flutter/bin/flutter --version --machine 2>/dev/null | grep -oP '"frameworkVersion"\\s*:\\s*"\\K[^"]+' 2>/dev/null || echo "")
     if [ "$HAVE_VER" != "$WANT_VER" ]; then

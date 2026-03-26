@@ -78,7 +78,10 @@ git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"
 mkdir -p "$(dirname ${escapedPath})"
 if [ ! -d ${escapedPath}/.git ]; then
   rm -rf ${escapedPath}
-  git clone ${escapedRepository} ${escapedPath}
+  if ! git clone ${escapedRepository} ${escapedPath}; then
+    echo "❌ Failed to clone repository ${escapedName}"
+    safe_exit 1
+  fi
 else
   current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
   if [ "$current_origin" != ${escapedRepository} ]; then
