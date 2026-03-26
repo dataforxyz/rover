@@ -452,14 +452,22 @@ echo -e "\\n📦 Done installing MCP servers"`;
       for (const { entry, index } of executableInitScripts) {
         const label = entry.path ? ` (${entry.path})` : '';
         if (entry.path) {
-          const escapedWorkspacePath = shellEscape(`/workspace/${entry.path}`);
-          const escapedWorkspaceScript = shellEscape(
-            `/workspace/${entry.path}/${entry.script}`
-          );
           scriptBlocks.push(`echo "🔧 Running initialization script${label}"
-chmod +x ${escapedWorkspaceScript}
-cd ${escapedWorkspacePath}
-bash ${escapedWorkspaceScript}
+workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
+workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
+if [ -f "$workspace_root_script_${index}" ]; then
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
+elif [ -f "$workspace_project_script_${index}" ]; then
+  workspace_script_${index}="$workspace_project_script_${index}"
+  workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
+else
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
+fi
+chmod +x "$workspace_script_${index}"
+cd "$workspace_dir_${index}"
+bash "$workspace_script_${index}"
 if [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockedLaunch = vi.hoisted(() => vi.fn());
 
@@ -9,10 +9,11 @@ vi.mock('rover-core', () => ({
 
 import {
   createServiceNetwork,
-  startServiceContainers,
-  waitForServicesReady,
   getServiceNetworkArgs,
+  isServiceContainerContextAvailable,
+  startServiceContainers,
   teardownServiceContainers,
+  waitForServicesReady,
 } from '../service-containers.js';
 import { ContainerBackend } from '../container-common.js';
 import type { ServiceContainer } from 'rover-schemas';
@@ -120,7 +121,6 @@ describe('service-containers', () => {
 
       expect(names).toEqual(['rover-svc-1-1-postgres']);
 
-      // First call: docker create
       expect(mockedLaunch).toHaveBeenNthCalledWith(
         1,
         ContainerBackend.Docker,
@@ -149,7 +149,6 @@ describe('service-containers', () => {
         undefined
       );
 
-      // Second call: docker start
       expect(mockedLaunch).toHaveBeenNthCalledWith(
         2,
         ContainerBackend.Docker,
@@ -278,7 +277,6 @@ describe('service-containers', () => {
         'rover-svc-1-1-redis',
       ]);
 
-      // No inspect calls should be made
       expect(mockedLaunch).not.toHaveBeenCalled();
     });
 
@@ -345,6 +343,65 @@ describe('service-containers', () => {
         '--network',
         'rover-services-1-1',
       ]);
+    });
+  });
+
+  describe('isServiceContainerContextAvailable', () => {
+    it('returns true when the network exists and all containers are running', async () => {
+      mockedLaunch
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '' })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ Running: true }),
+        });
+
+      await expect(
+        isServiceContainerContextAvailable(ContainerBackend.Docker, {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        })
+      ).resolves.toBe(true);
+    });
+
+    it('returns false when a container exists but is stopped', async () => {
+      mockedLaunch
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '' })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ Running: false }),
+        });
+
+      await expect(
+        isServiceContainerContextAvailable(ContainerBackend.Docker, {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        })
+      ).resolves.toBe(false);
+    });
+
+    it('returns false when a health-checked container is unhealthy', async () => {
+      mockedLaunch
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '' })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({
+            Running: true,
+            Health: { Status: 'unhealthy' },
+          }),
+        });
+
+      await expect(
+        isServiceContainerContextAvailable(ContainerBackend.Docker, {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        })
+      ).resolves.toBe(false);
     });
   });
 

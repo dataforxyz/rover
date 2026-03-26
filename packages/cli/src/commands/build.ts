@@ -146,15 +146,30 @@ function generateBuildEntrypoint(
   const rootInitScripts = projectConfig.allInitScripts ?? [];
   const initScriptBlocks = rootInitScripts
     .filter(entry => !entry.path || isSafeRelativePath(entry.path))
-    .map(entry => {
-      const workspaceScript = entry.path
-        ? `/workspace/${entry.path}/${entry.script}`
-        : `/workspace/${entry.script}`;
-      const workspaceDir = entry.path
-        ? `/workspace/${entry.path}`
-        : '/workspace';
+    .map((entry, index) => {
       const label = entry.path ? ` (${entry.path})` : '';
 
+      if (entry.path) {
+        return `echo "🔧 Running initialization script${label}"
+workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
+workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
+if [ -f "$workspace_root_script_${index}" ]; then
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
+elif [ -f "$workspace_project_script_${index}" ]; then
+  workspace_script_${index}="$workspace_project_script_${index}"
+  workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
+else
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
+fi
+cd "$workspace_dir_${index}"
+bash "$workspace_script_${index}"
+echo "✅ Initialization script${label} completed successfully"`;
+      }
+
+      const workspaceScript = `/workspace/${entry.script}`;
+      const workspaceDir = '/workspace';
       return `echo "🔧 Running initialization script${label}"
 cd ${JSON.stringify(workspaceDir)}
 bash ${JSON.stringify(workspaceScript)}
@@ -274,7 +289,8 @@ for _dlcache_dir in /var/cache/apt; do
   [ -d "$_dlcache_dir" ] && chmod -R a+rwX "$_dlcache_dir" 2>/dev/null || true
 done
 
-# Mark all directories as git-safe so they work with any UID
+# Mark all directories as git-safe so they work with any UID.
+# Safe inside build containers — ephemeral, single-user, no multi-tenant concerns.
 git config --system --add safe.directory '*' 2>/dev/null || true
 
 echo ""

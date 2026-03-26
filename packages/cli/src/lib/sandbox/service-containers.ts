@@ -275,8 +275,34 @@ export async function isServiceContainerContextAvailable(
   }
 
   for (const name of context.containerNames) {
-    const containerInspect = await launch(backend, ['inspect', name], opts);
+    const containerInspect = await launch(
+      backend,
+      ['inspect', '--format', '{{json .State}}', name],
+      opts
+    );
     if (containerInspect.exitCode !== 0) {
+      return false;
+    }
+
+    try {
+      const state = JSON.parse(String(containerInspect.stdout ?? '')) as {
+        Running?: boolean;
+        Status?: string;
+        Health?: { Status?: string };
+      };
+
+      if (state.Running !== true) {
+        return false;
+      }
+
+      const healthStatus = state.Health?.Status;
+      if (
+        typeof healthStatus === 'string' &&
+        !['healthy', 'none'].includes(healthStatus)
+      ) {
+        return false;
+      }
+    } catch {
       return false;
     }
   }

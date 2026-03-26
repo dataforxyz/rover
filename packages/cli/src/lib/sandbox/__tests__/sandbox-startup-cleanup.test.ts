@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockCreateServiceNetwork,
+  mockIsServiceContainerContextAvailable,
   mockStartServiceContainers,
   mockWaitForServicesReady,
   mockTeardownServiceContainers,
   mockProjectConfigLoad,
 } = vi.hoisted(() => ({
   mockCreateServiceNetwork: vi.fn(),
+  mockIsServiceContainerContextAvailable: vi.fn(),
   mockStartServiceContainers: vi.fn(),
   mockWaitForServicesReady: vi.fn(),
   mockTeardownServiceContainers: vi.fn(),
@@ -16,6 +18,7 @@ const {
 vi.mock('../service-containers.js', () => ({
   createServiceNetwork: mockCreateServiceNetwork,
   getServiceNetworkArgs: vi.fn(() => []),
+  isServiceContainerContextAvailable: mockIsServiceContainerContextAvailable,
   startServiceContainers: mockStartServiceContainers,
   teardownServiceContainers: mockTeardownServiceContainers,
   waitForServicesReady: mockWaitForServicesReady,
@@ -47,6 +50,8 @@ describe('sandbox startup cleanup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockProjectConfigLoad.mockReturnValue({ services: [] });
+    mockIsServiceContainerContextAvailable.mockResolvedValue(false);
+    mockTeardownServiceContainers.mockResolvedValue(undefined);
   });
 
   it('cleans temporary files when Docker startup fails', async () => {
@@ -175,7 +180,7 @@ describe('sandbox startup cleanup', () => {
         taskId: 1,
         iteration: 1,
       },
-      expect.any(Object)
+      undefined
     );
   });
 
@@ -207,6 +212,7 @@ describe('sandbox startup cleanup', () => {
     ['podman', PodmanSandbox],
   ])('reuses persisted %s service context during createAndStart', async (_label, SandboxCtor) => {
     mockProjectConfigLoad.mockReturnValue({ services: [{ name: 'postgres' }] });
+    mockIsServiceContainerContextAvailable.mockResolvedValueOnce(true);
 
     const sandbox = new SandboxCtor(createFakeTask(), undefined, {
       projectPath: '/repo',
@@ -230,5 +236,65 @@ describe('sandbox startup cleanup', () => {
     expect(mockCreateServiceNetwork).not.toHaveBeenCalled();
     expect(mockStartServiceContainers).not.toHaveBeenCalled();
     expect(mockWaitForServicesReady).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['docker', DockerSandbox, 'docker'],
+    ['podman', PodmanSandbox, 'podman'],
+  ])('recreates stale persisted %s service context during createAndStart', async (_label, SandboxCtor, backend) => {
+    mockProjectConfigLoad.mockReturnValue({
+      services: [{ name: 'postgres' }],
+    });
+    mockIsServiceContainerContextAvailable.mockResolvedValueOnce(false);
+    mockCreateServiceNetwork.mockResolvedValue('rover-services-1-1');
+    mockStartServiceContainers.mockResolvedValue(['rover-svc-1-1-postgres']);
+    mockWaitForServicesReady.mockResolvedValue(undefined);
+
+    const sandbox = new SandboxCtor(createFakeTask(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    (sandbox as any).checkCacheState = vi.fn().mockImplementation(() => {
+      (sandbox as any).shouldCommitCache = false;
+    });
+    (sandbox as any).create = vi.fn().mockResolvedValue('sandbox-id');
+    (sandbox as any).start = vi.fn().mockResolvedValue('sandbox-id');
+
+    await expect(sandbox.createAndStart()).resolves.toBe('sandbox-id');
+
+    if (backend === 'docker') {
+      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+        backend,
+        {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+        undefined
+      );
+    } else {
+      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+        backend,
+        {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+        undefined
+      );
+    }
+    expect(mockCreateServiceNetwork).toHaveBeenCalled();
+    expect(mockStartServiceContainers).toHaveBeenCalled();
+    expect(mockWaitForServicesReady).toHaveBeenCalled();
   });
 });

@@ -44,8 +44,14 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain("git -C '/workspace/frontend' clean -fdx");
     expect(script).toContain("git -C '/workspace/backend' clean -fdx");
     expect(script).toContain('bash "/workspace/scripts/system-init.sh"');
-    expect(script).toContain('bash "/workspace/frontend/scripts/init.sh"');
-    expect(script).toContain('bash "/workspace/backend/scripts/init.sh"');
+    expect(script).toContain(
+      "workspace_project_script_1='/workspace/frontend/scripts/init.sh'"
+    );
+    expect(script).toContain(
+      "workspace_project_script_2='/workspace/backend/scripts/init.sh'"
+    );
+    expect(script).toContain('bash "$workspace_script_1"');
+    expect(script).toContain('bash "$workspace_script_2"');
   });
 
   it('copies credentials before syncing child repositories for cache builds', () => {
@@ -109,5 +115,33 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain('/workspace/frontend');
     expect(script).not.toContain('/workspace/../../escape');
     expect(script).not.toContain('scripts/bad.sh');
+  });
+
+  it('prefers root-relative project init scripts during cache builds', () => {
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [{ path: 'frontend', script: 'scripts/init.sh' }],
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+        },
+      ],
+      mcps: [],
+      projectRoot: '/repo',
+    } as any);
+
+    expect(script).toContain(
+      "workspace_root_script_0='/workspace/scripts/init.sh'"
+    );
+    expect(script).toContain(
+      "workspace_project_script_0='/workspace/frontend/scripts/init.sh'"
+    );
+    expect(script).toContain("workspace_dir_0='/workspace'");
+    expect(script).toContain("workspace_dir_0='/workspace/frontend'");
+    expect(script).toContain('bash "$workspace_script_0"');
   });
 });

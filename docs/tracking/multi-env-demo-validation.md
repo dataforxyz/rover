@@ -45,12 +45,11 @@ Shared demo behavior:
 - Backend returns one random joke from a list of 10.
 - E2E test opens the frontend, triggers the same Dart fetch path from the browser, and asserts a joke is shown.
 
-## Open questions
+## Resolved questions
 
-- [ ] Best repo layout for "3 separate gits" inside one Rover workspace:
-  placeholder choice is nested independent repos under one parent workspace.
-- [ ] Whether Rover should treat these as cloned sub-project repos, git submodules, or local repos attached by path.
-- [ ] Exact `nodriver` companion packages/models to preinstall for a realistic baseline.
+- [x] Best repo layout: nested independent repos cloned under one parent workspace via `projects[]` in `rover.json`.
+- [x] Rover treats these as cloned sub-project repos (not git submodules). Each is cloned from its `repository` field at task setup.
+- [x] `nodriver` works with Chromium and container-safe browser flags in `conftest.py`. No extra companion packages needed beyond Chromium in `sandbox.initScript`.
 
 ## Findings
 

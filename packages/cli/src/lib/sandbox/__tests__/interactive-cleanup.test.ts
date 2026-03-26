@@ -364,7 +364,7 @@ describe('interactive sandbox cleanup', () => {
           taskId: 1,
           iteration: 1,
         },
-        expect.any(Object)
+        undefined
       );
     } else {
       expect(mockTeardownServiceContainers).toHaveBeenCalledWith(backend, {

@@ -238,11 +238,15 @@ export abstract class Sandbox {
       };
     } catch (error) {
       if (this.serviceContext) {
-        await teardownServiceContainers(
-          this.getContainerBackend(),
-          this.serviceContext,
-          env
-        );
+        try {
+          await teardownServiceContainers(
+            this.getContainerBackend(),
+            this.serviceContext,
+            env
+          );
+        } catch {
+          // Preserve the original service startup error.
+        }
       }
       this.serviceContext = undefined;
       throw error;

@@ -34,11 +34,8 @@ import {
 } from './download-cache.js';
 import { isContainerMissingInspectError } from './inspect-errors.js';
 import {
-  createServiceNetwork,
   getServiceNetworkArgs,
-  startServiceContainers,
   teardownServiceContainers,
-  waitForServicesReady,
 } from './service-containers.js';
 import { Sandbox, SandboxOptions } from './types.js';
 import { validateSandboxWorktreePath } from './worktree-path.js';
@@ -378,67 +375,13 @@ export class DockerSandbox extends Sandbox {
       this.options?.projectPath ?? process.cwd()
     );
     const services = projectConfig.services;
-    const existingServiceContext = this.resolveServiceContext();
-    if (services && services.length > 0 && !existingServiceContext) {
-      this.processManager?.addItem('Starting service containers...');
-      const dockerEnv = this.getDockerEnv();
+    if (services && services.length > 0) {
+      this.processManager?.addItem('Ensuring service containers...');
       try {
-        const networkName = await createServiceNetwork(
-          ContainerBackend.Docker,
-          this.task.id,
-          this.task.iterations,
-          dockerEnv
-        );
-        this.serviceContext = {
-          networkName,
-          containerNames: [],
-          taskId: this.task.id,
-          iteration: this.task.iterations,
-        };
-        const containerNames = await startServiceContainers(
-          ContainerBackend.Docker,
-          services,
-          networkName,
-          this.task.id,
-          this.task.iterations,
-          dockerEnv,
-          startedContainerNames => {
-            this.serviceContext = {
-              networkName,
-              containerNames: startedContainerNames,
-              taskId: this.task.id,
-              iteration: this.task.iterations,
-            };
-          }
-        );
-        this.serviceContext = {
-          networkName,
-          containerNames,
-          taskId: this.task.id,
-          iteration: this.task.iterations,
-        };
-        await waitForServicesReady(
-          ContainerBackend.Docker,
-          services,
-          containerNames,
-          dockerEnv
-        );
+        await this.ensureServiceContext(services);
         this.processManager?.completeLastItem();
       } catch (err) {
         this.processManager?.failLastItem();
-        // Best-effort cleanup of any partially started services
-        if (this.serviceContext) {
-          try {
-            await teardownServiceContainers(
-              ContainerBackend.Docker,
-              this.serviceContext,
-              dockerEnv
-            );
-          } catch {
-            // Don't mask the original service startup error with cleanup failures.
-          }
-          this.serviceContext = undefined;
-        }
         this.processManager?.finish();
         throw err;
       }
