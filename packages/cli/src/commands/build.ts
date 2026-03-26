@@ -92,7 +92,9 @@ if ! git -C ${escapedPath} fetch --all --tags --prune; then
 fi
 ${checkoutRef}
 git -C ${escapedPath} reset --hard HEAD
-git -C ${escapedPath} clean -fd
+# Remove ignored files too so copied local checkouts cannot leak state into
+# dependency resolution or init scripts inside the cache build.
+git -C ${escapedPath} clean -fdx
 echo "✅ Repository ${escapedName} is ready for build caching"`;
   });
 
@@ -207,6 +209,10 @@ if [[ -f /etc/debian_version ]]; then
 fi
 
 # Create a writable build workspace from the read-only host project mount.
+# The host project is mounted read-only at /workspace-src. We copy it to a
+# writable location and symlink /workspace to it. If /workspace is a mount
+# point (cannot be removed), the symlink will fail and the build will error
+# out on subsequent steps that write to /workspace — this is intentional.
 export BUILD_WORKSPACE=/tmp/rover-build-workspace
 rm -rf "$BUILD_WORKSPACE"
 mkdir -p "$BUILD_WORKSPACE"

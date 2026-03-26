@@ -222,9 +222,12 @@ describe('rebase command', () => {
       'origin',
       'release/x',
     ]);
-    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('origin/release/x', {
-      worktreePath: '/tmp/task-1/frontend',
-    });
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith(
+      'origin/release/x',
+      {
+        worktreePath: '/tmp/task-1/frontend',
+      }
+    );
     expect(mockExitWithSuccess).toHaveBeenCalled();
   });
 

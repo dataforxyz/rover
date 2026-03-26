@@ -269,12 +269,22 @@ function resolveRepositoryRevision(repository: string, ref?: string): string {
     });
     const line = result.stdout?.toString().trim().split('\n')[0]?.trim();
     if (!line) {
+      if (VERBOSE) {
+        console.warn(
+          `[rover] git ls-remote returned no output for ${repository} ref=${target} — cache hash will not include this repo's revision`
+        );
+      }
       return '';
     }
 
     const [sha] = line.split(/\s+/);
     return sha || '';
-  } catch {
+  } catch (error) {
+    if (VERBOSE) {
+      console.warn(
+        `[rover] Warning: failed to resolve revision for ${repository}${ref ? ` ref=${ref}` : ''} — cache may not invalidate when this repo changes. ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     return '';
   }
 }
@@ -397,9 +407,12 @@ export function checkImageCache(
           typeof p.repository === 'string'
             ? resolveRepositoryRevision(p.repository, p.ref)
             : '',
-        localContentHash: hashMaterializedProjectContents(
-          join(projectConfig.projectRoot, p.path)
-        ),
+        localContentHash:
+          typeof p.repository === 'string'
+            ? ''
+            : hashMaterializedProjectContents(
+                join(projectConfig.projectRoot, p.path)
+              ),
         languages: p.languages,
         packageManagers: p.packageManagers,
         taskManagers: p.taskManagers,

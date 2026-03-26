@@ -97,28 +97,15 @@ Shared demo behavior:
 - [x] Validate `rover rebase` against the demo workspace
 - [x] Draft user-facing setup/configuration doc after command validation
 
-## Validated paths
-
-- Clean generated workspace: `/tmp/rover-multi-env-demo-run-5`
-- Fresh clone from that workspace root repo: `/tmp/rover-multi-env-demo-fresh-final-2`
-- Fresh clone used for final in-Rover validation: `/tmp/rover-multi-env-demo-run-6`
-
-Validated commands in both:
+## Validated commands
 
 - `make setup`
 - `make test`
 - `make test-e2e`
 - `make validate`
 
-Validated in prepared Rover task image:
+## Validated Rover task
 
-- `rover-fresh-prepared:latest`
-- `rover-cache:618a24cafbe9b09e`
-
-Validated in a real Rover task:
-
-- Project data root: `/home/dev/.rover/data/projects/tmp-rover-multi-env-demo-run-6-c39daf38`
-- Task: `3`
 - Workflow: `swe-tdd`
 - Agent: `claude:haiku`
 - Explicit test command override: `make validate`

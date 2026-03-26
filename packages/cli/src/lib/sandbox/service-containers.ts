@@ -57,12 +57,40 @@ export async function createServiceNetwork(
 ): Promise<string> {
   const networkName = serviceNetworkName(taskId, iteration);
   const opts = env ? { env } : undefined;
+  const inspectOpts = opts
+    ? { ...opts, reject: false as const }
+    : { reject: false as const };
 
   if (VERBOSE) {
     console.error(`[rover] creating service network ${networkName}`);
   }
 
-  await launch(backend, ['network', 'create', networkName], opts);
+  const inspectResult = await launch(
+    backend,
+    ['network', 'inspect', networkName],
+    inspectOpts
+  );
+  if (inspectResult.exitCode === 0) {
+    if (VERBOSE) {
+      console.error(`[rover] reusing existing service network ${networkName}`);
+    }
+    return networkName;
+  }
+
+  try {
+    await launch(backend, ['network', 'create', networkName], opts);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.toLowerCase().includes('already exists')) {
+      if (VERBOSE) {
+        console.error(
+          `[rover] service network ${networkName} was created concurrently; reusing it`
+        );
+      }
+      return networkName;
+    }
+    throw error;
+  }
   return networkName;
 }
 

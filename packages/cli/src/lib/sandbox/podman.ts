@@ -156,11 +156,10 @@ export class PodmanSandbox extends Sandbox {
 
     const podmanArgs = ['create', '--name', this.sandboxName];
 
-    // Attach to the service network if services are running
-    if (this.serviceContext) {
-      podmanArgs.push(
-        ...getServiceNetworkArgs(this.serviceContext.networkName)
-      );
+    // Attach to the persisted or newly created service network when sidecars exist.
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      podmanArgs.push(...getServiceNetworkArgs(serviceContext.networkName));
     }
 
     const userInfo_ = normalizeUserInfo(userInfo());
@@ -386,7 +385,8 @@ export class PodmanSandbox extends Sandbox {
       this.options?.projectPath ?? process.cwd()
     );
     const services = projectConfig.services;
-    if (services && services.length > 0) {
+    const existingServiceContext = this.resolveServiceContext();
+    if (services && services.length > 0 && !existingServiceContext) {
       this.processManager?.addItem('Starting service containers...');
       try {
         const networkName = await createServiceNetwork(
@@ -812,7 +812,7 @@ export class PodmanSandbox extends Sandbox {
     }
   }
 
-  async openShellAtWorktree(): Promise<void> {
+  async openShellAtWorktree(): Promise<{ exitCode?: number }> {
     // Check if worktree exists
     if (!this.task.worktreePath || !existsSync(this.task.worktreePath)) {
       throw new Error('No worktree found for this task');
@@ -856,7 +856,7 @@ export class PodmanSandbox extends Sandbox {
 
     // Start Podman container with direct stdio inheritance for true interactivity
     // Use detached: false to ensure proper TTY signal handling and job control
-    await launch('podman', podmanArgs, {
+    return await launch('podman', podmanArgs, {
       reject: false,
       stdio: 'inherit', // This gives full control to the user
       detached: false,

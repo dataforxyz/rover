@@ -28,7 +28,9 @@ class TestSandbox extends Sandbox {
     return true;
   }
 
-  async openShellAtWorktree(): Promise<void> {}
+  async openShellAtWorktree(): Promise<{ exitCode?: number }> {
+    return { exitCode: 0 };
+  }
 
   async inspect(): Promise<{ status: string; exitCode?: number } | null> {
     return null;

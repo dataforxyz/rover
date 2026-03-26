@@ -25,9 +25,17 @@ describe('service-containers', () => {
 
   describe('createServiceNetwork', () => {
     it('creates a docker network with the expected name', async () => {
+      mockedLaunch.mockResolvedValueOnce({ stdout: '', exitCode: 1 });
+      mockedLaunch.mockResolvedValueOnce({ stdout: '' });
+
       const name = await createServiceNetwork(ContainerBackend.Docker, 5, 2);
 
       expect(name).toBe('rover-services-5-2');
+      expect(mockedLaunch).toHaveBeenCalledWith(
+        ContainerBackend.Docker,
+        ['network', 'inspect', 'rover-services-5-2'],
+        { reject: false }
+      );
       expect(mockedLaunch).toHaveBeenCalledWith(
         ContainerBackend.Docker,
         ['network', 'create', 'rover-services-5-2'],
@@ -37,12 +45,48 @@ describe('service-containers', () => {
 
     it('passes env for DOCKER_HOST forwarding', async () => {
       const env = { DOCKER_HOST: 'tcp://remote:2375' } as NodeJS.ProcessEnv;
+      mockedLaunch.mockResolvedValueOnce({ stdout: '', exitCode: 1 });
+      mockedLaunch.mockResolvedValueOnce({ stdout: '' });
       await createServiceNetwork(ContainerBackend.Docker, 1, 1, env);
 
       expect(mockedLaunch).toHaveBeenCalledWith(
         ContainerBackend.Docker,
-        expect.any(Array),
+        ['network', 'inspect', 'rover-services-1-1'],
+        { env, reject: false }
+      );
+      expect(mockedLaunch).toHaveBeenCalledWith(
+        ContainerBackend.Docker,
+        ['network', 'create', 'rover-services-1-1'],
         { env }
+      );
+    });
+
+    it('reuses an existing network instead of recreating it', async () => {
+      mockedLaunch.mockResolvedValueOnce({ stdout: '[]', exitCode: 0 });
+
+      const name = await createServiceNetwork(ContainerBackend.Docker, 7, 3);
+
+      expect(name).toBe('rover-services-7-3');
+      expect(mockedLaunch).toHaveBeenCalledTimes(1);
+      expect(mockedLaunch).toHaveBeenCalledWith(
+        ContainerBackend.Docker,
+        ['network', 'inspect', 'rover-services-7-3'],
+        { reject: false }
+      );
+    });
+
+    it('reuses a network when create races with another creator', async () => {
+      mockedLaunch.mockResolvedValueOnce({ stdout: '', exitCode: 1 });
+      mockedLaunch.mockRejectedValueOnce(new Error('network already exists'));
+
+      const name = await createServiceNetwork(ContainerBackend.Docker, 8, 4);
+
+      expect(name).toBe('rover-services-8-4');
+      expect(mockedLaunch).toHaveBeenNthCalledWith(
+        2,
+        ContainerBackend.Docker,
+        ['network', 'create', 'rover-services-8-4'],
+        undefined
       );
     });
   });

@@ -1752,9 +1752,7 @@ describe('isTransientError', () => {
   });
 
   it('matches provider outage codes', () => {
-    expect(isTransientError('API Error: 500 Internal server error')).toBe(
-      true
-    );
+    expect(isTransientError('API Error: 500 Internal server error')).toBe(true);
     expect(isTransientError('Service unavailable')).toBe(true);
   });
 

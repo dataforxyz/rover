@@ -4,7 +4,10 @@ import colors, { type StyleFunction } from 'ansi-colors';
  * Format task status for user-friendly display.
  * When a pauseReason is given for PAUSED status, includes it for context (e.g., "Paused (rate limit)").
  */
-export const formatTaskStatus = (status: string, pauseReason?: string): string => {
+export const formatTaskStatus = (
+  status: string,
+  pauseReason?: string
+): string => {
   switch (status.toUpperCase()) {
     case 'NEW':
       return 'New';

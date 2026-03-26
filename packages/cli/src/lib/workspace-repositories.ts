@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import type { ProjectConfigManager } from 'rover-core';
 
 export interface WorkspaceRepository {
@@ -19,6 +19,19 @@ interface WorkspaceDescriptionProject {
 
 interface WorkspaceDescription {
   projects?: WorkspaceDescriptionProject[];
+}
+
+/**
+ * Validate that a project path stays within the task worktree root.
+ * Rejects absolute paths and paths containing `..` traversal sequences.
+ */
+function isPathWithinRoot(rootPath: string, projectPath: string): boolean {
+  if (isAbsolute(projectPath)) {
+    return false;
+  }
+  const resolved = resolve(rootPath, projectPath);
+  const rel = relative(rootPath, resolved);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 function getLatestIterationWorkspaceDescriptionPath(
@@ -71,7 +84,8 @@ function parseWorkspaceDescription(
         } =>
           typeof project?.name === 'string' &&
           typeof project?.path === 'string' &&
-          typeof project?.repository === 'string'
+          typeof project?.repository === 'string' &&
+          isPathWithinRoot(taskWorktreePath, project.path as string)
       )
       .map(project => ({
         name: project.name,
@@ -121,7 +135,8 @@ export function getConfiguredWorkspaceRepositories(
       } =>
         typeof project.name === 'string' &&
         typeof project.path === 'string' &&
-        typeof project.repository === 'string'
+        typeof project.repository === 'string' &&
+        isPathWithinRoot(taskWorktreePath, project.path)
     )
     .map(project => ({
       name: project.name,

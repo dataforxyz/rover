@@ -102,7 +102,11 @@ export async function runCommandStep(
   // Guard: if placeholder resolution produced a failure sentinel (e.g. a
   // prior step failed to extract the command), fail immediately with a
   // clear message instead of running a broken command that returns 127.
-  if (/\[Could not extract from response\]|\[Not found in response\]/.test(resolvedCommand)) {
+  if (
+    /\[Could not extract from response\]|\[Not found in response\]/.test(
+      resolvedCommand
+    )
+  ) {
     const duration = (performance.now() - start) / 1000;
     const errMsg = `Command contains unresolved output placeholder: ${resolvedCommand}`;
     console.log(`✗ ${step.name || step.id}: ${errMsg}`);

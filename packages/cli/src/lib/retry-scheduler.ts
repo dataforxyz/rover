@@ -1,10 +1,7 @@
 import type { ProjectManager } from 'rover-core';
 import { resumeTask } from './resume-helper.js';
 import { checkClaudeUsage, invalidateUsageCache } from './claude-usage.js';
-import {
-  checkCodexUsage,
-  invalidateCodexUsageCache,
-} from './codex-usage.js';
+import { checkCodexUsage, invalidateCodexUsageCache } from './codex-usage.js';
 import colors from 'ansi-colors';
 
 /**
@@ -408,7 +405,13 @@ export class RetryScheduler {
     }
 
     // Pre-fire usage check: if still exhausted, defer without burning a retry.
-    const deferResult = await this.preFireUsageCheck(provider, task, taskKey, taskId, project);
+    const deferResult = await this.preFireUsageCheck(
+      provider,
+      task,
+      taskKey,
+      taskId,
+      project
+    );
     if (deferResult) return;
 
     this.log(

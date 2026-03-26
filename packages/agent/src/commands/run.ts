@@ -80,16 +80,27 @@ function workflowReasonCode(error?: string): string {
   if (text.includes('rate limit') || text.includes('too many requests')) {
     return 'rate_limit';
   }
-  if (text.includes('auth') || text.includes('login') || text.includes('sign in')) {
+  if (
+    text.includes('auth') ||
+    text.includes('login') ||
+    text.includes('sign in')
+  ) {
     return 'auth_required';
   }
-  if (text.includes('timeout') || text.includes('timed out') || text.includes('network')) {
+  if (
+    text.includes('timeout') ||
+    text.includes('timed out') ||
+    text.includes('network')
+  ) {
     return 'network_timeout';
   }
   if (text.includes('step failure') || text.includes('step failed')) {
     return 'workflow_step_failed';
   }
-  if (text.includes('container') && (text.includes('exit') || text.includes('crash'))) {
+  if (
+    text.includes('container') &&
+    (text.includes('exit') || text.includes('crash'))
+  ) {
     return 'container_crashed';
   }
   if (text.includes('signal')) {
@@ -927,7 +938,8 @@ export const runCommand = async (
 
       // ACP usage decision: use ACP mode only for tools with ACP support.
       // Set ROVER_NO_ACP=1 to force direct runner mode (bypasses ACP auth issues).
-      const acpDisabled = process.env.ROVER_NO_ACP === '1' || process.env.ROVER_NO_ACP === 'true';
+      const acpDisabled =
+        process.env.ROVER_NO_ACP === '1' || process.env.ROVER_NO_ACP === 'true';
       const acpEnabledTools = [
         'claude',
         'gemini',
@@ -935,7 +947,8 @@ export const runCommand = async (
         'opencode',
         'qwen',
       ];
-      const useACPMode = !acpDisabled && acpEnabledTools.includes(tool.toLowerCase());
+      const useACPMode =
+        !acpDisabled && acpEnabledTools.includes(tool.toLowerCase());
 
       // Build the agent step executor based on mode
       if (useACPMode) {
@@ -992,7 +1005,10 @@ export const runCommand = async (
         if (existsSync(pauseRequestFile)) {
           const reason = (() => {
             try {
-              return readFileSync(pauseRequestFile, 'utf-8').trim() || 'Paused by external request';
+              return (
+                readFileSync(pauseRequestFile, 'utf-8').trim() ||
+                'Paused by external request'
+              );
             } catch {
               return 'Paused by external request';
             }

@@ -226,7 +226,8 @@ const buildTaskRow = (
         : undefined;
     if (operatingMs != null) {
       const opTime = formatDurationMs(operatingMs);
-      durationDisplay = opTime !== wallClock ? `${opTime} (${wallClock})` : opTime;
+      durationDisplay =
+        opTime !== wallClock ? `${opTime} (${wallClock})` : opTime;
     } else {
       durationDisplay = wallClock;
     }
@@ -738,7 +739,10 @@ const listCommand = async (
     console.error(colors.red('Error getting task status:'), error);
     // Recursive watch refreshes share one scheduler across refresh cycles.
     // Only destroy it when the outer list command is unwinding.
-    if (!options.watching && typeof options._retryScheduler?.destroy === 'function') {
+    if (
+      !options.watching &&
+      typeof options._retryScheduler?.destroy === 'function'
+    ) {
       options._retryScheduler?.destroy();
     }
   } finally {

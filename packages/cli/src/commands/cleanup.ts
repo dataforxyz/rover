@@ -320,9 +320,12 @@ const cleanupCommand = async (
       }
 
       if (removedVolumes.length > 0) {
-        showList(removedVolumes.map(v => colors.cyan(v)), {
-          title: 'Download caches removed',
-        });
+        showList(
+          removedVolumes.map(v => colors.cyan(v)),
+          {
+            title: 'Download caches removed',
+          }
+        );
       }
 
       if (toKeep.length > 0) {

@@ -587,12 +587,12 @@ export class Runner {
       '[Not found in response]',
     ];
     const missingRequired = stringOutputs.filter(
-      (o) =>
+      o =>
         o.required === true &&
         FAILURE_SENTINELS.includes(outputs.get(o.name) ?? '')
     );
     if (missingRequired.length > 0) {
-      const names = missingRequired.map((o) => o.name).join(', ');
+      const names = missingRequired.map(o => o.name).join(', ');
       throw new Error(
         `Required output(s) could not be extracted: ${names}. ` +
           `The agent's response did not include valid values for these fields.`

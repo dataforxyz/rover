@@ -146,11 +146,10 @@ export class DockerSandbox extends Sandbox {
 
     const dockerArgs = ['create', '--name', this.sandboxName];
 
-    // Attach to the service network if services are running
-    if (this.serviceContext) {
-      dockerArgs.push(
-        ...getServiceNetworkArgs(this.serviceContext.networkName)
-      );
+    // Attach to the persisted or newly created service network when sidecars exist.
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      dockerArgs.push(...getServiceNetworkArgs(serviceContext.networkName));
     }
 
     const rawUserInfo = userInfo();
@@ -379,7 +378,8 @@ export class DockerSandbox extends Sandbox {
       this.options?.projectPath ?? process.cwd()
     );
     const services = projectConfig.services;
-    if (services && services.length > 0) {
+    const existingServiceContext = this.resolveServiceContext();
+    if (services && services.length > 0 && !existingServiceContext) {
       this.processManager?.addItem('Starting service containers...');
       const dockerEnv = this.getDockerEnv();
       try {
@@ -839,7 +839,7 @@ export class DockerSandbox extends Sandbox {
     }
   }
 
-  async openShellAtWorktree(): Promise<void> {
+  async openShellAtWorktree(): Promise<{ exitCode?: number }> {
     // Check if worktree exists
     if (!this.task.worktreePath || !existsSync(this.task.worktreePath)) {
       throw new Error('No worktree found for this task');
@@ -883,7 +883,7 @@ export class DockerSandbox extends Sandbox {
 
     // Start Docker container with direct stdio inheritance for true interactivity
     // Use detached: false to ensure proper TTY signal handling and job control
-    await launch('docker', dockerArgs, {
+    return await launch('docker', dockerArgs, {
       reject: false,
       stdio: 'inherit', // This gives full control to the user
       detached: false,

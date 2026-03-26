@@ -1069,6 +1069,7 @@ describe('checkImageCache', () => {
           repository: 'https://github.com/dataforxyz/api.git',
           ref: 'main',
           repositoryRevision: 'abc123',
+          localContentHash: '',
         },
       ],
     });
@@ -1082,7 +1083,7 @@ describe('checkImageCache', () => {
     );
   });
 
-  it('changes when a materialized child project changes locally', () => {
+  it('changes when a local materialized child project changes locally', () => {
     const projectRoot = createTmpDir();
     mkdirSync(join(projectRoot, 'packages', 'api'), { recursive: true });
     writeFileSync(
@@ -1128,5 +1129,75 @@ describe('checkImageCache', () => {
     );
 
     expect(result1.cacheTag).not.toBe(result2.cacheTag);
+  });
+
+  it('does not change when a repository-backed child project changes locally', () => {
+    const projectRoot = createTmpDir();
+    mkdirSync(join(projectRoot, 'packages', 'api'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"1.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"2.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).toBe(result2.cacheTag);
   });
 });

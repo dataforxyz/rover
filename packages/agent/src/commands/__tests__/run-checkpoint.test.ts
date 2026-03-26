@@ -596,9 +596,7 @@ describe('isTransientError', () => {
   });
 
   it('should detect provider 500 status as transient', () => {
-    expect(isTransientError('API Error: 500 Internal server error')).toBe(
-      true
-    );
+    expect(isTransientError('API Error: 500 Internal server error')).toBe(true);
   });
 
   it('should detect service unavailable as transient', () => {
@@ -721,9 +719,7 @@ describe('isRetryableError', () => {
   });
 
   it('should detect provider 500 status as retryable', () => {
-    expect(isRetryableError('API Error: 500 Internal server error')).toBe(
-      true
-    );
+    expect(isRetryableError('API Error: 500 Internal server error')).toBe(true);
   });
 
   it('should NOT match 429 embedded in a larger number', () => {

@@ -232,6 +232,78 @@ describe('workspace-repositories', () => {
     });
   });
 
+  // ── path traversal protection ─────────────────────────────────────
+
+  describe('path traversal protection', () => {
+    it('rejects projects with path traversal in workspace description', () => {
+      const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 1);
+      writeFileSync(
+        join(iterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'escape',
+              path: '../../etc',
+              repository: 'https://example.com/evil.git',
+            },
+            {
+              name: 'safe',
+              path: 'frontend',
+              repository: 'https://example.com/safe.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(dir);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('safe');
+    });
+
+    it('rejects projects with absolute paths in workspace description', () => {
+      const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 1);
+      writeFileSync(
+        join(iterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'abs',
+              path: '/tmp/evil',
+              repository: 'https://example.com/evil.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(dir);
+      expect(result).toHaveLength(0);
+    });
+
+    it('rejects projects with path traversal in project config', () => {
+      const dir = makeTmpDir();
+      const config = {
+        projects: [
+          {
+            name: 'escape',
+            path: '../../../etc/passwd',
+            repository: 'https://example.com/evil.git',
+          },
+          {
+            name: 'safe',
+            path: 'backend',
+            repository: 'https://example.com/safe.git',
+          },
+        ],
+      } as any;
+
+      const result = getConfiguredWorkspaceRepositories(dir, config);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('safe');
+    });
+  });
+
   // ── getConfiguredWorkspaceRepositories ────────────────────────────
 
   describe('getConfiguredWorkspaceRepositories', () => {

@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockLaunch, mockTeardownServiceContainers } = vi.hoisted(() => ({
+const {
+  mockLaunch,
+  mockTeardownServiceContainers,
+  mockGetServiceNetworkArgs,
+  mockCheckImageCache,
+} = vi.hoisted(() => ({
   mockLaunch: vi.fn(),
   mockTeardownServiceContainers: vi.fn(),
+  mockGetServiceNetworkArgs: vi.fn(() => ['--network', 'rover-services-1-1']),
+  mockCheckImageCache: vi.fn(() => ({
+    hasCachedImage: true,
+    cacheTag: 'rover-cache:test',
+  })),
 }));
 
 vi.mock('rover-core', () => ({
@@ -57,10 +67,7 @@ vi.mock('../../setup.js', () => ({
 }));
 
 vi.mock('../container-image-cache.js', () => ({
-  checkImageCache: vi.fn(() => ({
-    hasCachedImage: false,
-    cacheTag: 'rover-cache:test',
-  })),
+  checkImageCache: mockCheckImageCache,
   waitForInitAndCommit: vi.fn(),
 }));
 
@@ -90,7 +97,7 @@ vi.mock('../container-common.js', () => ({
 
 vi.mock('../service-containers.js', () => ({
   createServiceNetwork: vi.fn(),
-  getServiceNetworkArgs: vi.fn(() => []),
+  getServiceNetworkArgs: mockGetServiceNetworkArgs,
   startServiceContainers: vi.fn(),
   teardownServiceContainers: mockTeardownServiceContainers,
   waitForServicesReady: vi.fn(),
@@ -255,5 +262,43 @@ describe('sandbox inspect', () => {
       teardownEnv
     );
     expect(sandbox.getSandboxMetadata()).toBeUndefined();
+  });
+
+  it.each([
+    ['docker', DockerSandbox, 'docker'],
+    ['podman', PodmanSandbox, 'podman'],
+  ])('attaches resumed %s task containers to the persisted service network', async (_label, SandboxCtor, backend) => {
+    const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    mockLaunch
+      .mockResolvedValueOnce({ stdout: '' })
+      .mockResolvedValueOnce({ stdout: 'container-1' })
+      .mockResolvedValueOnce({ stdout: '' });
+
+    await expect(sandbox.createAndStart()).resolves.toBe('container-1');
+
+    expect(mockGetServiceNetworkArgs).toHaveBeenCalledWith(
+      'rover-services-1-1'
+    );
+    expect(mockLaunch.mock.calls[1]?.[0]).toBe(backend);
+    expect(mockLaunch.mock.calls[1]?.[1]).toEqual(
+      expect.arrayContaining([
+        'create',
+        '--name',
+        'rover-task-1-1',
+        '--network',
+        'rover-services-1-1',
+      ])
+    );
   });
 });

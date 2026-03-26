@@ -14,6 +14,33 @@ import {
 } from '../lib/sandbox/index.js';
 import type { CommandDefinition } from '../types.js';
 
+function getShellSandboxMetadata(task: {
+  sandboxMetadata?: Record<string, unknown>;
+  isInProgress?: () => boolean;
+  isIterating?: () => boolean;
+  status?: string;
+}): Record<string, unknown> | undefined {
+  const metadata = task.sandboxMetadata;
+  if (!metadata) {
+    return undefined;
+  }
+
+  const shouldReuseServiceContext =
+    task.isInProgress?.() === true ||
+    task.isIterating?.() === true ||
+    task.status === 'IN_PROGRESS' ||
+    task.status === 'ITERATING';
+
+  if (shouldReuseServiceContext) {
+    return metadata;
+  }
+
+  const { serviceContext: _serviceContext, ...remainingMetadata } = metadata;
+  return Object.keys(remainingMetadata).length > 0
+    ? remainingMetadata
+    : undefined;
+}
+
 /**
  * Open an interactive shell in a task's workspace for manual testing.
  *
@@ -110,15 +137,13 @@ const shellCommand = async (
       try {
         const sandbox = await createSandbox(task, undefined, {
           projectPath: project.path,
-          sandboxMetadata: task.sandboxMetadata,
+          sandboxMetadata: getShellSandboxMetadata(task),
         });
 
         spinner.success('Shell started');
 
         // Use the sandbox implementation to open shell at worktree
-        await sandbox.openShellAtWorktree();
-
-        shellProcess = { exitCode: 0 };
+        shellProcess = await sandbox.openShellAtWorktree();
       } catch (error) {
         spinner.error('Failed to start container shell');
         jsonOutput.error = 'Failed to start container: ' + error;
@@ -230,6 +255,8 @@ const shellCommand = async (
     await telemetry?.shutdown();
   }
 };
+
+export { shellCommand };
 
 export default {
   name: 'shell',

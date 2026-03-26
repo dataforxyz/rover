@@ -187,10 +187,12 @@ describe('push command', () => {
         worktreePath === '/tmp/task-1/frontend' ? [' M src/app.ts'] : []
     );
     mockGitInstance.hasUnmergedCommits.mockImplementation(
-      (_branchName, { worktreePath } = {}) => worktreePath !== '/tmp/task-1/frontend'
+      (_branchName, { worktreePath } = {}) =>
+        worktreePath !== '/tmp/task-1/frontend'
     );
     mockGitInstance.branchExists.mockImplementation(
-      (_branchName, { worktreePath } = {}) => worktreePath !== '/tmp/task-1/frontend'
+      (_branchName, { worktreePath } = {}) =>
+        worktreePath !== '/tmp/task-1/frontend'
     );
 
     await pushCommandModule.action('1', { json: true });

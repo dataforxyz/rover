@@ -26,7 +26,12 @@ describe('TaskDescriptionManager', () => {
   });
 
   const readLifecycleEvents = () => {
-    const logPath = join(testDir, '.rover', 'logs', 'task-status-history.jsonl');
+    const logPath = join(
+      testDir,
+      '.rover',
+      'logs',
+      'task-status-history.jsonl'
+    );
     const raw = readFileSync(logPath, 'utf8')
       .trim()
       .split('\n')
@@ -367,7 +372,8 @@ describe('TaskDescriptionManager', () => {
       task.markInProgress('2026-03-18T10:00:00.000Z');
       task.updateExecutionStatus('failed', {
         exitCode: 1,
-        error: 'Workflow stopped due to step failure: failing for observability test',
+        error:
+          'Workflow stopped due to step failure: failing for observability test',
       });
 
       const events = readLifecycleEvents();

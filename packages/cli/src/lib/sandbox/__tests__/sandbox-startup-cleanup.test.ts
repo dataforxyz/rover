@@ -201,4 +201,34 @@ describe('sandbox startup cleanup', () => {
       'service startup failed'
     );
   });
+
+  it.each([
+    ['docker', DockerSandbox],
+    ['podman', PodmanSandbox],
+  ])('reuses persisted %s service context during createAndStart', async (_label, SandboxCtor) => {
+    mockProjectConfigLoad.mockReturnValue({ services: [{ name: 'postgres' }] });
+
+    const sandbox = new SandboxCtor(createFakeTask(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    (sandbox as any).checkCacheState = vi.fn().mockImplementation(() => {
+      (sandbox as any).shouldCommitCache = false;
+    });
+    (sandbox as any).create = vi.fn().mockResolvedValue('sandbox-id');
+    (sandbox as any).start = vi.fn().mockResolvedValue('sandbox-id');
+
+    await expect(sandbox.createAndStart()).resolves.toBe('sandbox-id');
+    expect(mockCreateServiceNetwork).not.toHaveBeenCalled();
+    expect(mockStartServiceContainers).not.toHaveBeenCalled();
+    expect(mockWaitForServicesReady).not.toHaveBeenCalled();
+  });
 });

@@ -102,7 +102,8 @@ const resumeCommand = async (
           );
         }
       } catch (error) {
-        jsonOutput.error = error instanceof Error ? error.message : String(error);
+        jsonOutput.error =
+          error instanceof Error ? error.message : String(error);
         await exitWithError(jsonOutput, { telemetry });
         return;
       }

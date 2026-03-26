@@ -41,6 +41,8 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain(
       "git -C '/workspace/backend' fetch --all --tags --prune"
     );
+    expect(script).toContain("git -C '/workspace/frontend' clean -fdx");
+    expect(script).toContain("git -C '/workspace/backend' clean -fdx");
     expect(script).toContain('bash "/workspace/scripts/system-init.sh"');
     expect(script).toContain('bash "/workspace/frontend/scripts/init.sh"');
     expect(script).toContain('bash "/workspace/backend/scripts/init.sh"');
