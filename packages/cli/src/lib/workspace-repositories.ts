@@ -22,38 +22,44 @@ interface WorkspaceDescription {
   projects?: WorkspaceDescriptionProject[];
 }
 
-function getLatestIterationWorkspaceDescriptionPath(
-  taskBasePath: string
-): string | undefined {
+interface WorkspaceDescriptionLookupResult {
+  foundPersistedState: boolean;
+  repositories: WorkspaceRepository[];
+}
+
+function getIterationWorkspaceDescriptionPaths(taskBasePath: string): {
+  iterationCount: number;
+  descriptionPaths: string[];
+} {
   const iterationsPath = join(taskBasePath, 'iterations');
 
   if (!existsSync(iterationsPath)) {
-    return undefined;
+    return { iterationCount: 0, descriptionPaths: [] };
   }
 
-  const latestIteration = readdirSync(iterationsPath, { withFileTypes: true })
+  const iterationIds = readdirSync(iterationsPath, { withFileTypes: true })
     .filter(dirent => dirent.isDirectory())
     .map(dirent => Number.parseInt(dirent.name, 10))
     .filter(iteration => !Number.isNaN(iteration))
-    .sort((a, b) => b - a)[0];
+    .sort((a, b) => b - a);
 
-  if (latestIteration === undefined) {
-    return undefined;
-  }
-
-  const descriptionPath = join(
-    iterationsPath,
-    latestIteration.toString(),
-    'workspace-description.json'
-  );
-
-  return existsSync(descriptionPath) ? descriptionPath : undefined;
+  return {
+    iterationCount: iterationIds.length,
+    descriptionPaths: iterationIds.flatMap(iterationId => {
+      const descriptionPath = join(
+        iterationsPath,
+        iterationId.toString(),
+        'workspace-description.json'
+      );
+      return existsSync(descriptionPath) ? [descriptionPath] : [];
+    }),
+  };
 }
 
 function parseWorkspaceDescription(
   descriptionPath: string,
   taskWorktreePath: string
-): WorkspaceRepository[] {
+): WorkspaceRepository[] | undefined {
   try {
     const raw = readFileSync(descriptionPath, 'utf8');
     const parsed = JSON.parse(raw) as WorkspaceDescription;
@@ -84,30 +90,54 @@ function parseWorkspaceDescription(
         };
       })
       .filter((entry): entry is WorkspaceRepository => entry !== null);
-  } catch {
-    return [];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(
+      `Warning: failed to parse workspace description at ${descriptionPath}: ${message}\n`
+    );
+    return undefined;
   }
+}
+
+function getWorkspaceDescriptionRepositoriesResult(
+  taskWorktreePath: string,
+  taskBasePath: string = dirname(taskWorktreePath)
+): WorkspaceDescriptionLookupResult {
+  const { iterationCount, descriptionPaths: persistedDescriptionPaths } =
+    getIterationWorkspaceDescriptionPaths(taskBasePath);
+  let foundPersistedState = iterationCount > 0;
+
+  for (const descriptionPath of persistedDescriptionPaths) {
+    const repositories = parseWorkspaceDescription(
+      descriptionPath,
+      taskWorktreePath
+    );
+    if (repositories !== undefined) {
+      return { foundPersistedState: true, repositories };
+    }
+  }
+
+  const legacyDescriptionPath = join(taskWorktreePath, '.rover-workspace.json');
+  if (!existsSync(legacyDescriptionPath)) {
+    return { foundPersistedState, repositories: [] };
+  }
+
+  foundPersistedState = true;
+  return {
+    foundPersistedState,
+    repositories:
+      parseWorkspaceDescription(legacyDescriptionPath, taskWorktreePath) ?? [],
+  };
 }
 
 export function getWorkspaceDescriptionRepositories(
   taskWorktreePath: string,
   taskBasePath: string = dirname(taskWorktreePath)
 ): WorkspaceRepository[] {
-  const persistedDescriptionPath =
-    getLatestIterationWorkspaceDescriptionPath(taskBasePath);
-  if (persistedDescriptionPath) {
-    return parseWorkspaceDescription(
-      persistedDescriptionPath,
-      taskWorktreePath
-    );
-  }
-
-  const legacyDescriptionPath = join(taskWorktreePath, '.rover-workspace.json');
-  if (!existsSync(legacyDescriptionPath)) {
-    return [];
-  }
-
-  return parseWorkspaceDescription(legacyDescriptionPath, taskWorktreePath);
+  return getWorkspaceDescriptionRepositoriesResult(
+    taskWorktreePath,
+    taskBasePath
+  ).repositories;
 }
 
 export function getConfiguredWorkspaceRepositories(
@@ -146,12 +176,12 @@ export function getWorkspaceRepositories(
   taskBasePath: string,
   projectConfig: ProjectConfigManager
 ): WorkspaceRepository[] {
-  const fromDescription = getWorkspaceDescriptionRepositories(
+  const fromDescription = getWorkspaceDescriptionRepositoriesResult(
     taskWorktreePath,
     taskBasePath
   );
-  if (fromDescription.length > 0) {
-    return fromDescription;
+  if (fromDescription.foundPersistedState) {
+    return fromDescription.repositories;
   }
 
   return getConfiguredWorkspaceRepositories(taskWorktreePath, projectConfig);

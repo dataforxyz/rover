@@ -101,38 +101,37 @@ export class SetupBuilder {
     packageManagers?: string[];
   }> {
     const persistedProjects = this.getPersistedWorkspaceProjects();
-    if (persistedProjects) {
+    if (persistedProjects !== undefined) {
       return persistedProjects;
     }
 
-    return (this.projectConfig.projects ?? [])
-      .flatMap((project, index) => {
-        if (
-          typeof project?.name !== 'string' ||
-          typeof project?.path !== 'string'
-        ) {
-          return [];
-        }
+    return (this.projectConfig.projects ?? []).flatMap((project, index) => {
+      if (
+        typeof project?.name !== 'string' ||
+        typeof project?.path !== 'string' ||
+        !isSafeRelativePath(project.path)
+      ) {
+        return [];
+      }
 
-        const repositoryMount = this.resolveRepositoryMount(
-          project.repository,
-          index
-        );
+      const repositoryMount = this.resolveRepositoryMount(
+        project.repository,
+        index
+      );
 
-        return [
-          {
-            name: project.name,
-            path: project.path,
-            repository: project.repository,
-            runtimeRepository:
-              repositoryMount?.containerPath ?? project.repository,
-            ref: project.ref,
-            languages: project.languages ?? [],
-            packageManagers: project.packageManagers ?? [],
-          },
-        ];
-      })
-      .filter(project => isSafeRelativePath(project.path));
+      return [
+        {
+          name: project.name,
+          path: project.path,
+          repository: project.repository,
+          runtimeRepository:
+            repositoryMount?.containerPath ?? project.repository,
+          ref: project.ref,
+          languages: project.languages ?? [],
+          packageManagers: project.packageManagers ?? [],
+        },
+      ];
+    });
   }
 
   private getPersistedWorkspaceProjects():
@@ -157,6 +156,10 @@ export class SetupBuilder {
       .filter(iteration => !Number.isNaN(iteration))
       .sort((a, b) => b - a);
 
+    if (iterationIds.length === 0) {
+      return undefined;
+    }
+
     for (const iterationId of iterationIds) {
       const descriptionPath = join(
         iterationsPath,
@@ -179,11 +182,12 @@ export class SetupBuilder {
           }>;
         };
 
-        return (Array.isArray(parsed.projects) ? parsed.projects : [])
-          .flatMap((project, index) => {
+        return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
+          (project, index) => {
             if (
               typeof project?.name !== 'string' ||
-              typeof project?.path !== 'string'
+              typeof project?.path !== 'string' ||
+              !isSafeRelativePath(project.path)
             ) {
               return [];
             }
@@ -217,14 +221,14 @@ export class SetupBuilder {
                   : [],
               },
             ];
-          })
-          .filter(project => isSafeRelativePath(project.path));
+          }
+        );
       } catch {
         continue;
       }
     }
 
-    return undefined;
+    return [];
   }
 
   private isLocalRepositoryReference(repository: string): boolean {
@@ -518,17 +522,13 @@ echo -e "\\n📦 Done installing MCP servers"`;
         const label = entry.path ? ` (${entry.path})` : '';
         if (entry.path) {
           scriptBlocks.push(`echo "🔧 Running initialization script${label}"
-workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
 workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
 if [ -f "$workspace_project_script_${index}" ]; then
   workspace_script_${index}="$workspace_project_script_${index}"
   workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
-elif [ -f "$workspace_root_script_${index}" ]; then
-  workspace_script_${index}="$workspace_root_script_${index}"
-  workspace_dir_${index}='/workspace'
 else
-  workspace_script_${index}="$workspace_root_script_${index}"
-  workspace_dir_${index}='/workspace'
+  echo "❌ Initialization script${label} not found at $workspace_project_script_${index}"
+  safe_exit 1
 fi
 chmod +x "$workspace_script_${index}"
 cd "$workspace_dir_${index}"
@@ -745,7 +745,9 @@ else
   git -C ${escapedPath} checkout -B ${escapedTaskBranch} HEAD
 fi
 git -C ${escapedPath} reset --hard HEAD
-git -C ${escapedPath} clean -fd
+# Remove ignored files too so restarted tasks do not inherit stale child-repo
+# build outputs, caches, or generated artifacts from prior runs.
+git -C ${escapedPath} clean -fdx
 echo "✅ Repository ${escapedName} is ready"`;
       });
 

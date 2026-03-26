@@ -7,6 +7,29 @@ import { isIPv4 as nodeIsIPv4, isIPv6 as nodeIsIPv6, isIP } from 'node:net';
 import type { NetworkConfig, NetworkRule } from 'rover-schemas';
 
 /**
+ * Characters that are unsafe in shell contexts (command substitution,
+ * variable expansion, statement separators, etc.).  Used to reject
+ * host values and sanitize description values before they are embedded
+ * in generated bash scripts.
+ */
+const SHELL_UNSAFE_CHARS = /[`$();&|!{}\n\r\\]/;
+
+/**
+ * Sanitize a rule description so it is safe to embed as a bash comment.
+ * Strips control characters and any characters that could break out of
+ * a comment context (e.g. newlines).
+ */
+function sanitizeDescription(description: string): string {
+  // Replace newlines, carriage returns and other control chars with spaces,
+  // then collapse multiple spaces.
+  return description
+    .replace(/[\n\r\t]/g, ' ')
+    .replace(/[`$();&|!{}\\]/g, '')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
+/**
  * Merge network configurations from project and task levels.
  * Task-level config takes full precedence over project-level config.
  */
@@ -134,6 +157,14 @@ export function generateNetworkScript(
     '',
   ];
 
+  // Validate rules before embedding them in the generated script.
+  if (config.rules && config.rules.length > 0) {
+    const validation = validateNetworkRules(config.rules);
+    if (!validation.valid) {
+      throw new Error(`Invalid network rules: ${validation.errors.join('; ')}`);
+    }
+  }
+
   if (config.mode === 'allowlist') {
     lines.push(...generateAllowlistScript(config, options.serviceHostnames));
   } else if (config.mode === 'blocklist') {
@@ -204,7 +235,9 @@ function generateAllowlistScript(
   if (config.rules && config.rules.length > 0) {
     lines.push('  # Allow specific hosts');
     for (const rule of config.rules) {
-      const comment = rule.description ? ` # ${rule.description}` : '';
+      const comment = rule.description
+        ? ` # ${sanitizeDescription(rule.description)}`
+        : '';
       if (isIPOrCIDR(rule.host)) {
         // Direct IP/CIDR - no resolution needed
         if (isIPv6(rule.host)) {
@@ -217,9 +250,11 @@ function generateAllowlistScript(
           );
         }
       } else {
-        // Domain - needs resolution
-        lines.push(`  # ${rule.host}${comment}`);
-        lines.push(`  for ip in $(resolve_host "${rule.host}"); do`);
+        // Domain - needs resolution; single-quote the host to prevent
+        // shell expansion of any residual special characters.
+        const safeHost = rule.host.replace(/'/g, "'\"'\"'");
+        lines.push(`  # ${rule.host.replace(/[\n\r]/g, ' ')}${comment}`);
+        lines.push(`  for ip in $(resolve_host '${safeHost}'); do`);
         lines.push('    if [[ "$ip" =~ : ]]; then');
         lines.push(
           '      sudo ip6tables -A OUTPUT -d "$ip" -j ACCEPT 2>/dev/null || true'
@@ -255,7 +290,9 @@ function generateBlocklistScript(
   if (config.rules && config.rules.length > 0) {
     lines.push('  # Block specific hosts');
     for (const rule of config.rules) {
-      const comment = rule.description ? ` # ${rule.description}` : '';
+      const comment = rule.description
+        ? ` # ${sanitizeDescription(rule.description)}`
+        : '';
       if (isIPOrCIDR(rule.host)) {
         // Direct IP/CIDR - no resolution needed
         if (isIPv6(rule.host)) {
@@ -268,9 +305,11 @@ function generateBlocklistScript(
           );
         }
       } else {
-        // Domain - needs resolution
-        lines.push(`  # ${rule.host}${comment}`);
-        lines.push(`  for ip in $(resolve_host "${rule.host}"); do`);
+        // Domain - needs resolution; single-quote the host to prevent
+        // shell expansion of any residual special characters.
+        const safeHost = rule.host.replace(/'/g, "'\"'\"'");
+        lines.push(`  # ${rule.host.replace(/[\n\r]/g, ' ')}${comment}`);
+        lines.push(`  for ip in $(resolve_host '${safeHost}'); do`);
         lines.push('    if [[ "$ip" =~ : ]]; then');
         lines.push(
           '      sudo ip6tables -A OUTPUT -d "$ip" -j DROP 2>/dev/null || true'
@@ -299,8 +338,9 @@ function generateServiceHostnameRules(serviceHostnames: string[]): string[] {
   ];
 
   for (const hostname of uniqueHostnames) {
-    lines.push(`  # ${hostname}`);
-    lines.push(`  for ip in $(resolve_host "${hostname}"); do`);
+    const safeHostname = hostname.replace(/'/g, "'\"'\"'");
+    lines.push(`  # ${hostname.replace(/[\n\r]/g, ' ')}`);
+    lines.push(`  for ip in $(resolve_host '${safeHostname}'); do`);
     lines.push('    if [[ "$ip" =~ : ]]; then');
     lines.push(
       '      sudo ip6tables -A OUTPUT -d "$ip" -j ACCEPT 2>/dev/null || true'
@@ -341,8 +381,9 @@ export function validateNetworkRules(
 
     const host = rule.host.trim();
 
-    // Check for invalid characters
-    if (/[<>"|?*]/.test(host)) {
+    // Check for invalid characters — reject shell metacharacters that could
+    // allow command injection when the host is embedded in generated scripts.
+    if (/[<>"|?*]/.test(host) || SHELL_UNSAFE_CHARS.test(host)) {
       errors.push(`Invalid characters in host: ${host}`);
       continue;
     }

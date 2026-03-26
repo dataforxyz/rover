@@ -126,6 +126,21 @@ describe('shell command', () => {
     return task;
   };
 
+  it('rejects malformed task IDs with trailing characters', async () => {
+    const { exitWithError } = await import('../../utils/exit.js');
+
+    await shellCommand('12abc', { container: false });
+
+    expect(exitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "Invalid task ID '12abc' - must be a number",
+      }),
+      expect.objectContaining({
+        telemetry: expect.anything(),
+      })
+    );
+  });
+
   it.each([
     ['COMPLETED', (task: TaskDescriptionManager) => task.markCompleted()],
     ['FAILED', (task: TaskDescriptionManager) => task.markFailed('boom')],

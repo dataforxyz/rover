@@ -56,7 +56,7 @@ export function getDependencyResolutionCommands(
         `  echo "📦 Resolving Python dependencies (uv) in ${location.label}..."`,
         `  cd ${quotedPath} && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true`
       );
-      if (config.addVenvPathExports && location.path === '/workspace') {
+      if (config.addVenvPathExports) {
         commands.push(
           `  if [ -d ${quotedPath}/.venv/bin ]; then`,
           `    export PATH="${location.path}/.venv/bin:$PATH"`,

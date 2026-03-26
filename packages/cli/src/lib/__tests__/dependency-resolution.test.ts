@@ -57,7 +57,7 @@ describe('getDependencyResolutionCommands', () => {
     expect(joined).toContain('$HOME/.profile');
   });
 
-  it('does not export subproject uv environments onto the global PATH', () => {
+  it('exports subproject uv environments onto PATH when requested', () => {
     const result = getDependencyResolutionCommands({
       rootPackageManagers: [],
       projects: [
@@ -70,9 +70,14 @@ describe('getDependencyResolutionCommands', () => {
 
     expect(joined).toContain("cd '/workspace/api' && uv sync");
     expect(joined).toContain("cd '/workspace/worker' && uv sync");
-    expect(joined).not.toContain('/workspace/api/.venv/bin:$PATH');
-    expect(joined).not.toContain('/workspace/worker/.venv/bin:$PATH');
-    expect(joined).not.toContain('$HOME/.profile');
+    expect(joined).toContain('/workspace/api/.venv/bin:$PATH');
+    expect(joined).toContain('/workspace/worker/.venv/bin:$PATH');
+    expect(joined).toContain(
+      `echo 'export PATH="/workspace/api/.venv/bin:$PATH"' >> $HOME/.profile`
+    );
+    expect(joined).toContain(
+      `echo 'export PATH="/workspace/worker/.venv/bin:$PATH"' >> $HOME/.profile`
+    );
   });
 
   it('generates poetry commands', () => {

@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ProjectConfigManager } from 'rover-core';
 import {
   generateBuildEntrypoint,
   prepareBuildProjectConfig,
@@ -141,7 +142,7 @@ describe('generateBuildEntrypoint', () => {
     );
     const installGoIndex = script.indexOf('Installing go...');
     const goVersionProbeIndex = script.indexOf(
-      'if [ -f /workspace/go.mod ]; then'
+      "for go_mod_path in '/workspace/go.mod' '/workspace/src/go.mod' '/workspace/backend/go.mod' '/workspace/backend/src/go.mod'; do"
     );
 
     expect(repoSyncIndex).toBeGreaterThanOrEqual(0);
@@ -229,14 +230,17 @@ describe('generateBuildEntrypoint', () => {
     } as any);
 
     expect(script).toContain(
-      "workspace_root_script_0='/workspace/scripts/init.sh'"
-    );
-    expect(script).toContain(
       "workspace_project_script_0='/workspace/frontend/scripts/init.sh'"
     );
     expect(script).toContain("workspace_dir_0='/workspace/frontend'");
     expect(script).toContain('if [ -f "$workspace_project_script_0" ]; then');
+    expect(script).toContain(
+      'echo "❌ Initialization script (frontend) not found at $workspace_project_script_0"'
+    );
     expect(script).toContain('bash "$workspace_script_0"');
+    expect(script).not.toContain(
+      "workspace_root_script_0='/workspace/scripts/init.sh'"
+    );
   });
 
   it('rewrites local child repositories to mounted container paths for cache builds', () => {
@@ -246,15 +250,29 @@ describe('generateBuildEntrypoint', () => {
 
     const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
       root,
-      {
-        projects: [
-          {
-            name: 'frontend',
-            path: 'frontend',
-            repository: './repos/frontend.git',
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: ['uv'],
+          taskManagers: [],
+          attribution: true,
+          sandbox: {
+            initScript: 'scripts/system-init.sh',
           },
-        ],
-      } as any
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: './repos/frontend.git',
+              packageManagers: ['pnpm'],
+              initScript: 'scripts/init.sh',
+            },
+          ],
+        } as any,
+        root
+      )
     );
 
     expect(repositoryMounts).toEqual([
@@ -266,6 +284,13 @@ describe('generateBuildEntrypoint', () => {
     expect(buildProjectConfig.projects?.[0]?.repository).toBe(
       '/workspace-repos/0'
     );
+    expect(buildProjectConfig).toBeInstanceOf(ProjectConfigManager);
+    expect(buildProjectConfig.packageManagers).toEqual(['uv']);
+    expect(buildProjectConfig.allPackageManagers).toEqual(['uv', 'pnpm']);
+    expect(buildProjectConfig.allInitScripts).toEqual([
+      { script: 'scripts/system-init.sh' },
+      { path: 'frontend', script: 'scripts/init.sh' },
+    ]);
   });
 
   it('fails early when a configured local child repository is missing', () => {
@@ -273,15 +298,73 @@ describe('generateBuildEntrypoint', () => {
     testDirs.push(root);
 
     expect(() =>
-      prepareBuildProjectConfig(root, {
-        projects: [
+      prepareBuildProjectConfig(
+        root,
+        new ProjectConfigManager(
           {
-            name: 'frontend',
-            path: 'frontend',
-            repository: './repos/frontend.git',
-          },
-        ],
-      } as any)
+            version: '1.2',
+            languages: [],
+            mcps: [],
+            packageManagers: [],
+            taskManagers: [],
+            attribution: true,
+            projects: [
+              {
+                name: 'frontend',
+                path: 'frontend',
+                repository: './repos/frontend.git',
+              },
+            ],
+          } as any,
+          root
+        )
+      )
     ).toThrow(/Local workspace repository for frontend not found/);
+  });
+
+  it('excludes unsafe-path projects during build config preparation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      root,
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'unsafe',
+              path: '../../escape',
+              repository: './repos/missing.git',
+            },
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: './repos/frontend.git',
+            },
+          ],
+        } as any,
+        root
+      )
+    );
+
+    // Unsafe project is filtered out entirely, only safe project remains
+    expect(buildProjectConfig.projects).toHaveLength(1);
+    expect(buildProjectConfig.projects?.[0]?.name).toBe('frontend');
+    expect(buildProjectConfig.projects?.[0]?.repository).toBe(
+      '/workspace-repos/1'
+    );
+    expect(repositoryMounts).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
+        containerPath: '/workspace-repos/1',
+      },
+    ]);
   });
 });

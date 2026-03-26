@@ -38,13 +38,13 @@ const shellCommand = async (
   // Fake JSON output
   const jsonOutput: CLIJsonOutput = { success: false };
 
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  // Convert string taskId to number (strict: reject '123abc' etc.)
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Require project context
   let project;

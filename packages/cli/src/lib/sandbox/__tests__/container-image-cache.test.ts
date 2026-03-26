@@ -1297,4 +1297,75 @@ describe('checkImageCache', () => {
 
     expect(result1.cacheTag).toBe(result2.cacheTag);
   });
+
+  it('ignores unsafe child projects when hashing cache inputs', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: '',
+      exitCode: 1,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'unsafe',
+            path: '../../escape',
+            repository: 'https://github.com/dataforxyz/unsafe.git',
+          },
+          {
+            name: 'safe',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: '',
+      exitCode: 1,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const safeOnlyResult = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'safe',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result.cacheTag).toBe(safeOnlyResult.cacheTag);
+    expect(mockedLaunchSync).toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', 'https://github.com/dataforxyz/api.git', 'main'],
+      { reject: false }
+    );
+    expect(mockedLaunchSync).not.toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', 'https://github.com/dataforxyz/unsafe.git', 'HEAD'],
+      { reject: false }
+    );
+  });
 });

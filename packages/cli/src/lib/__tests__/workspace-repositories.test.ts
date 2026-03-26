@@ -6,7 +6,7 @@ import {
   symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getWorkspaceDescriptionRepositories,
@@ -73,6 +73,39 @@ describe('workspace-repositories', () => {
         'not json {{{'
       );
       expect(getWorkspaceDescriptionRepositories(dir)).toEqual([]);
+    });
+
+    it('falls back to the newest parseable persisted description', () => {
+      const dir = makeTmpDir();
+      const olderIterationDir = makeIterationDir(dir, 1);
+      const latestIterationDir = makeIterationDir(dir, 2);
+      writeFileSync(
+        join(latestIterationDir, 'workspace-description.json'),
+        'not json {{{'
+      );
+      writeFileSync(
+        join(olderIterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: 'https://example.com/frontend.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(dir);
+      expect(result).toEqual([
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: join(dir, 'frontend'),
+          repository: 'https://example.com/frontend.git',
+          ref: undefined,
+        },
+      ]);
     });
 
     it('returns empty array when projects is not an array', () => {
@@ -229,6 +262,29 @@ describe('workspace-repositories', () => {
       const result = getWorkspaceDescriptionRepositories(dir);
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('latest');
+    });
+
+    it('falls back to the newest iteration that actually has persisted metadata', () => {
+      const dir = makeTmpDir();
+      const olderIterationDir = makeIterationDir(dir, 1);
+      makeIterationDir(dir, 2);
+
+      writeFileSync(
+        join(olderIterationDir, 'workspace-description.json'),
+        JSON.stringify({
+          projects: [
+            {
+              name: 'older',
+              path: 'older',
+              repository: 'https://example.com/older.git',
+            },
+          ],
+        })
+      );
+
+      const result = getWorkspaceDescriptionRepositories(dir);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('older');
     });
 
     it('falls back to legacy worktree metadata when persisted iteration metadata is absent', () => {
@@ -498,7 +554,7 @@ describe('workspace-repositories', () => {
       expect(result[0].name).toBe('from-config');
     });
 
-    it('falls back to project config when description file has empty projects', () => {
+    it('preserves a root-only workspace when description file has empty projects', () => {
       const dir = makeTmpDir();
       writeFileSync(
         join(dir, '.rover-workspace.json'),
@@ -515,9 +571,48 @@ describe('workspace-repositories', () => {
         ],
       } as any;
 
-      const result = getWorkspaceRepositories(dir, dir, config);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe('fallback');
+      const result = getWorkspaceRepositories(dir, dirname(dir), config);
+      expect(result).toEqual([]);
+    });
+
+    it('preserves a legacy root-only task when iterations exist without workspace descriptions', () => {
+      const dir = makeTmpDir();
+      makeIterationDir(dir, 1);
+
+      const config = {
+        projects: [
+          {
+            name: 'fallback',
+            path: 'fb',
+            repository: 'https://example.com/fb.git',
+          },
+        ],
+      } as any;
+
+      const result = getWorkspaceRepositories(dir, dirname(dir), config);
+      expect(result).toEqual([]);
+    });
+
+    it('does not infer current config when persisted workspace metadata is malformed', () => {
+      const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 1);
+      writeFileSync(
+        join(iterationDir, 'workspace-description.json'),
+        'not json {{{'
+      );
+
+      const config = {
+        projects: [
+          {
+            name: 'fallback',
+            path: 'fb',
+            repository: 'https://example.com/fb.git',
+          },
+        ],
+      } as any;
+
+      const result = getWorkspaceRepositories(dir, dirname(dir), config);
+      expect(result).toEqual([]);
     });
   });
 });

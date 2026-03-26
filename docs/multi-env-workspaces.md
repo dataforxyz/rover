@@ -257,7 +257,7 @@ Do not rely on in-task OS package installation for these runs. Task containers i
 
 The reproducible demo generator lives at:
 
-- [demos/create-multi-env-demo.sh](/home/dev/rover/demos/create-multi-env-demo.sh)
+- [demos/create-multi-env-demo.sh](../demos/create-multi-env-demo.sh)
 
 It generates:
 

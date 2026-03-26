@@ -135,6 +135,21 @@ describe('stop command', () => {
       );
     });
 
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      const { exitWithError } = await import('../../utils/exit.js');
+
+      await stopCommand('12abc', { json: true });
+
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Invalid task ID '12abc' - must be a number",
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
     it('should handle non-existent task', async () => {
       const { exitWithError } = await import('../../utils/exit.js');
 

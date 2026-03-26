@@ -48,7 +48,10 @@ describe('resume command', () => {
       eventResumeTaskFailed: vi.fn(),
       shutdown: vi.fn().mockResolvedValue(undefined),
     });
-    mockResumeTask.mockResolvedValue({ status: 'ok' });
+    mockResumeTask.mockResolvedValue({
+      status: 'ok',
+      resumedFromCheckpoint: false,
+    });
     mockExitWithError.mockResolvedValue(undefined);
     mockExitWithSuccess.mockResolvedValue(undefined);
   });
@@ -89,6 +92,88 @@ describe('resume command', () => {
     expect(mockResumeTask).toHaveBeenCalledWith(project, 7, { quiet: true });
     expect(mockExitWithError).not.toHaveBeenCalled();
     expect(mockExitWithSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports whether resume actually used the checkpoint', async () => {
+    const task = {
+      id: 9,
+      title: 'Paused task',
+      description: 'desc',
+      status: 'PAUSED',
+      iterations: 1,
+      branchName: 'rover/task-9',
+      worktreePath: '/tmp/worktree-9',
+      iterationsPath: () => '/tmp/task-9/iterations',
+      updateStatusFromIteration: vi.fn(),
+      isPaused: vi.fn(function (this: any) {
+        return this.status === 'PAUSED';
+      }),
+      isFailed: vi.fn(function (this: any) {
+        return this.status === 'FAILED';
+      }),
+    };
+    const project = {
+      getTask: vi.fn().mockReturnValue(task),
+    };
+
+    mockRequireProjectContext.mockResolvedValue(project);
+    mockResumeTask.mockResolvedValue({
+      status: 'ok',
+      resumedFromCheckpoint: true,
+    });
+
+    await resumeCommand('9', { json: true });
+
+    expect(mockExitWithSuccess).toHaveBeenCalledWith(
+      'Task resumed successfully!',
+      expect.objectContaining({
+        success: true,
+        taskId: 9,
+        hasCheckpoint: true,
+      }),
+      expect.anything()
+    );
+  });
+
+  it('does not report a checkpoint when resume falls back to a full rerun', async () => {
+    const task = {
+      id: 12,
+      title: 'Paused task',
+      description: 'desc',
+      status: 'PAUSED',
+      iterations: 1,
+      branchName: 'rover/task-12',
+      worktreePath: '/tmp/worktree-12',
+      iterationsPath: () => '/tmp/task-12/iterations',
+      updateStatusFromIteration: vi.fn(),
+      isPaused: vi.fn(function (this: any) {
+        return this.status === 'PAUSED';
+      }),
+      isFailed: vi.fn(function (this: any) {
+        return this.status === 'FAILED';
+      }),
+    };
+    const project = {
+      getTask: vi.fn().mockReturnValue(task),
+    };
+
+    mockRequireProjectContext.mockResolvedValue(project);
+    mockResumeTask.mockResolvedValue({
+      status: 'ok',
+      resumedFromCheckpoint: false,
+    });
+
+    await resumeCommand('12', { json: true });
+
+    expect(mockExitWithSuccess).toHaveBeenCalledWith(
+      'Task resumed successfully!',
+      expect.objectContaining({
+        success: true,
+        taskId: 12,
+        hasCheckpoint: false,
+      }),
+      expect.anything()
+    );
   });
 
   it('preserves FAILED status and skips iteration status refresh when resuming', async () => {
@@ -353,5 +438,38 @@ describe('resume command', () => {
     await resumeCommand('14');
 
     expect(mockResumeTask).toHaveBeenCalledWith(project, 14, { quiet: false });
+  });
+
+  it('describes checkpoint file presence without implying checkpoint validity', async () => {
+    const task = {
+      id: 15,
+      title: 'Paused task',
+      description: 'desc',
+      status: 'PAUSED',
+      iterations: 1,
+      branchName: 'rover/task-15',
+      worktreePath: '/tmp/worktree-15',
+      iterationsPath: () => '/tmp/task-15/iterations',
+      updateStatusFromIteration: vi.fn(),
+      isPaused: vi.fn(function (this: any) {
+        return this.status === 'PAUSED';
+      }),
+      isFailed: vi.fn(function (this: any) {
+        return this.status === 'FAILED';
+      }),
+    };
+    const project = {
+      getTask: vi.fn().mockReturnValue(task),
+    };
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    mockRequireProjectContext.mockResolvedValue(project);
+
+    await resumeCommand('15');
+
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Checkpoint File: ')
+    );
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('absent'));
   });
 });

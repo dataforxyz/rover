@@ -182,7 +182,7 @@ export function acquireResumeLock(iterationPath: string): (() => void) | null {
 
 /** Possible outcomes of a resume attempt. */
 export type ResumeResult =
-  | { status: 'ok' }
+  | { status: 'ok'; resumedFromCheckpoint: boolean }
   | { status: 'not_resumable' }
   | { status: 'already_resuming' }
   | { status: 'failed'; error: string };
@@ -199,6 +199,69 @@ export interface ResumeOptions {
   /** Override the agent (e.g. "claude") and optionally model (e.g. "opus"). */
   agent?: string;
   agentModel?: string;
+}
+
+function checkpointHasRequiredExternalRepoState(
+  iterationPath: string,
+  projectPath: string,
+  checkpoint: Record<string, unknown>
+): boolean {
+  const workspaceDescriptionPath = join(
+    iterationPath,
+    'workspace-description.json'
+  );
+
+  const getRequiredProjectPaths = (): string[] => {
+    if (existsSync(workspaceDescriptionPath)) {
+      try {
+        const raw = readFileSync(workspaceDescriptionPath, 'utf8');
+        const parsed = JSON.parse(raw) as {
+          projects?: Array<{ path?: unknown; repository?: unknown }>;
+        };
+        return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
+          project =>
+            typeof project?.path === 'string' &&
+            typeof project?.repository === 'string'
+              ? [project.path]
+              : []
+        );
+      } catch {
+        return [];
+      }
+    }
+
+    return [];
+  };
+
+  try {
+    const requiredProjectPaths = getRequiredProjectPaths();
+
+    if (requiredProjectPaths.length === 0) {
+      return true;
+    }
+
+    if (!Array.isArray(checkpoint.externalRepositories)) {
+      return false;
+    }
+
+    const availablePaths = new Set(
+      checkpoint.externalRepositories.flatMap(entry =>
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { path?: unknown }).path === 'string' &&
+        typeof (entry as { head?: unknown }).head === 'string' &&
+        typeof (entry as { trackedDiffHash?: unknown }).trackedDiffHash ===
+          'string' &&
+        typeof (entry as { untrackedHash?: unknown }).untrackedHash === 'string'
+          ? [(entry as { path: string }).path]
+          : []
+      )
+    );
+
+    return requiredProjectPaths.every(path => availablePaths.has(path));
+  } catch {
+    return false;
+  }
 }
 
 export async function resumeTask(
@@ -318,7 +381,12 @@ async function resumeTaskLocked(
       if (
         parsed !== null &&
         typeof parsed === 'object' &&
-        Array.isArray(parsed.completedSteps)
+        Array.isArray(parsed.completedSteps) &&
+        checkpointHasRequiredExternalRepoState(
+          iterationPath,
+          project.path,
+          parsed as Record<string, unknown>
+        )
       ) {
         checkpointState = 'valid';
         // Warn about step IDs in the checkpoint that may not exist in
@@ -344,7 +412,7 @@ async function resumeTaskLocked(
         checkpointState = 'invalid';
         log(
           colors.yellow(
-            `  ⚠ Checkpoint file for task ${taskId} has invalid structure, ignoring it.`
+            `  ⚠ Checkpoint file for task ${taskId} has invalid or incomplete structure, ignoring it.`
           )
         );
       }
@@ -592,7 +660,10 @@ async function resumeTaskLocked(
     task.setContainerInfo(containerId, 'running', sandboxMetadata);
     // Task already marked IN_PROGRESS before container creation (under lock)
 
-    return { status: 'ok' };
+    return {
+      status: 'ok',
+      resumedFromCheckpoint: checkpointState === 'valid',
+    };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     log(

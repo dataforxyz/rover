@@ -68,38 +68,57 @@ export function prepareBuildProjectConfig(
   repositoryMounts: BuildRepositoryMount[];
 } {
   const repositoryMounts: BuildRepositoryMount[] = [];
-  const buildProjects = (projectConfig.projects ?? []).map((project, index) => {
-    if (
-      typeof project.repository !== 'string' ||
-      !isLocalRepositoryReference(project.repository)
-    ) {
-      return project;
+  const buildProjects = (projectConfig.projects ?? []).flatMap(
+    (project, index) => {
+      const projectPathIsSafe =
+        typeof project.path === 'string' &&
+        (typeof projectConfig.projectRoot !== 'string'
+          ? isSafeRelativePath(project.path)
+          : resolvePathWithinRoot(projectConfig.projectRoot, project.path) !==
+            null);
+      if (!projectPathIsSafe) {
+        // Exclude projects with unsafe paths — they cannot be safely
+        // mounted or cloned inside the container.
+        return [];
+      }
+
+      if (
+        typeof project.repository !== 'string' ||
+        !isLocalRepositoryReference(project.repository)
+      ) {
+        return [project];
+      }
+
+      const hostPath = project.repository.startsWith('file://')
+        ? fileURLToPath(project.repository)
+        : resolve(projectPath, project.repository);
+
+      if (!existsSync(hostPath)) {
+        throw new Error(
+          `Local workspace repository for ${project.name} not found: ${hostPath}`
+        );
+      }
+
+      const containerPath = `/workspace-repos/${index}`;
+      repositoryMounts.push({ hostPath, containerPath });
+
+      return [
+        {
+          ...project,
+          repository: containerPath,
+        },
+      ];
     }
-
-    const hostPath = project.repository.startsWith('file://')
-      ? fileURLToPath(project.repository)
-      : resolve(projectPath, project.repository);
-
-    if (!existsSync(hostPath)) {
-      throw new Error(
-        `Local workspace repository for ${project.name} not found: ${hostPath}`
-      );
-    }
-
-    const containerPath = `/workspace-repos/${index}`;
-    repositoryMounts.push({ hostPath, containerPath });
-
-    return {
-      ...project,
-      repository: containerPath,
-    };
-  });
+  );
 
   return {
-    buildProjectConfig: {
-      ...projectConfig,
-      projects: buildProjects,
-    } as ProjectConfigManager,
+    buildProjectConfig: new ProjectConfigManager(
+      {
+        ...projectConfig.toJSON(),
+        projects: buildProjects,
+      },
+      projectConfig.projectRoot ?? projectPath
+    ),
     repositoryMounts,
   };
 }
@@ -218,17 +237,13 @@ function generateBuildEntrypoint(
 
       if (entry.path) {
         return `echo "🔧 Running initialization script${label}"
-workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
 workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
 if [ -f "$workspace_project_script_${index}" ]; then
   workspace_script_${index}="$workspace_project_script_${index}"
   workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
-elif [ -f "$workspace_root_script_${index}" ]; then
-  workspace_script_${index}="$workspace_root_script_${index}"
-  workspace_dir_${index}='/workspace'
 else
-  workspace_script_${index}="$workspace_root_script_${index}"
-  workspace_dir_${index}='/workspace'
+  echo "❌ Initialization script${label} not found at $workspace_project_script_${index}"
+  safe_exit 1
 fi
 cd "$workspace_dir_${index}"
 bash "$workspace_script_${index}"

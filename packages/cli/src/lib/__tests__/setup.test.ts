@@ -350,7 +350,7 @@ describe('SetupBuilder multi-repo projects', () => {
     const repoSyncIndex = script.indexOf('Syncing external repositories');
     const installGoIndex = script.indexOf('📦 Installing go...');
     const goVersionProbeIndex = script.indexOf(
-      'if [ -f /workspace/go.mod ]; then'
+      "for go_mod_path in '/workspace/go.mod' '/workspace/src/go.mod' '/workspace/backend/go.mod' '/workspace/backend/src/go.mod'; do"
     );
 
     expect(repoSyncIndex).toBeGreaterThanOrEqual(0);
@@ -625,7 +625,7 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain(`repo.path === "apps/it'"'"'s-api"`);
   });
 
-  it('hard resets and cleans reused external repositories before checkout', () => {
+  it('hard resets and fully cleans reused external repositories before checkout', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);
 
@@ -668,7 +668,7 @@ describe('SetupBuilder multi-repo projects', () => {
     const script = readFileSync(entrypointPath, 'utf8');
 
     expect(script).toContain("git -C '/workspace/frontend' reset --hard HEAD");
-    expect(script).toContain("git -C '/workspace/frontend' clean -fd");
+    expect(script).toContain("git -C '/workspace/frontend' clean -fdx");
     expect(script).toContain(
       "if ! git -C '/workspace/frontend' fetch --all --tags --prune; then"
     );
@@ -730,13 +730,13 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain('🔧 Running initialization scripts');
     expect(script).toContain('🔧 Running initialization script (frontend)');
     expect(script).toContain(
-      "workspace_root_script_1='/workspace/scripts/frontend-init.sh'"
-    );
-    expect(script).toContain(
       "workspace_project_script_1='/workspace/frontend/scripts/frontend-init.sh'"
     );
     expect(script).toContain("workspace_dir_1='/workspace/frontend'");
     expect(script).toContain('if [ -f "$workspace_project_script_1" ]; then');
+    expect(script).toContain(
+      'echo "❌ Initialization script (frontend) not found at $workspace_project_script_1"'
+    );
     expect(script).toContain('bash "$workspace_script_1"');
     expect(script).not.toContain('/bin/sh /init-script-0.sh');
     expect(script).not.toContain(
@@ -744,6 +744,7 @@ describe('SetupBuilder multi-repo projects', () => {
     );
     expect(script).not.toContain("\n'/workspace/scripts/root-init.sh'\n");
     expect(script).not.toContain("/bin/sh '/workspace/scripts/root-init.sh'");
+    expect(script).not.toContain("workspace_root_script_1='/workspace/scripts/frontend-init.sh'");
   });
 
   it('filters unsafe project-scoped init-script paths', () => {
@@ -866,10 +867,8 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain(
       "cd '/workspace/e2e' && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true"
     );
-    expect(script).not.toContain(
-      'export PATH="/workspace/e2e/.venv/bin:$PATH"'
-    );
-    expect(script).not.toContain(
+    expect(script).toContain('export PATH="/workspace/e2e/.venv/bin:$PATH"');
+    expect(script).toContain(
       `echo 'export PATH="/workspace/e2e/.venv/bin:$PATH"' >> $HOME/.profile`
     );
   });
@@ -964,6 +963,121 @@ describe('SetupBuilder multi-repo projects', () => {
     ]);
   });
 
+  it('preserves a root-only workspace when persisted metadata has no projects', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const iterationOnePath = join(root, 'iterations', '1');
+    mkdirSync(iterationOnePath, { recursive: true });
+    writeFileSync(
+      join(iterationOnePath, 'workspace-description.json'),
+      JSON.stringify({ projects: [] })
+    );
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      branchName: 'task/1',
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '2'),
+    };
+
+    const fakeConfig = {
+      packageManagers: [],
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+          packageManagers: ['pnpm'],
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(
+      true,
+      'entrypoint.sh',
+      true
+    );
+    const script = readFileSync(entrypointPath, 'utf8');
+    const descPath = builder.generateWorkspaceDescription();
+
+    expect(script).not.toContain('/workspace/frontend');
+    expect(descPath).toBeUndefined();
+  });
+
+  it('preserves a legacy root-only workspace when older iterations have no persisted metadata', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    mkdirSync(join(root, 'iterations', '1'), { recursive: true });
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      branchName: 'task/1',
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '2'),
+    };
+
+    const fakeConfig = {
+      packageManagers: [],
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+          packageManagers: ['pnpm'],
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(
+      true,
+      'entrypoint.sh',
+      true
+    );
+    const script = readFileSync(entrypointPath, 'utf8');
+    const descPath = builder.generateWorkspaceDescription();
+
+    expect(script).not.toContain('/workspace/frontend');
+    expect(descPath).toBeUndefined();
+  });
+
   it('filters unsafe workspace project paths from persisted metadata and config', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);
@@ -1041,6 +1155,119 @@ describe('SetupBuilder multi-repo projects', () => {
         name: 'safe',
         path: 'frontend',
       }),
+    ]);
+  });
+
+  it('ignores unsafe configured local repositories before resolving mounts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'unsafe',
+          path: '../../escape',
+          repository: './repos/missing.git',
+        },
+        {
+          name: 'safe',
+          path: 'frontend',
+          repository: './repos/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
+        containerPath: '/workspace-repos/1',
+      },
+    ]);
+  });
+
+  it('ignores unsafe persisted local repositories before resolving mounts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const iterationOnePath = join(root, 'iterations', '1');
+    mkdirSync(iterationOnePath, { recursive: true });
+    writeFileSync(
+      join(iterationOnePath, 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'unsafe',
+            path: '../../escape',
+            repository: './repos/missing.git',
+          },
+          {
+            name: 'safe',
+            path: 'frontend',
+            repository: './repos/frontend.git',
+          },
+        ],
+      })
+    );
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '2'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
+        containerPath: '/workspace-repos/1',
+      },
     ]);
   });
 });

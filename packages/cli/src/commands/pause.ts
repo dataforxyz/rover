@@ -64,12 +64,12 @@ const pauseCommand = async (
     : new ProcessManager({ title: 'Pause task' });
   processManager?.start();
 
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   let project;
   try {

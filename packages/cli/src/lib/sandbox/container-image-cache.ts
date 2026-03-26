@@ -10,6 +10,10 @@ import {
   VERBOSE,
 } from 'rover-core';
 import { ContainerBackend, resolveInitScriptPath } from './container-common.js';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../../utils/path-safety.js';
 
 /**
  * Build a process env with DOCKER_HOST set when the sandbox metadata
@@ -420,7 +424,16 @@ export function checkImageCache(
   // Read per-project init script contents for hashing
   let projects: SetupHashInputs['projects'];
   if (projectConfig.projects && projectConfig.projects.length > 0) {
-    projects = projectConfig.projects.map(p => {
+    projects = projectConfig.projects.flatMap(p => {
+      const projectPathIsSafe =
+        typeof p.path === 'string' &&
+        (typeof projectConfig.projectRoot !== 'string'
+          ? isSafeRelativePath(p.path)
+          : resolvePathWithinRoot(projectConfig.projectRoot, p.path) !== null);
+      if (!projectPathIsSafe) {
+        return [];
+      }
+
       let projectInitContent = '';
       if (p.initScript) {
         try {
@@ -434,31 +447,33 @@ export function checkImageCache(
           // treat as empty
         }
       }
-      return {
-        name: p.name,
-        path: p.path,
-        repository: p.repository,
-        ref: p.ref,
-        repositoryRevision:
-          typeof p.repository === 'string'
-            ? resolveRepositoryRevision(
-                projectConfig.projectRoot,
-                p.repository,
-                p.ref
-              )
-            : '',
-        localContentHash:
-          typeof p.repository === 'string'
-            ? ''
-            : hashMaterializedProjectContents(
-                join(projectConfig.projectRoot, p.path)
-              ),
-        languages: p.languages,
-        packageManagers: p.packageManagers,
-        taskManagers: p.taskManagers,
-        initScriptPath: p.initScript,
-        initScriptContent: projectInitContent,
-      };
+      return [
+        {
+          name: p.name,
+          path: p.path,
+          repository: p.repository,
+          ref: p.ref,
+          repositoryRevision:
+            typeof p.repository === 'string'
+              ? resolveRepositoryRevision(
+                  projectConfig.projectRoot,
+                  p.repository,
+                  p.ref
+                )
+              : '',
+          localContentHash:
+            typeof p.repository === 'string'
+              ? ''
+              : hashMaterializedProjectContents(
+                  join(projectConfig.projectRoot, p.path)
+                ),
+          languages: p.languages,
+          packageManagers: p.packageManagers,
+          taskManagers: p.taskManagers,
+          initScriptPath: p.initScript,
+          initScriptContent: projectInitContent,
+        },
+      ];
     });
   }
 

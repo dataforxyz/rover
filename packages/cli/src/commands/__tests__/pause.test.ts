@@ -79,6 +79,21 @@ describe('pause command', () => {
     return task;
   }
 
+  it('rejects malformed task IDs with trailing characters', async () => {
+    const { exitWithError } = await import('../../utils/exit.js');
+
+    await pauseCommand('12abc', { json: true });
+
+    expect(exitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "Invalid task ID '12abc' - must be a number",
+      }),
+      expect.objectContaining({
+        telemetry: expect.anything(),
+      })
+    );
+  });
+
   it('tears down sidecars after a graceful pause and preserves resumable sandbox metadata', async () => {
     const { createSandbox } = await import('../../lib/sandbox/index.js');
     const { exitWithSuccess } = await import('../../utils/exit.js');
