@@ -73,8 +73,7 @@ fi
   }
 
   initScript(): string {
-    // Add Flutter and Dart to PATH, run precache for linux desktop only,
-    // and pre-resolve project dependencies.
+    // Add Flutter and Dart to PATH and run precache for linux desktop only.
     // Also reconcile Flutter version: the cache image may have been built
     // without /workspace mounted, so .fvmrc was unavailable during install.
     return `echo 'export PATH="$HOME/.flutter/bin:$HOME/.flutter/bin/cache/dart-sdk/bin:$HOME/.pub-cache/bin:$PATH"' >> $HOME/.profile
@@ -117,9 +116,6 @@ if [ -f /workspace/.fvmrc ]; then
   fi
 fi
 
-flutter precache --no-ios --no-macos --no-windows --no-fuchsia --no-universal-apk --no-web 2>/dev/null || true
-if [ -f /workspace/pubspec.yaml ]; then
-  cd /workspace && flutter pub get 2>/dev/null || true
-fi`;
+flutter precache --no-ios --no-macos --no-windows --no-fuchsia --no-universal-apk --no-web 2>/dev/null || true`;
   }
 }

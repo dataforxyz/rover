@@ -16,19 +16,8 @@ fi
   }
 
   initScript(): string {
-    // Sync project dependencies if pyproject.toml exists (--all-extras for dev deps)
-    // Also add venv to PATH so python/pytest work without "uv run" prefix
-    return `
-source $HOME/.profile
-if [ -f /workspace/uv.lock ] && [ -f /workspace/pyproject.toml ]; then
-  cd /workspace && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || true
-elif [ -f /workspace/pyproject.toml ]; then
-  cd /workspace && uv sync --all-extras 2>/dev/null || true
-fi
-if [ -d /workspace/.venv/bin ]; then
-  echo 'export PATH="/workspace/.venv/bin:$PATH"' >> $HOME/.profile
-  source $HOME/.profile
-fi
-`;
+    // Workspace dependency resolution is handled centrally so it can run
+    // after user init scripts and repository materialization.
+    return ``;
   }
 }

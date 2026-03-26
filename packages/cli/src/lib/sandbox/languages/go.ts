@@ -91,12 +91,6 @@ if go version > /dev/null 2>&1; then
   echo "Go ready: $(go version)"
 else
   echo "⚠ Warning: go binary is not accessible"
-fi
-# Pre-download modules if go.mod exists
-if [ -f /workspace/go.mod ]; then
-  cd /workspace && go mod download 2>/dev/null || true
-elif [ -f /workspace/src/go.mod ]; then
-  cd /workspace/src && go mod download 2>/dev/null || true
 fi`;
   }
 }
