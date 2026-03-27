@@ -1,5 +1,8 @@
 import type { ProjectConfigManager } from 'rover-core';
-import { isSafeRelativePath } from '../../utils/path-safety.js';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../../utils/path-safety.js';
 
 // Language packages
 import { JavaScriptSandboxPackage } from './languages/javascript.js';
@@ -74,9 +77,14 @@ export function getPackagesFromConfig(
   projectConfig: ProjectConfigManager
 ): SandboxPackage[] {
   const packages: SandboxPackage[] = [];
+  const isSafeWorkspaceProjectPath = (projectPath: string): boolean =>
+    typeof projectConfig.projectRoot === 'string'
+      ? resolvePathWithinRoot(projectConfig.projectRoot, projectPath) !== null
+      : isSafeRelativePath(projectPath);
   const workspaceProjectPaths = (projectConfig.projects ?? []).flatMap(
     project =>
-      typeof project?.path === 'string' && isSafeRelativePath(project.path)
+      typeof project?.path === 'string' &&
+      isSafeWorkspaceProjectPath(project.path)
         ? [project.path]
         : []
   );

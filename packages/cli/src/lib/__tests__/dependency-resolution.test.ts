@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getDependencyResolutionCommands } from '../dependency-resolution.js';
 
@@ -221,5 +224,30 @@ describe('getDependencyResolutionCommands', () => {
     expect(joined).toContain("'/workspace/frontend'");
     expect(joined).not.toContain('/workspace/../../escape');
     expect(joined).not.toContain('/workspace//absolute');
+  });
+
+  it('filters project paths that escape the workspace through symlinks', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-dep-resolution-'));
+    const outside = mkdtempSync(
+      join(tmpdir(), 'rover-dep-resolution-outside-')
+    );
+
+    try {
+      mkdirSync(join(outside, 'api'), { recursive: true });
+      symlinkSync(outside, join(root, 'services'));
+
+      const result = getDependencyResolutionCommands({
+        rootPackageManagers: [],
+        projects: [{ path: 'services/api', packageManagers: ['gomod', 'pub'] }],
+        workspaceRoot: root,
+      });
+      const joined = result.join('\n');
+
+      expect(joined).not.toContain('/workspace/services/api');
+      expect(result).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

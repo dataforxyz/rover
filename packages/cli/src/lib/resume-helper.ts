@@ -203,18 +203,40 @@ export interface ResumeOptions {
 
 function checkpointHasRequiredExternalRepoState(
   iterationPath: string,
-  projectPath: string,
+  taskWorktreePath: string,
   checkpoint: Record<string, unknown>
 ): boolean {
   const workspaceDescriptionPath = join(
     iterationPath,
     'workspace-description.json'
   );
+  const legacyWorkspaceDescriptionPath = join(
+    taskWorktreePath,
+    '.rover-workspace.json'
+  );
 
   const getRequiredProjectPaths = (): string[] => {
     if (existsSync(workspaceDescriptionPath)) {
       try {
         const raw = readFileSync(workspaceDescriptionPath, 'utf8');
+        const parsed = JSON.parse(raw) as {
+          projects?: Array<{ path?: unknown; repository?: unknown }>;
+        };
+        return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
+          project =>
+            typeof project?.path === 'string' &&
+            typeof project?.repository === 'string'
+              ? [project.path]
+              : []
+        );
+      } catch {
+        return [];
+      }
+    }
+
+    if (existsSync(legacyWorkspaceDescriptionPath)) {
+      try {
+        const raw = readFileSync(legacyWorkspaceDescriptionPath, 'utf8');
         const parsed = JSON.parse(raw) as {
           projects?: Array<{ path?: unknown; repository?: unknown }>;
         };
@@ -384,7 +406,7 @@ async function resumeTaskLocked(
         Array.isArray(parsed.completedSteps) &&
         checkpointHasRequiredExternalRepoState(
           iterationPath,
-          project.path,
+          task.worktreePath,
           parsed as Record<string, unknown>
         )
       ) {

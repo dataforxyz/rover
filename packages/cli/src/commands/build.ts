@@ -19,6 +19,8 @@ import { getProjectPath, isJsonMode } from '../lib/context.js';
 import { getAvailableSandboxBackend } from '../lib/sandbox/index.js';
 import {
   ContainerBackend,
+  getInitScriptMounts,
+  getRootInitScriptMountPath,
   normalizeExtraArgs,
   resolveAgentImage,
 } from '../lib/sandbox/container-common.js';
@@ -52,7 +54,7 @@ interface BuildRepositoryMount {
 function isLocalRepositoryReference(repository: string): boolean {
   return (
     repository.startsWith('file://') ||
-    isAbsolute(repository) ||
+    (isAbsolute(repository) && !repository.startsWith('/workspace/')) ||
     repository === '.' ||
     repository === '..' ||
     repository.startsWith('./') ||
@@ -213,36 +215,47 @@ function generateBuildEntrypoint(
   targetUid?: number,
   targetGid?: number
 ): string {
+  const isSafeProjectPath = (projectPath: string): boolean =>
+    typeof projectConfig.projectRoot !== 'string'
+      ? isSafeRelativePath(projectPath)
+      : resolvePathWithinRoot(projectConfig.projectRoot, projectPath) !== null;
+
   const allPackages = getPackagesFromConfig(projectConfig);
 
   const installScripts: string[] = [];
   for (const pkg of allPackages) {
     const install = pkg.installScript();
     if (install.trim()) {
-      installScripts.push(`echo "Installing ${pkg.name}..."`);
+      const safeName = pkg.name.replace(/["`$\\]/g, '');
+      installScripts.push(`echo "Installing ${safeName}..."`);
       installScripts.push(install);
     }
     const init = pkg.initScript();
     if (init.trim()) {
-      installScripts.push(`echo "Initializing ${pkg.name}..."`);
+      const safeName = pkg.name.replace(/["`$\\]/g, '');
+      installScripts.push(`echo "Initializing ${safeName}..."`);
       installScripts.push(init);
     }
   }
 
   const rootInitScripts = projectConfig.allInitScripts ?? [];
   const initScriptBlocks = rootInitScripts
-    .filter(entry => !entry.path || isSafeRelativePath(entry.path))
+    .filter(entry => !entry.path || isSafeProjectPath(entry.path))
     .map((entry, index) => {
       const label = entry.path ? ` (${entry.path})` : '';
 
       if (entry.path) {
         return `echo "🔧 Running initialization script${label}"
 workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
+workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
 if [ -f "$workspace_project_script_${index}" ]; then
   workspace_script_${index}="$workspace_project_script_${index}"
   workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
+elif [ -f "$workspace_root_script_${index}" ]; then
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
 else
-  echo "❌ Initialization script${label} not found at $workspace_project_script_${index}"
+  echo "❌ Initialization script${label} not found at $workspace_project_script_${index} or $workspace_root_script_${index}"
   safe_exit 1
 fi
 cd "$workspace_dir_${index}"
@@ -250,11 +263,22 @@ bash "$workspace_script_${index}"
 echo "✅ Initialization script${label} completed successfully"`;
       }
 
+      const mountedScript = getRootInitScriptMountPath(rootInitScripts, index);
       const workspaceScript = `/workspace/${entry.script}`;
       const workspaceDir = '/workspace';
       return `echo "🔧 Running initialization script${label}"
-cd ${JSON.stringify(workspaceDir)}
-bash ${JSON.stringify(workspaceScript)}
+mounted_script_${index}=${shellEscape(mountedScript)}
+workspace_script_${index}=${shellEscape(workspaceScript)}
+if [ -f "$mounted_script_${index}" ]; then
+  root_script_${index}="$mounted_script_${index}"
+elif [ -f "$workspace_script_${index}" ]; then
+  root_script_${index}="$workspace_script_${index}"
+else
+  echo "❌ Initialization script${label} not found at $mounted_script_${index} or $workspace_script_${index}"
+  safe_exit 1
+fi
+cd ${shellEscape(workspaceDir)}
+bash "$root_script_${index}"
 echo "✅ Initialization script${label} completed successfully"`;
     });
 
@@ -270,6 +294,7 @@ ${initScriptBlocks.join('\n')}
   const dependencyResolutionCommands = getDependencyResolutionCommands({
     rootPackageManagers: projectConfig.packageManagers ?? [],
     projects: projectConfig.projects,
+    workspaceRoot: projectConfig.projectRoot,
   });
   const dependencyResolutionSection =
     dependencyResolutionCommands.length > 0
@@ -529,6 +554,8 @@ const buildCommand = async (
         `${repositoryMount.hostPath}:${repositoryMount.containerPath}:Z,ro`
       );
     }
+
+    dockerArgs.push(...getInitScriptMounts(buildProjectConfig));
 
     // Add agent-specific mounts (credential files)
     try {

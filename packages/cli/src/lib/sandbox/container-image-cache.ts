@@ -278,8 +278,11 @@ function resolveRepositoryForLookup(
     return fileURLToPath(repository);
   }
 
+  if (isAbsolute(repository) && !repository.startsWith('/workspace/')) {
+    return repository;
+  }
+
   if (
-    isAbsolute(repository) ||
     repository === '.' ||
     repository === '..' ||
     repository.startsWith('./') ||
@@ -395,7 +398,7 @@ export function checkImageCache(
   if (projectConfig.initScript) {
     initScriptPath = projectConfig.initScript;
     try {
-      const initScriptAbsPath = join(
+      const initScriptAbsPath = resolveInitScriptPath(
         projectConfig.projectRoot,
         projectConfig.initScript
       );

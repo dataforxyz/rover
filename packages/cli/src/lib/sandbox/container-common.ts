@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, UserInfo } from 'node:os';
 import {
@@ -130,14 +130,29 @@ export function resolveInitScriptPath(
   scriptPath: string,
   projectPath?: string
 ): string {
+  if (!projectPath) {
+    return isAbsolute(scriptPath)
+      ? scriptPath
+      : resolve(projectRoot, scriptPath);
+  }
+
+  // Validate scriptPath to prevent path traversal
+  if (!isSafeRelativePath(scriptPath)) {
+    throw new Error(`Unsafe init script path: ${scriptPath}`);
+  }
+
   if (
     projectPath &&
     isSafeRelativePath(projectPath) &&
     resolvePathWithinRoot(projectRoot, projectPath) !== null
   ) {
-    const projectRelative = join(projectRoot, projectPath, scriptPath);
-    if (existsSync(projectRelative)) {
-      return projectRelative;
+    // Validate the combined project + script path stays within root
+    const combinedRelative = join(projectPath, scriptPath);
+    if (isSafeRelativePath(combinedRelative)) {
+      const projectRelative = join(projectRoot, combinedRelative);
+      if (existsSync(projectRelative)) {
+        return projectRelative;
+      }
     }
   }
 
@@ -147,6 +162,15 @@ export function resolveInitScriptPath(
   }
 
   return rootRelative;
+}
+
+export function getRootInitScriptMountPath(
+  allInitScripts: Array<{ path?: string; script: string }>,
+  index: number
+): string {
+  return allInitScripts.length === 1
+    ? '/init-script.sh'
+    : `/init-script-${index}.sh`;
 }
 
 /**
@@ -171,10 +195,7 @@ export function getInitScriptMounts(
       entry.path
     );
     if (existsSync(initScriptAbsPath)) {
-      const mountPath =
-        allInitScripts.length === 1 && !entry.path
-          ? '/init-script.sh'
-          : `/init-script-${i}.sh`;
+      const mountPath = getRootInitScriptMountPath(allInitScripts, i);
       mounts.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
     } else if (opts?.warnMissing) {
       console.log(

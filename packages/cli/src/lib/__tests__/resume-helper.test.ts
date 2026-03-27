@@ -13,6 +13,7 @@ import { join } from 'node:path';
 
 // Mock all external dependencies
 vi.mock('rover-core', () => ({
+  VERBOSE: false,
   IterationManager: {
     createInitial: vi.fn(),
   },
@@ -79,6 +80,7 @@ let mockIterationStatus = {
   pause: vi.fn(),
   fail: vi.fn(),
 };
+let currentProjectPath = '/tmp/project';
 
 function createMockTask(overrides: Record<string, any> = {}) {
   const merged: any = {
@@ -111,12 +113,14 @@ function createMockTask(overrides: Record<string, any> = {}) {
 
 function createMockProject(task?: any) {
   return {
-    path: '/tmp/project',
+    path: currentProjectPath,
     getTask: vi.fn().mockReturnValue(task || null),
     getWorkspacePath: vi.fn().mockReturnValue('/tmp/workspace-1'),
     getTaskIterationLogsPath: vi
       .fn()
-      .mockReturnValue('/tmp/project/logs/tasks/1/iterations/1'),
+      .mockImplementation(() =>
+        join(currentProjectPath, 'logs/tasks/1/iterations/1')
+      ),
   } as any;
 }
 
@@ -147,6 +151,7 @@ describe('resumeTask', () => {
       stderr: '',
     } as any);
     tempDir = mkdtempSync(join(tmpdir(), 'rover-resume-helper-test-'));
+    currentProjectPath = join(tempDir, 'project');
   });
 
   afterEach(() => {
@@ -383,6 +388,7 @@ describe('resumeTask', () => {
       iterations: 1,
     });
     const project = createMockProject(task);
+    mkdirSync(project.path, { recursive: true });
     mkdirSync(join(iterationPath, '1'), { recursive: true });
     writeFileSync(
       join(iterationPath, '1', 'checkpoint.json'),
@@ -411,6 +417,63 @@ describe('resumeTask', () => {
       projectPath: project.path,
       checkpointPath: join(iterationPath, '1', 'checkpoint.json'),
       resumeFromCheckpoint: true,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a full rerun when legacy workspace metadata requires external repository state', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(project.path, { recursive: true });
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      '{"completedSteps":[{"id":"step1"}]}',
+      'utf8'
+    );
+    writeFileSync(
+      join(worktreePath, '.rover-workspace.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'https://example.com/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    mockedProjectConfigManager.load.mockReturnValue({
+      excludePatterns: [],
+      projects: [],
+    } as any);
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-rerun'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: undefined,
+      resumeFromCheckpoint: false,
       iterationLogsPath: project.getTaskIterationLogsPath(
         task.id,
         task.iterations

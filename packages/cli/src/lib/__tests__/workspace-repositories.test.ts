@@ -575,7 +575,7 @@ describe('workspace-repositories', () => {
       expect(result).toEqual([]);
     });
 
-    it('preserves a legacy root-only task when iterations exist without workspace descriptions', () => {
+    it('falls back to project config when iterations exist without workspace descriptions', () => {
       const dir = makeTmpDir();
       makeIterationDir(dir, 1);
 
@@ -590,7 +590,15 @@ describe('workspace-repositories', () => {
       } as any;
 
       const result = getWorkspaceRepositories(dir, dirname(dir), config);
-      expect(result).toEqual([]);
+      expect(result).toEqual([
+        {
+          name: 'fallback',
+          relativePath: 'fb',
+          worktreePath: join(dir, 'fb'),
+          repository: 'https://example.com/fb.git',
+          ref: undefined,
+        },
+      ]);
     });
 
     it('does not infer current config when persisted workspace metadata is malformed', () => {

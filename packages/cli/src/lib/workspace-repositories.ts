@@ -105,7 +105,7 @@ function getWorkspaceDescriptionRepositoriesResult(
 ): WorkspaceDescriptionLookupResult {
   const { iterationCount, descriptionPaths: persistedDescriptionPaths } =
     getIterationWorkspaceDescriptionPaths(taskBasePath);
-  let foundPersistedState = iterationCount > 0;
+  let foundPersistedState = persistedDescriptionPaths.length > 0;
 
   for (const descriptionPath of persistedDescriptionPaths) {
     const repositories = parseWorkspaceDescription(

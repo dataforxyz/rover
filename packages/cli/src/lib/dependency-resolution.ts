@@ -7,7 +7,10 @@
  */
 
 import { shellEscape } from '../utils/shell.js';
-import { isSafeRelativePath } from '../utils/path-safety.js';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../utils/path-safety.js';
 
 interface DependencyLocation {
   path: string;
@@ -23,6 +26,7 @@ interface ProjectEntry {
 interface DependencyResolutionConfig {
   rootPackageManagers: string[];
   projects?: ProjectEntry[];
+  workspaceRoot?: string;
   /** Whether to add venv PATH exports for uv projects (used in setup, not build) */
   addVenvPathExports?: boolean;
 }
@@ -31,6 +35,10 @@ export function getDependencyResolutionCommands(
   config: DependencyResolutionConfig
 ): string[] {
   const commands: string[] = [];
+  const isSafeProjectPath = (projectPath: string): boolean =>
+    typeof config.workspaceRoot === 'string'
+      ? resolvePathWithinRoot(config.workspaceRoot, projectPath) !== null
+      : isSafeRelativePath(projectPath);
   const locations: DependencyLocation[] = [
     {
       path: '/workspace',
@@ -38,7 +46,7 @@ export function getDependencyResolutionCommands(
       label: 'workspace root',
     },
     ...(config.projects ?? [])
-      .filter(project => isSafeRelativePath(project.path))
+      .filter(project => isSafeProjectPath(project.path))
       .map(project => ({
         path: `/workspace/${project.path}`,
         packageManagers: project.packageManagers ?? [],

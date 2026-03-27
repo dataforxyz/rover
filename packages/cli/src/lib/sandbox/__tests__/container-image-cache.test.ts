@@ -1141,6 +1141,47 @@ describe('checkImageCache', () => {
     );
   });
 
+  it('includes root init script content from paths outside the workspace root', () => {
+    const projectRoot = createTmpDir();
+    const sharedDir = join(projectRoot, '..', 'shared');
+    mkdirSync(sharedDir, { recursive: true });
+    writeFileSync(
+      join(sharedDir, 'setup.sh'),
+      '#!/bin/sh\necho shared root init\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        initScript: '../shared/setup.sh',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    const expectedHash = computeSetupHash({
+      agentImage: 'sha256:img',
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      taskManagers: [],
+      agent: 'claude',
+      roverVersion: '1.0.0-test',
+      initScriptPath: '../shared/setup.sh',
+      initScriptContent: '#!/bin/sh\necho shared root init\n',
+      cacheFilesContent: '',
+      mcps: [],
+    });
+
+    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
   it('resolves relative local project repositories against projectRoot for cache hashing', () => {
     const projectRoot = createTmpDir();
     mkdirSync(join(projectRoot, 'repos', 'api.git'), { recursive: true });
@@ -1176,6 +1217,78 @@ describe('checkImageCache', () => {
       1,
       'git',
       ['ls-remote', join(projectRoot, 'repos', 'api.git'), 'main'],
+      { reject: false }
+    );
+  });
+
+  it('preserves absolute container repository paths for cache hashing', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: '/workspace/sources/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', '/workspace/sources/api.git', 'main'],
+      { reject: false }
+    );
+  });
+
+  it('uses absolute host repository paths for cache hashing', () => {
+    const hostRepo = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: hostRepo,
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', hostRepo, 'main'],
       { reject: false }
     );
   });

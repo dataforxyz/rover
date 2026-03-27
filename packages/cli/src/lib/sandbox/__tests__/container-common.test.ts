@@ -6,7 +6,7 @@ import {
   resolveInitScriptPath,
 } from '../container-common.js';
 import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 describe('normalizeExtraArgs', () => {
@@ -251,6 +251,14 @@ describe('resolveInitScriptPath', () => {
 
     expect(resolveInitScriptPath(dir, 'scripts/setup.sh', 'packages/api')).toBe(
       join(dir, 'scripts', 'setup.sh')
+    );
+  });
+
+  it('resolves root init scripts outside the workspace root', () => {
+    const dir = createTmpDir();
+
+    expect(resolveInitScriptPath(dir, '../shared/setup.sh')).toBe(
+      resolve(dir, '../shared/setup.sh')
     );
   });
 });

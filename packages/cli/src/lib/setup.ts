@@ -25,8 +25,12 @@ import { mergeNetworkConfig, generateNetworkScript } from './network-config.js';
 import { initWorkflowStore } from './workflow.js';
 import { getDependencyResolutionCommands } from './dependency-resolution.js';
 import { shellEscape } from '../utils/shell.js';
-import { isSafeRelativePath } from '../utils/path-safety.js';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../utils/path-safety.js';
 
+import { getRootInitScriptMountPath } from './sandbox/container-common.js';
 import { getPackagesFromConfig } from './sandbox/packages.js';
 
 /**
@@ -109,7 +113,7 @@ export class SetupBuilder {
       if (
         typeof project?.name !== 'string' ||
         typeof project?.path !== 'string' ||
-        !isSafeRelativePath(project.path)
+        !this.isSafeWorkspacePath(project.path)
       ) {
         return [];
       }
@@ -145,31 +149,19 @@ export class SetupBuilder {
         packageManagers?: string[];
       }>
     | undefined {
-    const iterationsPath = join(this.taskBasePath, 'iterations');
-    if (!existsSync(iterationsPath)) {
-      return undefined;
-    }
-
-    const iterationIds = readdirSync(iterationsPath, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
-      .map(dirent => Number.parseInt(dirent.name, 10))
-      .filter(iteration => !Number.isNaN(iteration))
-      .sort((a, b) => b - a);
-
-    if (iterationIds.length === 0) {
-      return undefined;
-    }
-
-    for (const iterationId of iterationIds) {
-      const descriptionPath = join(
-        iterationsPath,
-        iterationId.toString(),
-        'workspace-description.json'
-      );
-      if (!existsSync(descriptionPath)) {
-        continue;
-      }
-
+    const parsePersistedWorkspaceProjects = (
+      descriptionPath: string
+    ):
+      | Array<{
+          name: string;
+          path: string;
+          repository?: string;
+          runtimeRepository?: string;
+          ref?: string;
+          languages?: string[];
+          packageManagers?: string[];
+        }>
+      | undefined => {
       try {
         const parsed = JSON.parse(readFileSync(descriptionPath, 'utf8')) as {
           projects?: Array<{
@@ -187,7 +179,7 @@ export class SetupBuilder {
             if (
               typeof project?.name !== 'string' ||
               typeof project?.path !== 'string' ||
-              !isSafeRelativePath(project.path)
+              !this.isSafeWorkspacePath(project.path)
             ) {
               return [];
             }
@@ -224,17 +216,69 @@ export class SetupBuilder {
           }
         );
       } catch {
+        return undefined;
+      }
+    };
+    const legacyDescriptionPath = this.task.worktreePath
+      ? join(this.task.worktreePath, '.rover-workspace.json')
+      : join(this.taskBasePath, '.rover-workspace.json');
+
+    const iterationsPath = join(this.taskBasePath, 'iterations');
+    if (!existsSync(iterationsPath)) {
+      return existsSync(legacyDescriptionPath)
+        ? (parsePersistedWorkspaceProjects(legacyDescriptionPath) ?? [])
+        : undefined;
+    }
+
+    const iterationIds = readdirSync(iterationsPath, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => Number.parseInt(dirent.name, 10))
+      .filter(iteration => !Number.isNaN(iteration))
+      .sort((a, b) => b - a);
+
+    if (iterationIds.length === 0) {
+      return existsSync(legacyDescriptionPath)
+        ? (parsePersistedWorkspaceProjects(legacyDescriptionPath) ?? [])
+        : undefined;
+    }
+
+    let foundPersistedWorkspaceDescription = false;
+
+    for (const iterationId of iterationIds) {
+      const descriptionPath = join(
+        iterationsPath,
+        iterationId.toString(),
+        'workspace-description.json'
+      );
+      if (!existsSync(descriptionPath)) {
         continue;
+      }
+      foundPersistedWorkspaceDescription = true;
+      const persistedProjects =
+        parsePersistedWorkspaceProjects(descriptionPath);
+      if (persistedProjects !== undefined) {
+        return persistedProjects;
       }
     }
 
-    return [];
+    if (existsSync(legacyDescriptionPath)) {
+      return parsePersistedWorkspaceProjects(legacyDescriptionPath) ?? [];
+    }
+
+    return foundPersistedWorkspaceDescription ? [] : undefined;
+  }
+
+  private isSafeWorkspacePath(relativePath: string): boolean {
+    return typeof this.projectConfig.projectRoot === 'string'
+      ? resolvePathWithinRoot(this.projectConfig.projectRoot, relativePath) !==
+          null
+      : isSafeRelativePath(relativePath);
   }
 
   private isLocalRepositoryReference(repository: string): boolean {
     return (
       repository.startsWith('file://') ||
-      isAbsolute(repository) ||
+      (isAbsolute(repository) && !repository.startsWith('/workspace/')) ||
       repository === '.' ||
       repository === '..' ||
       repository.startsWith('./') ||
@@ -270,6 +314,7 @@ export class SetupBuilder {
     return getDependencyResolutionCommands({
       rootPackageManagers: this.projectConfig.packageManagers ?? [],
       projects: this.workspaceProjects,
+      workspaceRoot: this.projectConfig.projectRoot,
       addVenvPathExports: true,
     });
   }
@@ -450,7 +495,7 @@ fi`;
       if (mcps && mcps.length > 0) {
         configureAllMCPCommands.push('echo "✅ Configuring custom MCPs"');
         for (const mcp of mcps) {
-          let cmd = `rover-agent config mcp ${this.agent} ${shellEscape(mcp.name)} --transport ${shellEscape(mcp.transport)}`;
+          let cmd = `rover-agent config mcp ${shellEscape(this.agent)} ${shellEscape(mcp.name)} --transport ${shellEscape(mcp.transport)}`;
 
           if (mcp.envs && mcp.envs.length > 0) {
             for (const env of mcp.envs) {
@@ -512,7 +557,7 @@ echo -e "\\n📦 Done installing MCP servers"`;
     const executableInitScripts = allInitScripts.flatMap((entry, index) =>
       useCachedImage && !entry.path
         ? []
-        : !entry.path || isSafeRelativePath(entry.path)
+        : !entry.path || this.isSafeWorkspacePath(entry.path)
           ? [{ entry, index }]
           : []
     );
@@ -523,11 +568,15 @@ echo -e "\\n📦 Done installing MCP servers"`;
         if (entry.path) {
           scriptBlocks.push(`echo "🔧 Running initialization script${label}"
 workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
+workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
 if [ -f "$workspace_project_script_${index}" ]; then
   workspace_script_${index}="$workspace_project_script_${index}"
   workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
+elif [ -f "$workspace_root_script_${index}" ]; then
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
 else
-  echo "❌ Initialization script${label} not found at $workspace_project_script_${index}"
+  echo "❌ Initialization script${label} not found at $workspace_project_script_${index} or $workspace_root_script_${index}"
   safe_exit 1
 fi
 chmod +x "$workspace_script_${index}"
@@ -543,12 +592,25 @@ cd /workspace`);
           continue;
         }
 
+        const escapedMountedScript = shellEscape(
+          getRootInitScriptMountPath(allInitScripts, index)
+        );
         const escapedWorkspaceScript = shellEscape(
           `/workspace/${entry.script}`
         );
         scriptBlocks.push(`echo "🔧 Running initialization script${label}"
-chmod +x ${escapedWorkspaceScript}
-bash ${escapedWorkspaceScript}
+mounted_script_${index}=${escapedMountedScript}
+workspace_script_${index}=${escapedWorkspaceScript}
+if [ -f "$mounted_script_${index}" ]; then
+  root_script_${index}="$mounted_script_${index}"
+elif [ -f "$workspace_script_${index}" ]; then
+  root_script_${index}="$workspace_script_${index}"
+else
+  echo "❌ Initialization script${label} not found at $mounted_script_${index} or $workspace_script_${index}"
+  safe_exit 1
+fi
+chmod +x "$root_script_${index}"
+bash "$root_script_${index}"
 if [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -59,7 +59,11 @@ describe('generateBuildEntrypoint', () => {
     );
     expect(script).toContain("git -C '/workspace/frontend' clean -fdx");
     expect(script).toContain("git -C '/workspace/backend' clean -fdx");
-    expect(script).toContain('bash "/workspace/scripts/system-init.sh"');
+    expect(script).toContain("mounted_script_0='/init-script-0.sh'");
+    expect(script).toContain(
+      "workspace_script_0='/workspace/scripts/system-init.sh'"
+    );
+    expect(script).toContain('bash "$root_script_0"');
     expect(script).toContain(
       "workspace_project_script_1='/workspace/frontend/scripts/init.sh'"
     );
@@ -102,6 +106,26 @@ describe('generateBuildEntrypoint', () => {
     expect(dependencyResolutionIndex).toBeGreaterThan(repoSyncIndex);
   });
 
+  it('falls back to root init scripts for project-scoped entries during cache builds', () => {
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [{ path: 'frontend', script: 'scripts/init.sh' }],
+      projects: [],
+      mcps: [],
+    } as any);
+
+    expect(script).toContain(
+      "workspace_project_script_0='/workspace/frontend/scripts/init.sh'"
+    );
+    expect(script).toContain(
+      "workspace_root_script_0='/workspace/scripts/init.sh'"
+    );
+    expect(script).toContain('elif [ -f "$workspace_root_script_0" ]; then');
+    expect(script).toContain("workspace_dir_0='/workspace'");
+  });
+
   it('uses helper wrappers so cache builds still work when sudo is unavailable', () => {
     const script = generateBuildEntrypoint('claude', {
       allLanguages: [],
@@ -140,7 +164,9 @@ describe('generateBuildEntrypoint', () => {
     const repoSyncIndex = script.indexOf(
       'Syncing external repositories for cache build'
     );
-    const installGoIndex = script.indexOf('Installing go...');
+    const installGoIndex = script.indexOf(
+      'echo "Installing Go $GO_VERSION_DL ($GOARCH)..."'
+    );
     const goVersionProbeIndex = script.indexOf(
       "for go_mod_path in '/workspace/go.mod' '/workspace/src/go.mod' '/workspace/backend/go.mod' '/workspace/backend/src/go.mod'; do"
     );
@@ -168,9 +194,7 @@ describe('generateBuildEntrypoint', () => {
       mcps: [],
     } as any);
 
-    const initScriptIndex = script.indexOf(
-      'bash "/workspace/scripts/system-init.sh"'
-    );
+    const initScriptIndex = script.indexOf('bash "$root_script_0"');
     const rootDependencyIndex = script.indexOf("cd '/workspace' && uv sync");
     const projectDependencyIndex = script.indexOf(
       "cd '/workspace/frontend' && pnpm install"
@@ -179,6 +203,24 @@ describe('generateBuildEntrypoint', () => {
     expect(initScriptIndex).toBeGreaterThanOrEqual(0);
     expect(rootDependencyIndex).toBeGreaterThan(initScriptIndex);
     expect(projectDependencyIndex).toBeGreaterThan(initScriptIndex);
+  });
+
+  it('runs root init scripts from mounted host paths during cache builds', () => {
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [{ script: '../shared/system-init.sh' }],
+      projects: [],
+      mcps: [],
+    } as any);
+
+    expect(script).toContain("mounted_script_0='/init-script.sh'");
+    expect(script).toContain(
+      "workspace_script_0='/workspace/../shared/system-init.sh'"
+    );
+    expect(script).toContain('if [ -f "$mounted_script_0" ]; then');
+    expect(script).toContain('bash "$root_script_0"');
   });
 
   it('filters unsafe project and init-script paths from cache builds', () => {
@@ -212,6 +254,26 @@ describe('generateBuildEntrypoint', () => {
     expect(script).not.toContain('scripts/bad.sh');
   });
 
+  it('filters project-scoped init scripts whose path escapes through a symlink', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    const outside = mkdtempSync(join(tmpdir(), 'rover-build-outside-'));
+    testDirs.push(root);
+    testDirs.push(outside);
+    symlinkSync(outside, join(root, 'services'));
+
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [{ path: 'services/api', script: 'scripts/init.sh' }],
+      projects: [],
+      mcps: [],
+      projectRoot: root,
+    } as any);
+
+    expect(script).not.toContain('/workspace/services/api/scripts/init.sh');
+  });
+
   it('prefers project-relative init scripts during cache builds', () => {
     const script = generateBuildEntrypoint('claude', {
       allLanguages: [],
@@ -235,10 +297,10 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain("workspace_dir_0='/workspace/frontend'");
     expect(script).toContain('if [ -f "$workspace_project_script_0" ]; then');
     expect(script).toContain(
-      'echo "❌ Initialization script (frontend) not found at $workspace_project_script_0"'
+      'echo "❌ Initialization script (frontend) not found at $workspace_project_script_0 or $workspace_root_script_0"'
     );
     expect(script).toContain('bash "$workspace_script_0"');
-    expect(script).not.toContain(
+    expect(script).toContain(
       "workspace_root_script_0='/workspace/scripts/init.sh'"
     );
   });
@@ -320,6 +382,76 @@ describe('generateBuildEntrypoint', () => {
         )
       )
     ).toThrow(/Local workspace repository for frontend not found/);
+  });
+
+  it('does not rewrite absolute container repository paths during build config preparation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    testDirs.push(root);
+
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      root,
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: '/workspace/sources/frontend.git',
+            },
+          ],
+        } as any,
+        root
+      )
+    );
+
+    expect(repositoryMounts).toEqual([]);
+    expect(buildProjectConfig.projects?.[0]?.repository).toBe(
+      '/workspace/sources/frontend.git'
+    );
+  });
+
+  it('rewrites absolute host repository paths during build config preparation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    const hostRepo = mkdtempSync(join(tmpdir(), 'rover-build-host-repo-'));
+    testDirs.push(root, hostRepo);
+
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      root,
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: hostRepo,
+            },
+          ],
+        } as any,
+        root
+      )
+    );
+
+    expect(repositoryMounts).toEqual([
+      {
+        hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(buildProjectConfig.projects?.[0]?.repository).toBe(
+      '/workspace-repos/0'
+    );
   });
 
   it('excludes unsafe-path projects during build config preparation', () => {
