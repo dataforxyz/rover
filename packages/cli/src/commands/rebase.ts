@@ -89,6 +89,8 @@ interface RebaseTarget {
   branchName: string;
   worktreePath: string;
   baseBranch: string;
+  /** The actual ref used for `git rebase`, which may be `origin/<baseBranch>` for child repos. */
+  rebaseOnto?: string;
 }
 
 const resolveSubprojectRebaseBase = (
@@ -476,6 +478,7 @@ export const rebaseCommand = async (
                 target.baseBranch
               )
             : target.baseBranch;
+        target.rebaseOnto = rebaseOnto;
 
         const rebaseResult = git.rebaseBranch(rebaseOnto, {
           worktreePath: target.worktreePath,
@@ -600,7 +603,7 @@ export const rebaseCommand = async (
               console.log(
                 colors.gray('├──'),
                 colors.gray(
-                  `1. cd ${target.worktreePath} && git rebase ${target.baseBranch}`
+                  `1. cd ${target.worktreePath} && git rebase ${target.rebaseOnto ?? target.baseBranch}`
                 )
               );
               console.log(

@@ -462,7 +462,9 @@ export abstract class Sandbox {
         customEnvVariables = [...customEnvVariables, ...fileEnvVariables];
       }
     } catch (error) {
-      // Silently skip if there's an error loading project config
+      console.error(
+        `[rover] warning: failed to load custom environment variables: ${error instanceof Error ? error.message : error}`
+      );
     }
 
     // Merge agent environment variables with custom environment variables

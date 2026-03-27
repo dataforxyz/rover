@@ -129,6 +129,20 @@ describe('generateNetworkScript', () => {
     ).toThrow(/Invalid network rules/);
   });
 
+  it('rejects service hostnames containing shell metacharacters', () => {
+    expect(() =>
+      generateNetworkScript(
+        {
+          mode: 'allowlist',
+          rules: [{ host: 'api.github.com' }],
+          allowDns: true,
+          allowLocalhost: true,
+        },
+        { serviceHostnames: ['postgres$(whoami)'] }
+      )
+    ).toThrow(/Invalid characters in service hostname/);
+  });
+
   it('uses IP directly for IP/CIDR hosts without resolve_host', () => {
     const script = generateNetworkScript({
       mode: 'allowlist',

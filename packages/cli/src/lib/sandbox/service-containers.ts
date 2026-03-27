@@ -200,7 +200,10 @@ export async function waitForServicesReady(
       continue;
     }
 
-    const deadline = Date.now() + service.readyTimeout * 1000;
+    const timeout = Number.isFinite(service.readyTimeout)
+      ? service.readyTimeout
+      : 30;
+    const deadline = Date.now() + timeout * 1000;
 
     if (VERBOSE) {
       console.error(

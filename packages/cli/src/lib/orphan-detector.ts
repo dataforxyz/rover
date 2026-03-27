@@ -120,6 +120,10 @@ export async function detectOrphanedTasks(
         }
 
         if (!state) {
+          if (!task.isInProgress() && !task.isIterating()) {
+            return;
+          }
+
           // Final lock re-check after inspect returned null — another
           // process may have acquired the lock and started a replacement
           // container after inspect() returned.

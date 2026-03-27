@@ -185,6 +185,28 @@ describe('detectOrphanedTasks', () => {
     expect(console.warn).not.toHaveBeenCalled();
   });
 
+  it('does not fail a force-inspected task that became COMPLETED before inspect returned null', async () => {
+    const task = mockTask(35, 'IN_PROGRESS', 'container-35', {
+      updateStatusFromIteration: vi.fn(() => {
+        task.status = 'COMPLETED';
+      }),
+    });
+    const sandbox = {
+      inspect: vi.fn().mockResolvedValue(null),
+      teardownServices: vi.fn().mockResolvedValue(undefined),
+    };
+    mockedCreateSandbox.mockResolvedValue(sandbox as any);
+
+    task.updateStatusFromIteration();
+    await detectOrphanedTasks([
+      { task, project: mockProject(), forceInspect: true },
+    ]);
+
+    expect(sandbox.teardownServices).not.toHaveBeenCalled();
+    expect(task.markFailed).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
   it('does not mark task as FAILED when container inspect errors', async () => {
     const task = mockTask(19, 'IN_PROGRESS', 'container-19');
     const sandbox = {

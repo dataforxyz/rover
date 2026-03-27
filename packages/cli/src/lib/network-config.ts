@@ -238,22 +238,23 @@ function generateAllowlistScript(
       const comment = rule.description
         ? ` # ${sanitizeDescription(rule.description)}`
         : '';
-      if (isIPOrCIDR(rule.host)) {
+      const trimmedHost = rule.host.trim();
+      if (isIPOrCIDR(trimmedHost)) {
         // Direct IP/CIDR - no resolution needed
-        if (isIPv6(rule.host)) {
+        if (isIPv6(trimmedHost)) {
           lines.push(
-            `  sudo ip6tables -A OUTPUT -d ${rule.host} -j ACCEPT 2>/dev/null || true${comment}`
+            `  sudo ip6tables -A OUTPUT -d ${trimmedHost} -j ACCEPT 2>/dev/null || true${comment}`
           );
         } else {
           lines.push(
-            `  sudo iptables -A OUTPUT -d ${rule.host} -j ACCEPT 2>/dev/null || true${comment}`
+            `  sudo iptables -A OUTPUT -d ${trimmedHost} -j ACCEPT 2>/dev/null || true${comment}`
           );
         }
       } else {
         // Domain - needs resolution; single-quote the host to prevent
         // shell expansion of any residual special characters.
-        const safeHost = rule.host.replace(/'/g, "'\"'\"'");
-        lines.push(`  # ${rule.host.replace(/[\n\r]/g, ' ')}${comment}`);
+        const safeHost = trimmedHost.replace(/'/g, "'\"'\"'");
+        lines.push(`  # ${trimmedHost.replace(/[\n\r]/g, ' ')}${comment}`);
         lines.push(`  for ip in $(resolve_host '${safeHost}'); do`);
         lines.push('    if [[ "$ip" =~ : ]]; then');
         lines.push(
@@ -293,22 +294,23 @@ function generateBlocklistScript(
       const comment = rule.description
         ? ` # ${sanitizeDescription(rule.description)}`
         : '';
-      if (isIPOrCIDR(rule.host)) {
+      const trimmedHost = rule.host.trim();
+      if (isIPOrCIDR(trimmedHost)) {
         // Direct IP/CIDR - no resolution needed
-        if (isIPv6(rule.host)) {
+        if (isIPv6(trimmedHost)) {
           lines.push(
-            `  sudo ip6tables -A OUTPUT -d ${rule.host} -j DROP 2>/dev/null || true${comment}`
+            `  sudo ip6tables -A OUTPUT -d ${trimmedHost} -j DROP 2>/dev/null || true${comment}`
           );
         } else {
           lines.push(
-            `  sudo iptables -A OUTPUT -d ${rule.host} -j DROP 2>/dev/null || true${comment}`
+            `  sudo iptables -A OUTPUT -d ${trimmedHost} -j DROP 2>/dev/null || true${comment}`
           );
         }
       } else {
         // Domain - needs resolution; single-quote the host to prevent
         // shell expansion of any residual special characters.
-        const safeHost = rule.host.replace(/'/g, "'\"'\"'");
-        lines.push(`  # ${rule.host.replace(/[\n\r]/g, ' ')}${comment}`);
+        const safeHost = trimmedHost.replace(/'/g, "'\"'\"'");
+        lines.push(`  # ${trimmedHost.replace(/[\n\r]/g, ' ')}${comment}`);
         lines.push(`  for ip in $(resolve_host '${safeHost}'); do`);
         lines.push('    if [[ "$ip" =~ : ]]; then');
         lines.push(
@@ -331,6 +333,13 @@ function generateServiceHostnameRules(serviceHostnames: string[]): string[] {
   const uniqueHostnames = [...new Set(serviceHostnames.filter(Boolean))];
   if (uniqueHostnames.length === 0) {
     return [];
+  }
+
+  // Validate service hostnames against shell metacharacters, same as rule hosts.
+  for (const hostname of uniqueHostnames) {
+    if (SHELL_UNSAFE_CHARS.test(hostname) || /[<>"|?*]/.test(hostname)) {
+      throw new Error(`Invalid characters in service hostname: ${hostname}`);
+    }
   }
 
   const lines: string[] = [
