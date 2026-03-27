@@ -231,4 +231,19 @@ describe('shell command', () => {
     );
     expect(exitWithSuccess).not.toHaveBeenCalled();
   });
+
+  it('does not block container shells on the global backend probe when task sandbox metadata is usable', async () => {
+    const task = createTestTask(4, 'Remote docker shell task');
+    task.markInProgress();
+    task.setContainerInfo('container-4', 'running', {
+      dockerHost: 'tcp://remote:2375',
+    });
+
+    mockedGetAvailableSandboxBackend.mockResolvedValueOnce(null);
+
+    await shellCommand('4', { container: true });
+
+    expect(mockedGetAvailableSandboxBackend).not.toHaveBeenCalled();
+    expect(mockedCreateSandbox).toHaveBeenCalledTimes(1);
+  });
 });

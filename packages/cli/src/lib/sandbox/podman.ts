@@ -1,7 +1,7 @@
 import { getAIAgentTool } from '../agents/index.js';
 import { join } from 'node:path';
 import { ProjectConfigManager, TaskDescriptionManager } from 'rover-core';
-import { Sandbox, SandboxOptions } from './types.js';
+import { Sandbox, SandboxInspectOptions, SandboxOptions } from './types.js';
 import { SetupBuilder } from '../setup.js';
 import { generateRandomId, launch, ProcessManager, VERBOSE } from 'rover-core';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -650,7 +650,10 @@ export class PodmanSandbox extends Sandbox {
     }
   }
 
-  async inspect(): Promise<{ status: string; exitCode?: number } | null> {
+  async inspect(
+    options?: SandboxInspectOptions
+  ): Promise<{ status: string; exitCode?: number } | null> {
+    const shouldTeardownServices = options?.teardownServices !== false;
     try {
       const result = await launch(
         'podman',
@@ -674,14 +677,19 @@ export class PodmanSandbox extends Sandbox {
         status,
         exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
       };
-      if (this.shouldTeardownServicesForStatus(status)) {
+      if (
+        shouldTeardownServices &&
+        this.shouldTeardownServicesForStatus(status)
+      ) {
         await this.teardownServicesIfConfigured();
       }
 
       return containerState;
     } catch (error) {
       if (isContainerMissingInspectError(error)) {
-        await this.teardownServicesIfConfigured();
+        if (shouldTeardownServices) {
+          await this.teardownServicesIfConfigured();
+        }
         return null;
       }
       throw error;

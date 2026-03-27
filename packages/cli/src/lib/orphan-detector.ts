@@ -111,7 +111,7 @@ export async function detectOrphanedTasks(
           return;
         }
 
-        const state = await sandbox.inspect();
+        const state = await sandbox.inspect({ teardownServices: false });
 
         // Re-check lock after inspect — another process may have acquired
         // the resume lock and started a new container during the inspect call.
@@ -159,18 +159,17 @@ export async function detectOrphanedTasks(
           return;
         }
 
-        try {
-          await sandbox.teardownServices();
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          warn(
-            colors.yellow(
-              `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
-            )
-          );
-        }
-
         if (!task.isInProgress() && !task.isIterating()) {
+          try {
+            await sandbox.teardownServices();
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            warn(
+              colors.yellow(
+                `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+              )
+            );
+          }
           return;
         }
 
@@ -180,7 +179,20 @@ export async function detectOrphanedTasks(
         if (state.exitCode === AGENT_EXIT_CODE.SUCCESS) {
           task.updateStatusFromIteration();
           // If status is already terminal after refresh, nothing more to do.
-          if (task.isCompleted() || task.isFailed() || task.isPaused()) {
+          if (task.isPaused()) {
+            return;
+          }
+          try {
+            await sandbox.teardownServices();
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            warn(
+              colors.yellow(
+                `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+              )
+            );
+          }
+          if (task.isCompleted() || task.isFailed()) {
             return;
           }
           // Exit code 0 is a clean exit — if the status file wasn't updated yet
@@ -208,6 +220,16 @@ export async function detectOrphanedTasks(
         // Try to read the agent's last error from the status file before
         // falling back to a generic message.
         task.updateStatusFromIteration();
+        try {
+          await sandbox.teardownServices();
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          warn(
+            colors.yellow(
+              `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+            )
+          );
+        }
         if (!task.isFailed()) {
           task.markFailed(CONTAINER_EXITED_ERROR);
         }

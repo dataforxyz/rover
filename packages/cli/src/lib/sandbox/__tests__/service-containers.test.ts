@@ -11,6 +11,7 @@ import {
   buildServiceContainerContext,
   createServiceNetwork,
   getServiceNetworkArgs,
+  hasAnyServiceContainerResources,
   isServiceContainerContextAvailable,
   startServiceContainers,
   teardownServiceContainers,
@@ -781,6 +782,53 @@ describe('service-containers', () => {
         ['inspect', '--format', '{{json .State}}', 'rover-svc-1-1-pg'],
         { env, reject: false }
       );
+    });
+  });
+
+  describe('hasAnyServiceContainerResources', () => {
+    it('returns true when the service network already exists', async () => {
+      mockedLaunch.mockResolvedValueOnce({ exitCode: 0, stdout: '[]' });
+
+      await expect(
+        hasAnyServiceContainerResources(ContainerBackend.Docker, {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        })
+      ).resolves.toBe(true);
+
+      expect(mockedLaunch).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns true when a deterministic sidecar container exists without the network', async () => {
+      mockedLaunch
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '' })
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'container-id' });
+
+      await expect(
+        hasAnyServiceContainerResources(ContainerBackend.Docker, {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        })
+      ).resolves.toBe(true);
+    });
+
+    it('returns false when neither the network nor expected containers exist', async () => {
+      mockedLaunch
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '' })
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '' });
+
+      await expect(
+        hasAnyServiceContainerResources(ContainerBackend.Docker, {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        })
+      ).resolves.toBe(false);
     });
   });
 

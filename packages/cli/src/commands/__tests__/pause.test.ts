@@ -94,7 +94,7 @@ describe('pause command', () => {
     );
   });
 
-  it('tears down sidecars after a graceful pause and preserves resumable sandbox metadata', async () => {
+  it('preserves sidecars after a graceful pause so resume can reuse them', async () => {
     const { createSandbox } = await import('../../lib/sandbox/index.js');
     const { exitWithSuccess } = await import('../../utils/exit.js');
 
@@ -125,10 +125,15 @@ describe('pause command', () => {
         .fn()
         .mockResolvedValueOnce({ status: 'running' })
         .mockResolvedValueOnce({ status: 'exited' }),
-      teardownServices: vi.fn().mockResolvedValue(undefined),
       stopGracefully: vi.fn().mockResolvedValue(undefined),
       getSandboxMetadata: vi.fn().mockReturnValue({
         dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
       }),
     };
     vi.mocked(createSandbox).mockResolvedValue(sandbox as any);
@@ -154,12 +159,23 @@ describe('pause command', () => {
         },
       },
     });
-    expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(sandbox.stopGracefully).not.toHaveBeenCalled();
+    expect(sandbox.inspect).toHaveBeenNthCalledWith(1, {
+      teardownServices: false,
+    });
+    expect(sandbox.inspect).toHaveBeenNthCalledWith(2, {
+      teardownServices: false,
+    });
     expect(reloadedTask.status).toBe('PAUSED');
     expect(reloadedTask.containerId).toBe('');
     expect(reloadedTask.sandboxMetadata).toEqual({
       dockerHost: 'tcp://remote:2375',
+      serviceContext: {
+        networkName: 'rover-services-1-1',
+        containerNames: ['rover-svc-1-1-postgres'],
+        taskId: 1,
+        iteration: 1,
+      },
     });
     expect(exitWithSuccess).toHaveBeenCalledWith(
       'Task paused successfully!',

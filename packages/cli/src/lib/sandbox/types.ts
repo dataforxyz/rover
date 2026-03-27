@@ -14,6 +14,7 @@ import { isContainerMissingInspectError } from './inspect-errors.js';
 import {
   buildServiceContainerContext,
   createServiceNetwork,
+  hasAnyServiceContainerResources,
   isServiceContainerContextAvailable,
   startServiceContainers,
   type ServiceContainerContext,
@@ -37,6 +38,15 @@ export interface SandboxOptions {
   checkpointPath?: string;
   /** Resume from an existing checkpoint without resetting workspace state */
   resumeFromCheckpoint?: boolean;
+}
+
+export interface SandboxInspectOptions {
+  /**
+   * Whether inspecting a stopped or missing task container should also tear
+   * down persisted sidecars. Pause/resume flows disable this so service state
+   * survives until an explicit stop/remove path cleans it up.
+   */
+  teardownServices?: boolean;
 }
 
 export abstract class SandboxPackage {
@@ -67,7 +77,9 @@ export abstract class Sandbox {
 
   abstract isBackendAvailable(): Promise<boolean>;
   abstract openShellAtWorktree(): Promise<{ exitCode?: number }>;
-  abstract inspect(): Promise<{ status: string; exitCode?: number } | null>;
+  abstract inspect(
+    options?: SandboxInspectOptions
+  ): Promise<{ status: string; exitCode?: number } | null>;
 
   protected abstract create(): Promise<string>;
   protected abstract start(): Promise<string>;
@@ -226,6 +238,20 @@ export abstract class Sandbox {
       this.serviceContext = undefined;
     }
 
+    if (
+      await hasAnyServiceContainerResources(
+        this.getContainerBackend(),
+        expectedServiceContext,
+        env
+      )
+    ) {
+      await teardownServiceContainers(
+        this.getContainerBackend(),
+        expectedServiceContext,
+        env
+      );
+    }
+
     const networkName = await createServiceNetwork(
       this.getContainerBackend(),
       this.task.id,
@@ -367,11 +393,6 @@ export abstract class Sandbox {
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
-    }
-
-    // Only tear down sidecars after the task container has definitely stopped.
-    if (stoppedOrMissing) {
-      await this.teardownServicesIfConfigured();
     }
 
     if (stopError) {

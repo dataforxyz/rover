@@ -78,7 +78,7 @@ export const NETWORK_MODE_VALUES = NetworkModeSchema.options;
  */
 export const NetworkRuleSchema = z.object({
   /** Host pattern: domain name, IP address, or CIDR notation */
-  host: z.string(),
+  host: z.string().trim().min(1, { message: 'Host must not be empty' }),
   /** Optional description for documentation */
   description: z.string().optional(),
 });
@@ -113,6 +113,32 @@ export const ServiceHealthcheckSchema = z.object({
   startPeriod: z.number().int().nonnegative().default(0),
 });
 
+const isValidVolumeMount = (value: string): boolean => {
+  const parts = value.split(':');
+  if (parts.length < 2) {
+    return false;
+  }
+
+  let targetIndex = 1;
+  if (
+    parts.length >= 3 &&
+    /^[A-Za-z]$/.test(parts[0]) &&
+    /^[\\/]/.test(parts[1])
+  ) {
+    targetIndex = 2;
+  }
+
+  const source = parts.slice(0, targetIndex).join(':');
+  const target = parts[targetIndex];
+  const options = parts.slice(targetIndex + 1);
+
+  if (!source || !target || options.length > 1) {
+    return false;
+  }
+
+  return options.length === 0 || /^[A-Za-z]+(?:,[A-Za-z]+)*$/.test(options[0]);
+};
+
 /**
  * Service container (sidecar) configuration.
  * Services run as separate containers on a per-task Docker network.
@@ -132,8 +158,15 @@ export const ServiceContainerSchema = z.object({
   ports: z.array(z.number().int().positive()).optional(),
   /** Environment variables for the service container */
   env: z.array(z.string()).optional(),
-  /** Volume mounts (named volumes or bind mounts) */
-  volumes: z.array(z.string()).optional(),
+  /** Volume mounts (named volumes or bind mounts, e.g. "pgdata:/var/lib/postgresql/data" or "/host:/container:Z,ro") */
+  volumes: z
+    .array(
+      z.string().refine(isValidVolumeMount, {
+        message:
+          'Volume mount must be in the format "source:target" or "source:target:option[,option...]"',
+      })
+    )
+    .optional(),
   /** Healthcheck configuration — services with a healthcheck are polled before the task starts */
   healthcheck: ServiceHealthcheckSchema.optional(),
   /** Command override */

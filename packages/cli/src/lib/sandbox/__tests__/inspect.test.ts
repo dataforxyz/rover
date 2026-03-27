@@ -192,6 +192,25 @@ describe('sandbox inspect', () => {
     });
   });
 
+  it('forwards DOCKER_HOST when probing docker backend availability', async () => {
+    const sandbox = new DockerSandbox(createTaskFixture(), undefined, {
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+      },
+    });
+    mockLaunch.mockResolvedValueOnce({
+      stdout: JSON.stringify({ ServerVersion: '26.1.0' }),
+    });
+
+    await expect(sandbox.isBackendAvailable()).resolves.toBe(true);
+
+    expect(mockLaunch).toHaveBeenCalledWith(
+      'docker',
+      ['info', '--format', 'json'],
+      { env: expect.objectContaining({ DOCKER_HOST: 'tcp://remote:2375' }) }
+    );
+  });
+
   it.each([
     ['docker', DockerSandbox, 'docker', undefined],
     ['podman', PodmanSandbox, 'podman', undefined],
@@ -318,6 +337,47 @@ describe('sandbox inspect', () => {
         '--network',
         'rover-services-1-1',
       ])
+    );
+  });
+
+  it('forwards DOCKER_HOST to docker create/start when resuming with persisted metadata', async () => {
+    const sandbox = new DockerSandbox(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    mockLaunch
+      .mockResolvedValueOnce({ stdout: '' })
+      .mockResolvedValueOnce({ stdout: 'container-1' })
+      .mockResolvedValueOnce({ stdout: '' });
+
+    await expect(sandbox.createAndStart()).resolves.toBe('container-1');
+
+    expect(mockLaunch).toHaveBeenNthCalledWith(
+      1,
+      'docker',
+      ['rm', '-f', 'rover-task-1-1'],
+      { env: expect.objectContaining({ DOCKER_HOST: 'tcp://remote:2375' }) }
+    );
+    expect(mockLaunch).toHaveBeenNthCalledWith(
+      2,
+      'docker',
+      expect.arrayContaining(['create', '--name', 'rover-task-1-1']),
+      { env: expect.objectContaining({ DOCKER_HOST: 'tcp://remote:2375' }) }
+    );
+    expect(mockLaunch).toHaveBeenNthCalledWith(
+      3,
+      'docker',
+      ['start', 'rover-task-1-1'],
+      { env: expect.objectContaining({ DOCKER_HOST: 'tcp://remote:2375' }) }
     );
   });
 

@@ -37,7 +37,7 @@ import {
   getServiceNetworkArgs,
   teardownServiceContainers,
 } from './service-containers.js';
-import { Sandbox, SandboxOptions } from './types.js';
+import { Sandbox, SandboxInspectOptions, SandboxOptions } from './types.js';
 import { validateSandboxWorktreePath } from './worktree-path.js';
 
 export class DockerSandbox extends Sandbox {
@@ -64,7 +64,9 @@ export class DockerSandbox extends Sandbox {
   async isBackendAvailable(): Promise<boolean> {
     try {
       // Check if docker command exists and verify it's actual Docker (not Podman)
-      const result = await launch('docker', ['info', '--format', 'json']);
+      const result = await launch('docker', ['info', '--format', 'json'], {
+        env: this.getDockerEnv(),
+      });
       const info = JSON.parse(result.stdout?.toString() || '{}');
 
       // Docker will have ServerVersion set, Podman (even aliased as docker) will not
@@ -137,7 +139,9 @@ export class DockerSandbox extends Sandbox {
 
     // Clean up any existing container with same name
     try {
-      await launch('docker', ['rm', '-f', this.sandboxName]);
+      await launch('docker', ['rm', '-f', this.sandboxName], {
+        env: this.getDockerEnv(),
+      });
     } catch (error) {
       // Container doesn't exist, which is fine
     }
@@ -300,14 +304,19 @@ export class DockerSandbox extends Sandbox {
     }
 
     return (
-      (await launch('docker', dockerArgs)).stdout?.toString().trim() ||
-      this.sandboxName
+      (await launch('docker', dockerArgs, { env: this.getDockerEnv() })).stdout
+        ?.toString()
+        .trim() || this.sandboxName
     );
   }
 
   protected async start(): Promise<string> {
     return (
-      (await launch('docker', ['start', this.sandboxName])).stdout
+      (
+        await launch('docker', ['start', this.sandboxName], {
+          env: this.getDockerEnv(),
+        })
+      ).stdout
         ?.toString()
         .trim() || this.sandboxName
     );
@@ -631,6 +640,7 @@ export class DockerSandbox extends Sandbox {
 
       // Use detached: false to ensure proper TTY signal handling and job control
       return await launch('docker', dockerArgs, {
+        env: this.getDockerEnv(),
         stdio: 'inherit',
         reject: false,
         detached: false,
@@ -667,7 +677,10 @@ export class DockerSandbox extends Sandbox {
     return status === 'exited' || status === 'dead' || status === 'removing';
   }
 
-  async inspect(): Promise<{ status: string; exitCode?: number } | null> {
+  async inspect(
+    options?: SandboxInspectOptions
+  ): Promise<{ status: string; exitCode?: number } | null> {
+    const shouldTeardownServices = options?.teardownServices !== false;
     try {
       const result = await launch(
         'docker',
@@ -691,14 +704,19 @@ export class DockerSandbox extends Sandbox {
         status,
         exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
       };
-      if (this.shouldTeardownServicesForStatus(status)) {
+      if (
+        shouldTeardownServices &&
+        this.shouldTeardownServicesForStatus(status)
+      ) {
         await this.teardownServicesIfConfigured();
       }
 
       return containerState;
     } catch (error) {
       if (isContainerMissingInspectError(error)) {
-        await this.teardownServicesIfConfigured();
+        if (shouldTeardownServices) {
+          await this.teardownServicesIfConfigured();
+        }
         return null;
       }
       throw error;
@@ -816,6 +834,7 @@ export class DockerSandbox extends Sandbox {
       // Start Docker container with direct stdio inheritance for true interactivity
       // Use detached: false to ensure proper TTY signal handling and job control
       return await launch('docker', dockerArgs, {
+        env: this.getDockerEnv(),
         reject: false,
         stdio: 'inherit', // This gives full control to the user
         detached: false,

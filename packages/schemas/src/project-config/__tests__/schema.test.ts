@@ -193,6 +193,34 @@ describe('ProjectConfigSchema with projects', () => {
     ).toThrow(/Duplicate project path/);
   });
 
+  it('should reject blank network rule hosts', () => {
+    expect(() =>
+      ProjectConfigSchema.parse({
+        ...baseConfig,
+        sandbox: {
+          network: {
+            mode: 'allowlist',
+            rules: [{ host: '   ' }],
+          },
+        },
+      })
+    ).toThrow(/Host must not be empty/);
+  });
+
+  it('should trim valid network rule hosts during parsing', () => {
+    const result = ProjectConfigSchema.parse({
+      ...baseConfig,
+      sandbox: {
+        network: {
+          mode: 'allowlist',
+          rules: [{ host: '  api.github.com  ' }],
+        },
+      },
+    });
+
+    expect(result.sandbox?.network?.rules[0]?.host).toBe('api.github.com');
+  });
+
   it('should accept valid sandbox service names', () => {
     const result = ProjectConfigSchema.parse({
       ...baseConfig,
@@ -224,5 +252,45 @@ describe('ProjectConfigSchema with projects', () => {
         },
       })
     ).toThrow(/valid lowercase hostname label/);
+  });
+
+  it('should accept valid volume mount formats', () => {
+    const result = ProjectConfigSchema.parse({
+      ...baseConfig,
+      sandbox: {
+        services: [
+          {
+            name: 'postgres',
+            image: 'postgres:16',
+            volumes: [
+              'pgdata:/var/lib/postgresql/data',
+              '/host/path:/container/path:ro',
+              'named-vol:/data:rw',
+              '/host/cache:/cache:Z,ro',
+              'C:\\data:/container/data:ro',
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.sandbox?.services?.[0]?.volumes).toHaveLength(5);
+  });
+
+  it('should reject malformed volume mount strings', () => {
+    expect(() =>
+      ProjectConfigSchema.parse({
+        ...baseConfig,
+        sandbox: {
+          services: [
+            {
+              name: 'postgres',
+              image: 'postgres:16',
+              volumes: ['no-colon-separator'],
+            },
+          ],
+        },
+      })
+    ).toThrow(/source:target/);
   });
 });

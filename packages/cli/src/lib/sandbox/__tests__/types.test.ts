@@ -3,6 +3,7 @@ import { Sandbox } from '../types.js';
 
 const {
   mockCreateServiceNetwork,
+  mockHasAnyServiceContainerResources,
   mockIsServiceContainerContextAvailable,
   mockStartServiceContainers,
   mockTeardownServiceContainers,
@@ -10,6 +11,7 @@ const {
   mockProjectConfigLoad,
 } = vi.hoisted(() => ({
   mockCreateServiceNetwork: vi.fn(),
+  mockHasAnyServiceContainerResources: vi.fn(),
   mockIsServiceContainerContextAvailable: vi.fn(),
   mockStartServiceContainers: vi.fn(),
   mockTeardownServiceContainers: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock('../service-containers.js', () => ({
     iteration,
   })),
   createServiceNetwork: mockCreateServiceNetwork,
+  hasAnyServiceContainerResources: mockHasAnyServiceContainerResources,
   isServiceContainerContextAvailable: mockIsServiceContainerContextAvailable,
   startServiceContainers: mockStartServiceContainers,
   teardownServiceContainers: mockTeardownServiceContainers,
@@ -98,6 +101,7 @@ describe('Sandbox service cleanup', () => {
     vi.clearAllMocks();
     mockProjectConfigLoad.mockReturnValue({ services: [] });
     mockCreateServiceNetwork.mockResolvedValue('rover-services-12-3');
+    mockHasAnyServiceContainerResources.mockResolvedValue(false);
     mockIsServiceContainerContextAvailable.mockResolvedValue(false);
     mockStartServiceContainers.mockResolvedValue(['rover-svc-12-3-postgres']);
     mockWaitForServicesReady.mockResolvedValue(undefined);
@@ -155,7 +159,7 @@ describe('Sandbox service cleanup', () => {
     expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
   });
 
-  it('forwards DOCKER_HOST when tearing down services', async () => {
+  it('does not tear down services on graceful stop used for pause flows', async () => {
     const sandbox = new TestSandbox(
       {
         id: 12,
@@ -178,18 +182,19 @@ describe('Sandbox service cleanup', () => {
 
     await sandbox.stopGracefully();
 
-    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
-      'docker',
-      expect.objectContaining({
+    expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
+    expect(sandbox.getSandboxMetadata()).toEqual({
+      dockerHost: 'tcp://remote:2375',
+      serviceContext: {
         networkName: 'rover-services-12-3',
-      }),
-      expect.objectContaining({
-        DOCKER_HOST: 'tcp://remote:2375',
-      })
-    );
+        containerNames: ['rover-svc-12-3-postgres'],
+        taskId: 12,
+        iteration: 3,
+      },
+    });
   });
 
-  it('tears down services when stopGracefully finds the task container already missing', async () => {
+  it('does not tear down services when stopGracefully finds the task container already missing', async () => {
     const sandbox = new TestSandbox(
       {
         id: 12,
@@ -213,9 +218,15 @@ describe('Sandbox service cleanup', () => {
 
     await sandbox.stopGracefully();
 
-    expect(mockTeardownServiceContainers).toHaveBeenCalledTimes(1);
-    expect((sandbox as any).serviceContext).toBeUndefined();
-    expect(sandbox.getSandboxMetadata()).toBeUndefined();
+    expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
+    expect(sandbox.getSandboxMetadata()).toEqual({
+      serviceContext: {
+        networkName: 'rover-services-12-3',
+        containerNames: ['rover-svc-12-3-postgres'],
+        taskId: 12,
+        iteration: 3,
+      },
+    });
   });
 
   it('does not tear down services when stopGracefully fails for a non-missing container error', async () => {
@@ -347,7 +358,7 @@ describe('Sandbox service cleanup', () => {
     expect(sandbox.getSandboxMetadata()).toBeUndefined();
   });
 
-  it('does not reconstruct service names from the current project config', async () => {
+  it('preserves persisted service names on graceful stop without reconstructing from current config', async () => {
     mockProjectConfigLoad.mockReturnValue({
       services: [{ name: 'renamed-postgres' }],
     });
@@ -374,13 +385,15 @@ describe('Sandbox service cleanup', () => {
     await sandbox.stopGracefully();
 
     expect(mockProjectConfigLoad).not.toHaveBeenCalled();
-    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
-      'docker',
-      expect.objectContaining({
+    expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
+    expect(sandbox.getSandboxMetadata()).toEqual({
+      serviceContext: {
+        networkName: 'rover-services-12-3',
         containerNames: ['rover-svc-12-3-postgres'],
-      }),
-      undefined
-    );
+        taskId: 12,
+        iteration: 3,
+      },
+    });
   });
 
   it('reuses an existing service context without reloading project config', async () => {
@@ -681,5 +694,49 @@ describe('Sandbox service cleanup', () => {
         iteration: 3,
       },
     });
+  });
+
+  it('cleans up orphaned deterministic service resources before recreating services', async () => {
+    mockHasAnyServiceContainerResources.mockResolvedValueOnce(true);
+
+    const sandbox = new TestSandbox(
+      {
+        id: 12,
+        iterations: 3,
+      } as any,
+      undefined,
+      { projectPath: '/repo' }
+    );
+
+    await expect(
+      sandbox.ensureServicesForTest([
+        { name: 'postgres', image: 'postgres:16', readyTimeout: 30 },
+      ])
+    ).resolves.toEqual({
+      started: true,
+      serviceContext: {
+        networkName: 'rover-services-12-3',
+        containerNames: ['rover-svc-12-3-postgres'],
+        taskId: 12,
+        iteration: 3,
+      },
+    });
+
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+      'docker',
+      {
+        networkName: 'rover-services-12-3',
+        containerNames: ['rover-svc-12-3-postgres'],
+        taskId: 12,
+        iteration: 3,
+      },
+      undefined
+    );
+    expect(mockCreateServiceNetwork).toHaveBeenCalledWith(
+      'docker',
+      12,
+      3,
+      undefined
+    );
   });
 });

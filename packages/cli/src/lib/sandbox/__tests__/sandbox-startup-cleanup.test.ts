@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockCreateServiceNetwork,
+  mockHasAnyServiceContainerResources,
   mockIsServiceContainerContextAvailable,
   mockStartServiceContainers,
   mockWaitForServicesReady,
@@ -8,6 +9,7 @@ const {
   mockProjectConfigLoad,
 } = vi.hoisted(() => ({
   mockCreateServiceNetwork: vi.fn(),
+  mockHasAnyServiceContainerResources: vi.fn(),
   mockIsServiceContainerContextAvailable: vi.fn(),
   mockStartServiceContainers: vi.fn(),
   mockWaitForServicesReady: vi.fn(),
@@ -27,6 +29,7 @@ vi.mock('../service-containers.js', () => ({
   })),
   createServiceNetwork: mockCreateServiceNetwork,
   getServiceNetworkArgs: vi.fn(() => []),
+  hasAnyServiceContainerResources: mockHasAnyServiceContainerResources,
   isServiceContainerContextAvailable: mockIsServiceContainerContextAvailable,
   startServiceContainers: mockStartServiceContainers,
   teardownServiceContainers: mockTeardownServiceContainers,
@@ -59,6 +62,7 @@ describe('sandbox startup cleanup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockProjectConfigLoad.mockReturnValue({ services: [] });
+    mockHasAnyServiceContainerResources.mockResolvedValue(false);
     mockIsServiceContainerContextAvailable.mockResolvedValue(false);
     mockTeardownServiceContainers.mockResolvedValue(undefined);
   });

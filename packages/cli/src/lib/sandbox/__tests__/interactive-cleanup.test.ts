@@ -7,6 +7,7 @@ const {
   mockLaunch,
   mockProjectConfigLoad,
   mockCreateServiceNetwork,
+  mockHasAnyServiceContainerResources,
   mockStartServiceContainers,
   mockWaitForServicesReady,
   mockIsServiceContainerContextAvailable,
@@ -21,6 +22,7 @@ const {
   mockLaunch: vi.fn(),
   mockProjectConfigLoad: vi.fn(),
   mockCreateServiceNetwork: vi.fn(),
+  mockHasAnyServiceContainerResources: vi.fn(),
   mockStartServiceContainers: vi.fn(),
   mockWaitForServicesReady: vi.fn(),
   mockIsServiceContainerContextAvailable: vi.fn(),
@@ -116,6 +118,7 @@ vi.mock('../service-containers.js', () => ({
   })),
   createServiceNetwork: mockCreateServiceNetwork,
   getServiceNetworkArgs: mockGetServiceNetworkArgs,
+  hasAnyServiceContainerResources: mockHasAnyServiceContainerResources,
   isServiceContainerContextAvailable: mockIsServiceContainerContextAvailable,
   startServiceContainers: mockStartServiceContainers,
   teardownServiceContainers: mockTeardownServiceContainers,
@@ -158,6 +161,7 @@ describe('interactive sandbox cleanup', () => {
       projectRoot: '/repo',
     });
     mockCreateServiceNetwork.mockResolvedValue('rover-services-1-1');
+    mockHasAnyServiceContainerResources.mockResolvedValue(false);
     mockIsServiceContainerContextAvailable.mockResolvedValue(false);
     mockStartServiceContainers.mockResolvedValue(['rover-svc-1-1-postgres']);
     mockWaitForServicesReady.mockResolvedValue(undefined);
@@ -343,6 +347,48 @@ describe('interactive sandbox cleanup', () => {
         iteration: 1,
       },
     });
+  });
+
+  it('forwards DOCKER_HOST to docker interactive runs and shells', async () => {
+    mockIsServiceContainerContextAvailable.mockResolvedValue(true);
+
+    const sandbox = new DockerSandbox(createTaskFixture(), undefined, {
+      projectPath: '/repo',
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        },
+      },
+    });
+
+    await sandbox.runInteractive('fix the bug');
+    await sandbox.openShellAtWorktree();
+
+    expect(mockLaunch).toHaveBeenNthCalledWith(
+      1,
+      'docker',
+      expect.arrayContaining(['run', '--name', 'rover-task-1-1-i']),
+      expect.objectContaining({
+        env: expect.objectContaining({ DOCKER_HOST: 'tcp://remote:2375' }),
+      })
+    );
+    expect(mockLaunch).toHaveBeenNthCalledWith(
+      2,
+      'docker',
+      expect.arrayContaining([
+        'run',
+        '--rm',
+        '--name',
+        'rover-shell-1-random-id',
+      ]),
+      expect.objectContaining({
+        env: expect.objectContaining({ DOCKER_HOST: 'tcp://remote:2375' }),
+      })
+    );
   });
 
   it.each([

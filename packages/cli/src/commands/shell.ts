@@ -8,10 +8,7 @@ import { getTelemetry } from '../lib/telemetry.js';
 import type { CLIJsonOutput } from '../types.js';
 import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
 import { requireProjectContext } from '../lib/context.js';
-import {
-  createSandbox,
-  getAvailableSandboxBackend,
-} from '../lib/sandbox/index.js';
+import { createSandbox } from '../lib/sandbox/index.js';
 import type { CommandDefinition } from '../types.js';
 
 /**
@@ -80,17 +77,6 @@ const shellCommand = async (
     }
 
     telemetry?.eventShell();
-
-    if (options.container) {
-      // Check if any sandbox backend (Docker or Podman) is available
-      const availableBackend = await getAvailableSandboxBackend();
-
-      if (!availableBackend) {
-        jsonOutput.error = `Neither Docker nor Podman are available. Please install Docker or Podman.`;
-        await exitWithError(jsonOutput, { telemetry });
-        return;
-      }
-    }
 
     console.log(
       colors.green('✓ Starting interactive shell in the task workspace')

@@ -129,16 +129,12 @@ const pauseCommand = async (
 
       const deadline = Date.now() + GRACEFUL_WAIT_MS;
       while (Date.now() < deadline) {
-        const state = await sandbox.inspect();
+        const state = await sandbox.inspect({ teardownServices: false });
         if (!state || state.status === 'exited' || state.status === '') {
           agentExited = true;
           break;
         }
         await new Promise(resolve => setTimeout(resolve, POLL_MS));
-      }
-
-      if (agentExited) {
-        await sandbox.teardownServices();
       }
 
       // If the agent is still running, fall back to SIGTERM
@@ -155,7 +151,7 @@ const pauseCommand = async (
         // Give it a moment to write the checkpoint
         const sigtermDeadline = Date.now() + SIGTERM_WAIT_MS;
         while (Date.now() < sigtermDeadline) {
-          const state = await sandbox.inspect();
+          const state = await sandbox.inspect({ teardownServices: false });
           if (!state || state.status === 'exited' || state.status === '') {
             agentExited = true;
             break;
