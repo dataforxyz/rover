@@ -1341,6 +1341,79 @@ describe('checkImageCache', () => {
     );
   });
 
+  it('resolves plain relative repositories for cache hashing', () => {
+    const projectRoot = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'repos/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', join(projectRoot, 'repos', 'api.git'), 'main'],
+      { reject: false }
+    );
+  });
+
+  it('preserves SCP-style repository URLs for cache hashing', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'git@github.com:dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', 'git@github.com:dataforxyz/api.git', 'main'],
+      { reject: false }
+    );
+  });
+
   it('uses absolute host repository paths for cache hashing', () => {
     const hostRepo = createTmpDir();
 

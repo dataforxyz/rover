@@ -562,6 +562,158 @@ describe('SetupBuilder multi-repo projects', () => {
     });
   });
 
+  it('treats plain relative child repository paths as host mounts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'repos/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(script).toContain(
+      "git clone '/workspace-repos/0' '/workspace/frontend'"
+    );
+  });
+
+  it('resolves local child repositories against the task base path when projectRoot is unavailable', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'repos/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(script).toContain(
+      "git clone '/workspace-repos/0' '/workspace/frontend'"
+    );
+  });
+
+  it('does not treat SCP-style repository URLs as host mounts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'git@github.com:dataforxyz/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(builder.getRepositoryMounts()).toEqual([]);
+    expect(script).toContain(
+      "git clone 'git@github.com:dataforxyz/frontend.git' '/workspace/frontend'"
+    );
+  });
+
   it('does not treat absolute container repository paths as host mounts', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);
@@ -777,6 +929,62 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).not.toContain('sha256sum "$repo_path/$relative_path"');
     expect(script).not.toContain(
       "git clone 'https://github.com/dataforxyz/frontend.git' '/workspace/frontend'"
+    );
+  });
+
+  it('does not require checkpoint external repository state for local child repositories during checkpoint resume', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'repos/frontend.git',
+        },
+      ],
+    };
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any,
+      { resumeFromCheckpoint: true }
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain(
+      "current_origin=$(git -C '/workspace/frontend' remote get-url origin 2>/dev/null || true)"
+    );
+    expect(script).toContain('Checkpoint file is missing; cannot resume');
+    expect(script).not.toContain('Checkpoint is missing repository state for');
+    expect(script).not.toContain(
+      "current_head=$(git -C '/workspace/frontend' rev-parse HEAD)"
+    );
+    expect(script).not.toContain(
+      "Repository 'frontend' no longer matches the checkpointed revision"
     );
   });
 

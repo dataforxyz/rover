@@ -6,7 +6,7 @@ import {
   rmSync,
   existsSync,
 } from 'node:fs';
-import { join, isAbsolute, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
 import {
@@ -44,22 +44,12 @@ import {
   isSafeRelativePath,
   resolvePathWithinRoot,
 } from '../utils/path-safety.js';
+import { isLocalRepositoryReference } from '../utils/repository-reference.js';
 import { shellEscape } from '../utils/shell.js';
 
 interface BuildRepositoryMount {
   hostPath: string;
   containerPath: string;
-}
-
-function isLocalRepositoryReference(repository: string): boolean {
-  return (
-    repository.startsWith('file://') ||
-    (isAbsolute(repository) && !repository.startsWith('/workspace/')) ||
-    repository === '.' ||
-    repository === '..' ||
-    repository.startsWith('./') ||
-    repository.startsWith('../')
-  );
 }
 
 export function prepareBuildProjectConfig(

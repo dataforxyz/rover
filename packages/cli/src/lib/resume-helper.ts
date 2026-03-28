@@ -26,6 +26,7 @@ import {
   LOCK_STALENESS_TIMEOUT_MS,
 } from '../utils/resume-lock.js';
 import { isProcessAlive } from '../utils/process.js';
+import { isLocalRepositoryReference } from '../utils/repository-reference.js';
 import colors from 'ansi-colors';
 
 /**
@@ -215,7 +216,7 @@ function checkpointHasRequiredExternalRepoState(
     '.rover-workspace.json'
   );
 
-  const getRequiredProjectPaths = (): string[] => {
+  const getRequiredProjectPaths = (): string[] | null => {
     if (existsSync(workspaceDescriptionPath)) {
       try {
         const raw = readFileSync(workspaceDescriptionPath, 'utf8');
@@ -225,12 +226,13 @@ function checkpointHasRequiredExternalRepoState(
         return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
           project =>
             typeof project?.path === 'string' &&
-            typeof project?.repository === 'string'
+            typeof project?.repository === 'string' &&
+            !isLocalRepositoryReference(project.repository)
               ? [project.path]
               : []
         );
       } catch {
-        return [];
+        return null;
       }
     }
 
@@ -243,12 +245,13 @@ function checkpointHasRequiredExternalRepoState(
         return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
           project =>
             typeof project?.path === 'string' &&
-            typeof project?.repository === 'string'
+            typeof project?.repository === 'string' &&
+            !isLocalRepositoryReference(project.repository)
               ? [project.path]
               : []
         );
       } catch {
-        return [];
+        return null;
       }
     }
 
@@ -257,6 +260,10 @@ function checkpointHasRequiredExternalRepoState(
 
   try {
     const requiredProjectPaths = getRequiredProjectPaths();
+
+    if (requiredProjectPaths === null) {
+      return false;
+    }
 
     if (requiredProjectPaths.length === 0) {
       return true;

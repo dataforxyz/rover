@@ -402,6 +402,44 @@ describe('generateBuildEntrypoint', () => {
     ]);
   });
 
+  it('rewrites plain relative child repositories to mounted container paths for cache builds', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    testDirs.push(root);
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      root,
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: 'repos/frontend.git',
+            },
+          ],
+        } as any,
+        root
+      )
+    );
+
+    expect(repositoryMounts).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(buildProjectConfig.projects?.[0]?.repository).toBe(
+      '/workspace-repos/0'
+    );
+  });
+
   it('fails early when a configured local child repository is missing', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
     testDirs.push(root);

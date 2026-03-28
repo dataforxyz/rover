@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
-import { join, isAbsolute, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   launch,
@@ -18,6 +18,7 @@ import {
   isSafeRelativePath,
   resolvePathWithinRoot,
 } from '../../utils/path-safety.js';
+import { isLocalRepositoryReference } from '../../utils/repository-reference.js';
 
 /**
  * Build a process env with DOCKER_HOST set when the sandbox metadata
@@ -284,31 +285,11 @@ function resolveRepositoryForLookup(
     return fileURLToPath(repository);
   }
 
-  if (isAbsolute(repository) && !repository.startsWith('/workspace/')) {
-    return repository;
-  }
-
-  if (
-    repository === '.' ||
-    repository === '..' ||
-    repository.startsWith('./') ||
-    repository.startsWith('../')
-  ) {
+  if (isLocalRepositoryReference(repository)) {
     return resolve(projectRoot, repository);
   }
 
   return repository;
-}
-
-function isLocalRepositoryReference(repository: string): boolean {
-  return (
-    repository.startsWith('file://') ||
-    (isAbsolute(repository) && !repository.startsWith('/workspace/')) ||
-    repository === '.' ||
-    repository === '..' ||
-    repository.startsWith('./') ||
-    repository.startsWith('../')
-  );
 }
 
 function resolveLocalRepositoryContentHash(
