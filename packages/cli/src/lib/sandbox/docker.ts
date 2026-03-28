@@ -673,10 +673,6 @@ export class DockerSandbox extends Sandbox {
     return process.env;
   }
 
-  private shouldTeardownServicesForStatus(status: string): boolean {
-    return status === 'exited' || status === 'dead' || status === 'removing';
-  }
-
   async inspect(
     options?: SandboxInspectOptions
   ): Promise<{ status: string; exitCode?: number } | null> {
@@ -704,13 +700,6 @@ export class DockerSandbox extends Sandbox {
         status,
         exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
       };
-      if (
-        shouldTeardownServices &&
-        this.shouldTeardownServicesForStatus(status)
-      ) {
-        await this.teardownServicesIfConfigured();
-      }
-
       return containerState;
     } catch (error) {
       if (isContainerMissingInspectError(error)) {

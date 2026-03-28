@@ -9,6 +9,13 @@ export class GitError extends Error {
   }
 }
 
+function isMissingRemoteRefError(message: string): boolean {
+  return (
+    message.includes("couldn't find remote ref") ||
+    message.includes('remote ref does not exist')
+  );
+}
+
 export type GitDiffOptions = {
   worktreePath?: string;
   filePath?: string;
@@ -32,6 +39,10 @@ export type GitDiffStatsResult = {
 
 export type GitWorktreeOptions = {
   worktreePath?: string;
+};
+
+export type GitRemoteBranchOptions = GitWorktreeOptions & {
+  refreshIfMissing?: boolean;
 };
 
 export type GitCheckoutOptions = GitWorktreeOptions & {
@@ -703,10 +714,12 @@ export class Git {
   remoteBranchExists(
     branch: string,
     remote: string = 'origin',
-    options: GitWorktreeOptions = {}
+    options: GitRemoteBranchOptions = {}
   ): boolean {
+    const effectiveCwd = options.worktreePath ?? this.cwd;
+
     try {
-      return (
+      const exists =
         launchSync(
           'git',
           [
@@ -715,12 +728,60 @@ export class Git {
             '--quiet',
             `refs/remotes/${remote}/${branch}`,
           ],
-          { reject: false, cwd: options.worktreePath ?? this.cwd }
-        ).exitCode === 0
-      );
+          { reject: false, cwd: effectiveCwd }
+        ).exitCode === 0;
+
+      if (exists || !options.refreshIfMissing) {
+        return exists;
+      }
     } catch (error) {
+      if (!options.refreshIfMissing) {
+        return false;
+      }
+    }
+
+    return this.refreshRemoteBranch(branch, remote, {
+      worktreePath: effectiveCwd,
+    });
+  }
+
+  private refreshRemoteBranch(
+    branch: string,
+    remote: string = 'origin',
+    options: GitWorktreeOptions = {}
+  ): boolean {
+    const effectiveCwd = options.worktreePath ?? this.cwd;
+    const fetchResult = launchSync(
+      'git',
+      [
+        'fetch',
+        '--no-tags',
+        remote,
+        `refs/heads/${branch}:refs/remotes/${remote}/${branch}`,
+      ],
+      {
+        reject: false,
+        cwd: effectiveCwd,
+      }
+    );
+
+    if (fetchResult.exitCode === 0) {
+      return this.remoteBranchExists(branch, remote, {
+        worktreePath: effectiveCwd,
+      });
+    }
+
+    const stderr = fetchResult.stderr?.toString() || '';
+    const stdout = fetchResult.stdout?.toString() || '';
+    const errorMessage = stderr || stdout || 'Unknown git fetch error';
+
+    if (isMissingRemoteRefError(errorMessage)) {
       return false;
     }
+
+    throw new GitError(
+      `Failed to fetch remote branch '${remote}/${branch}': ${errorMessage}`
+    );
   }
 
   checkoutBranch(branch: string, options: GitCheckoutOptions = {}): void {
@@ -737,6 +798,7 @@ export class Git {
       if (
         this.remoteBranchExists(branch, 'origin', {
           worktreePath: effectiveCwd,
+          refreshIfMissing: true,
         })
       ) {
         launchSync(
@@ -757,7 +819,6 @@ export class Git {
 
     throw new GitError(`Branch '${branch}' does not exist`);
   }
-
   /**
    * Create worktree
    */

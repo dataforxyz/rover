@@ -212,9 +212,9 @@ describe('sandbox inspect', () => {
   });
 
   it.each([
-    ['docker', DockerSandbox, 'docker', undefined],
-    ['podman', PodmanSandbox, 'podman', undefined],
-  ])('tears down services for exited %s containers', async (_label, SandboxCtor, backend, teardownEnv) => {
+    ['docker', DockerSandbox],
+    ['podman', PodmanSandbox],
+  ])('preserves services for exited %s containers until removal', async (_label, SandboxCtor) => {
     const sandbox = new SandboxCtor(createTaskFixture(), undefined, {
       sandboxMetadata: {
         serviceContext: {
@@ -232,17 +232,15 @@ describe('sandbox inspect', () => {
       exitCode: 1,
     });
 
-    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
-      backend,
-      {
+    expect(mockTeardownServiceContainers).not.toHaveBeenCalled();
+    expect(sandbox.getSandboxMetadata()).toEqual({
+      serviceContext: {
         networkName: 'rover-services-1-1',
         containerNames: ['rover-svc-1-1-postgres'],
         taskId: 1,
         iteration: 1,
       },
-      teardownEnv
-    );
-    expect(sandbox.getSandboxMetadata()).toBeUndefined();
+    });
   });
 
   it.each([

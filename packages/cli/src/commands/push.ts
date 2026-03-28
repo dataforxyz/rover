@@ -265,6 +265,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         'origin',
         {
           worktreePath: target.worktreePath,
+          refreshIfMissing: true,
         }
       );
 

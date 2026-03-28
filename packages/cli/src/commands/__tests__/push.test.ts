@@ -218,6 +218,54 @@ describe('push command', () => {
     });
   });
 
+  it('refreshes missing remote-tracking refs before deciding a workspace repo has no upstream task branch', async () => {
+    mockGetWorkspaceRepositories.mockReturnValue([
+      {
+        name: 'frontend',
+        relativePath: 'frontend',
+        worktreePath: '/tmp/task-1/frontend',
+        repository: 'https://example.com/frontend.git',
+      },
+    ]);
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockReturnValue([]);
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) => true
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (
+        _branchName,
+        _remoteName,
+        options?: { worktreePath?: string; refreshIfMissing?: boolean }
+      ) => options?.worktreePath === '/tmp/task-1/frontend'
+    );
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (
+        _branchName,
+        options?: { targetBranch?: string; worktreePath?: string }
+      ) =>
+        options?.worktreePath === '/tmp/task-1/frontend' &&
+        options?.targetBranch === 'origin/task/1'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.remoteBranchExists).toHaveBeenCalledWith(
+      'task/1',
+      'origin',
+      expect.objectContaining({
+        worktreePath: '/tmp/task-1/frontend',
+        refreshIfMissing: true,
+      })
+    );
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
   it('does not create or push task branches for untouched workspace repositories without upstream branches', async () => {
     mockGetWorkspaceRepositories.mockReturnValue([
       {

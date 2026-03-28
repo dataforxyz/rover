@@ -73,9 +73,9 @@ export interface SandboxOptions {
 
 export interface SandboxInspectOptions {
   /**
-   * Whether inspecting a stopped or missing task container should also tear
-   * down persisted sidecars. Pause/resume flows disable this so service state
-   * survives until an explicit stop/remove path cleans it up.
+   * Whether inspecting a missing task container should also tear down
+   * persisted sidecars. Exited containers keep their service state until an
+   * explicit stop/remove path confirms the task container is gone.
    */
   teardownServices?: boolean;
 }

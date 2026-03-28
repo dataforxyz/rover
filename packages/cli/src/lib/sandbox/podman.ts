@@ -62,10 +62,6 @@ export class PodmanSandbox extends Sandbox {
     this._tmpCleanups = [];
   }
 
-  private shouldTeardownServicesForStatus(status: string): boolean {
-    return status === 'exited' || status === 'dead' || status === 'removing';
-  }
-
   constructor(
     task: TaskDescriptionManager,
     processManager?: ProcessManager,
@@ -677,13 +673,6 @@ export class PodmanSandbox extends Sandbox {
         status,
         exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
       };
-      if (
-        shouldTeardownServices &&
-        this.shouldTeardownServicesForStatus(status)
-      ) {
-        await this.teardownServicesIfConfigured();
-      }
-
       return containerState;
     } catch (error) {
       if (isContainerMissingInspectError(error)) {
