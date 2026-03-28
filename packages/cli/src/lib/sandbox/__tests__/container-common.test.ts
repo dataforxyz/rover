@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
+  getBuildContainerExtraArgs,
   normalizeExtraArgs,
   getWorktreeGitMounts,
   getCheckpointArgs,
@@ -71,6 +72,33 @@ describe('normalizeExtraArgs', () => {
       '--add-host',
       'host.docker.internal:host-gateway',
     ]);
+  });
+});
+
+describe('getBuildContainerExtraArgs', () => {
+  it('returns normalized args when no volume flags are present', () => {
+    expect(getBuildContainerExtraArgs('--network mynet --env FOO=bar')).toEqual(
+      ['--network', 'mynet', '--env', 'FOO=bar']
+    );
+  });
+
+  it('removes short volume flags and their values', () => {
+    expect(
+      getBuildContainerExtraArgs('--env FOO=bar -v data:/data --network mynet')
+    ).toEqual(['--env', 'FOO=bar', '--network', 'mynet']);
+  });
+
+  it('removes long volume flags and inline assignments', () => {
+    expect(
+      getBuildContainerExtraArgs([
+        '--volume',
+        'data:/data',
+        '--env',
+        'FOO=bar',
+        '--volume=/cache:/cache',
+        '-v=/tmp:/tmp',
+      ])
+    ).toEqual(['--env', 'FOO=bar']);
   });
 });
 

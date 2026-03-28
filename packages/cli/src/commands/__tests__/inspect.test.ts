@@ -168,6 +168,13 @@ describe('inspect command', () => {
       expect(output).toContain("Invalid task ID 'invalid' - must be a number");
     });
 
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      await inspectCommand('12abc');
+
+      const output = capturedOutput.join('\n');
+      expect(output).toContain("Invalid task ID '12abc' - must be a number");
+    });
+
     it('should handle non-existent task', async () => {
       await inspectCommand('999');
 
@@ -264,6 +271,25 @@ describe('inspect command', () => {
       // Error output has 'errors' array from exitWithError
       expect(parsed.errors).toBeDefined();
       expect(parsed.errors[0]).toContain('Invalid task ID');
+    });
+
+    it('should output error as single JSON object for malformed numeric task ID', async () => {
+      await inspectCommand('12abc', undefined, { json: true });
+
+      const jsonOutputs = capturedOutput.filter(line => {
+        try {
+          JSON.parse(line);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+
+      expect(jsonOutputs.length).toBe(1);
+
+      const parsed = JSON.parse(jsonOutputs[0]);
+      expect(parsed.success).toBe(false);
+      expect(parsed.errors[0]).toContain("Invalid task ID '12abc'");
     });
 
     it('should output error as single JSON object for non-existent task', async () => {

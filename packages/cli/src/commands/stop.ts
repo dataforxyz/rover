@@ -105,7 +105,10 @@ const stopCommand = async (
     task.resetToNew();
     task.setContainerInfo('', '');
 
-    // Clean up Git worktree and branch
+    const shouldRemoveWorkspace =
+      options.removeAll || options.removeGitWorktreeAndBranch;
+
+    // Clean up Git worktree and branch when explicitly requested
     try {
       // Check if we're in a git repository
       await launch('git', ['rev-parse', '--is-inside-work-tree'], {
@@ -113,10 +116,7 @@ const stopCommand = async (
       });
 
       // Remove git workspace if it exists
-      if (
-        task.worktreePath &&
-        (options.removeAll || options.removeGitWorktreeAndBranch)
-      ) {
+      if (task.worktreePath && shouldRemoveWorkspace) {
         try {
           await launch(
             'git',
@@ -140,10 +140,7 @@ const stopCommand = async (
       }
 
       // Remove git branch if it exists
-      if (
-        task.branchName &&
-        (options.removeAll || options.removeGitWorktreeAndBranch)
-      ) {
+      if (task.branchName && shouldRemoveWorkspace) {
         try {
           // Check if branch exists
           await launch(
@@ -168,12 +165,9 @@ const stopCommand = async (
       // Not in a git repository, skip git operations
     }
 
-    // Delete the iterations
-    const iterationPath = task.iterationsPath();
-    rmSync(iterationPath, { recursive: true, force: true });
-
-    // Clear workspace information
-    task.setWorkspace('', '');
+    if (shouldRemoveWorkspace) {
+      task.setWorkspace('', '');
+    }
 
     jsonOutput = {
       ...jsonOutput,

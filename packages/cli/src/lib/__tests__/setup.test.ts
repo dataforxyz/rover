@@ -181,6 +181,12 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain(
       `git -C '/workspace/backend' checkout -B "$default_branch" "$default_remote_ref"`
     );
+    expect(script).toContain(
+      `echo "🔀 Remote HEAD not advertised for 'backend'; reusing checked out branch $current_branch"`
+    );
+    expect(script).toContain(
+      `echo "🔀 Remote HEAD not advertised for 'backend'; keeping current checkout"`
+    );
   });
 
   it('runs repository sync before package install, init scripts, and dependency resolution in the runtime entrypoint template', () => {
@@ -632,6 +638,59 @@ describe('SetupBuilder multi-repo projects', () => {
           name: 'frontend',
           path: 'frontend',
           repository: hostRepo,
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(script).toContain(
+      "git clone '/workspace-repos/0' '/workspace/frontend'"
+    );
+  });
+
+  it('treats file URL repositories as host mounts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    const hostRepo = mkdtempSync(join(tmpdir(), 'rover-setup-host-repo-'));
+    testDirs.push(root, hostRepo);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: `file://${hostRepo}`,
         },
       ],
     };

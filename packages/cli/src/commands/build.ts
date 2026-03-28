@@ -19,9 +19,9 @@ import { getProjectPath, isJsonMode } from '../lib/context.js';
 import { getAvailableSandboxBackend } from '../lib/sandbox/index.js';
 import {
   ContainerBackend,
+  getBuildContainerExtraArgs,
   getInitScriptMounts,
   getRootInitScriptMountPath,
-  normalizeExtraArgs,
   resolveAgentImage,
 } from '../lib/sandbox/container-common.js';
 import {
@@ -70,6 +70,7 @@ export function prepareBuildProjectConfig(
   repositoryMounts: BuildRepositoryMount[];
 } {
   const repositoryMounts: BuildRepositoryMount[] = [];
+  const repositoryResolutionRoot = projectConfig.projectRoot ?? projectPath;
   const buildProjects = (projectConfig.projects ?? []).flatMap(
     (project, index) => {
       const projectPathIsSafe =
@@ -93,7 +94,7 @@ export function prepareBuildProjectConfig(
 
       const hostPath = project.repository.startsWith('file://')
         ? fileURLToPath(project.repository)
-        : resolve(projectPath, project.repository);
+        : resolve(repositoryResolutionRoot, project.repository);
 
       if (!existsSync(hostPath)) {
         throw new Error(
@@ -163,29 +164,28 @@ fi
 `
       : `
 default_remote_ref=$(git -C ${escapedPath} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
-if [ -z "$default_remote_ref" ]; then
-  echo "❌ Could not determine default remote branch for ${escapedName}"
-  safe_exit 1
+if [ -n "$default_remote_ref" ]; then
+  default_branch="\${default_remote_ref#origin/}"
+  echo "🔀 Checking out default branch $default_branch for ${escapedName}"
+  git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"
+else
+  echo "🔀 Remote HEAD not advertised for ${escapedName}; using cloned default checkout"
 fi
-default_branch="\${default_remote_ref#origin/}"
-echo "🔀 Checking out default branch $default_branch for ${escapedName}"
-git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"
 `;
 
     return `echo "📥 Syncing child repository ${escapedName} for build cache"
 mkdir -p "$(dirname ${escapedPath})"
-if [ ! -d ${escapedPath}/.git ]; then
-  rm -rf ${escapedPath}
-  if ! git clone ${escapedRepository} ${escapedPath}; then
-    echo "❌ Failed to clone repository ${escapedName}"
-    safe_exit 1
-  fi
-else
+if [ -d ${escapedPath}/.git ]; then
   current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
   if [ "$current_origin" != ${escapedRepository} ]; then
     echo "❌ Existing repository at ${escapedPath} points to a different origin"
     safe_exit 1
   fi
+fi
+rm -rf ${escapedPath}
+if ! git clone ${escapedRepository} ${escapedPath}; then
+  echo "❌ Failed to clone repository ${escapedName}"
+  safe_exit 1
 fi
 if ! git -C ${escapedPath} fetch --all --tags --prune; then
   echo "❌ Failed to fetch repository ${escapedName}"
@@ -305,10 +305,13 @@ ${dependencyResolutionCommands.join('\n')}
       : '';
 
   const mcps = projectConfig.mcps ?? [];
+  // rover-agent commands only accept the agent name (e.g. "claude"), not
+  // the full agent:model string (e.g. "claude:haiku").
+  const agentName = agent.split(':')[0];
   let mcpSection = '';
   if (mcps.length > 0) {
     const mcpCmds = mcps.map(mcp => {
-      let cmd = `rover-agent config mcp ${shellEscape(agent)} ${shellEscape(mcp.name)} --transport ${shellEscape(mcp.transport)}`;
+      let cmd = `rover-agent config mcp ${shellEscape(agentName)} ${shellEscape(mcp.name)} --transport ${shellEscape(mcp.transport)}`;
       for (const env of mcp.envs ?? []) cmd += ` --env ${shellEscape(env)}`;
       for (const header of mcp.headers ?? [])
         cmd += ` --header ${shellEscape(header)}`;
@@ -317,13 +320,13 @@ ${dependencyResolutionCommands.join('\n')}
     });
     mcpSection = `
 # Configure MCPs
-rover-agent config mcp ${shellEscape(agent)} package-manager --transport "http" http://127.0.0.1:8090/mcp
+rover-agent config mcp ${shellEscape(agentName)} package-manager --transport "http" http://127.0.0.1:8090/mcp
 ${mcpCmds.join('\n')}
 `;
   } else {
     mcpSection = `
 # Configure built-in MCP
-rover-agent config mcp ${shellEscape(agent)} package-manager --transport "http" http://127.0.0.1:8090/mcp
+rover-agent config mcp ${shellEscape(agentName)} package-manager --transport "http" http://127.0.0.1:8090/mcp
 `;
   }
 
@@ -331,6 +334,9 @@ rover-agent config mcp ${shellEscape(agent)} package-manager --transport "http" 
 set -euo pipefail
 
 AGENT=${shellEscape(agent)}
+# Strip model suffix (e.g. "claude:haiku" → "claude") for commands that
+# only accept the agent name.
+AGENT_NAME="\${AGENT%%:*}"
 
 safe_exit() {
   exit "\${1:-1}"
@@ -382,16 +388,22 @@ cp -a /workspace-src/. "$BUILD_WORKSPACE/"
 rm -rf /workspace 2>/dev/null || true
 ln -s "$BUILD_WORKSPACE" /workspace
 
-echo "Installing agent CLI ($AGENT)..."
-run_as_root_with_env rover-agent install $AGENT || echo "Agent install failed (non-fatal for build)"
+echo "Installing agent CLI ($AGENT_NAME)..."
+run_as_root_with_env rover-agent install $AGENT_NAME || echo "Agent install failed (non-fatal for build)"
 run_as_root chown -R $(id -u):$(id -g) $HOME
 
 # Copy credentials
 echo "Copying agent credentials..."
-run_as_root rover-agent-install $AGENT || true
+run_as_root rover-agent-install $AGENT_NAME || true
 for _cred_dir in $HOME/.codex $HOME/.claude $HOME/.config/github-copilot $HOME/.gemini $HOME/.qwen $HOME/.opencode; do
   [ -d "$_cred_dir" ] && run_as_root chown -R $(id -u):$(id -g) "$_cred_dir"
 done
+
+# Mark all directories as git-safe so they work with any UID.
+# Must run before syncing external repositories so clones from bind-mounted
+# bare repos don't fail with "dubious ownership" errors.
+git config --global --add safe.directory '*' 2>/dev/null || true
+git config --system --add safe.directory '*' 2>/dev/null || true
 
 ${generateProjectRepositorySyncSection(projectConfig)}
 
@@ -419,10 +431,6 @@ chmod -R a+rwX $HOME 2>/dev/null || true
 for _dlcache_dir in /var/cache/apt; do
   [ -d "$_dlcache_dir" ] && chmod -R a+rwX "$_dlcache_dir" 2>/dev/null || true
 done
-
-# Mark all directories as git-safe so they work with any UID.
-# Safe inside build containers — ephemeral, single-user, no multi-tenant concerns.
-git config --system --add safe.directory '*' 2>/dev/null || true
 
 echo ""
 echo "Build complete!"
@@ -475,12 +483,16 @@ const buildCommand = async (
     // 2. Resolve agent image
     const agentImage = resolveAgentImage(projectConfig, undefined);
 
-    // 3. Check if cache already exists
+    // 3. Check if cache already exists.
+    // Use the agent name without model suffix for cache hashing so that
+    // `rover build -a claude:haiku` and `rover task -a claude:haiku` (which
+    // stores agent="claude") produce the same hash.
+    const agentNameForCache = agent.split(':')[0];
     const { hasCachedImage, cacheTag } = checkImageCache(
       backend,
       projectConfig,
       agentImage,
-      agent
+      agentNameForCache
     );
 
     if (hasCachedImage && !options.force) {
@@ -578,20 +590,9 @@ const buildCommand = async (
     // (languages, package caches) is baked into the committed image rather
     // than going into named volumes that docker commit ignores.
     // This way the cache image is self-contained and works without volumes.
-    const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);
-    for (let i = 0; i < configExtraArgs.length; i++) {
-      const arg = configExtraArgs[i];
-      if (arg === '-v' || arg === '--volume') {
-        // Skip -v and its value
-        i++;
-        continue;
-      }
-      // Skip --volume=... form
-      if (arg.startsWith('--volume=') || arg.startsWith('-v=')) {
-        continue;
-      }
-      dockerArgs.push(arg);
-    }
+    dockerArgs.push(
+      ...getBuildContainerExtraArgs(projectConfig.sandboxExtraArgs)
+    );
 
     // Init-only: run entrypoint then exit with 'true'
     dockerArgs.push(agentImage, 'true');

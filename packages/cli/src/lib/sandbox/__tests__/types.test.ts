@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sandbox } from '../types.js';
 
@@ -18,6 +19,30 @@ const {
   mockWaitForServicesReady: vi.fn(),
   mockProjectConfigLoad: vi.fn(),
 }));
+
+function hashServices(services: unknown): string {
+  const stableSerialize = (value: unknown): string => {
+    if (Array.isArray(value)) {
+      return `[${value.map(item => stableSerialize(item)).join(',')}]`;
+    }
+
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>).sort(
+        ([left], [right]) => left.localeCompare(right)
+      );
+      return `{${entries
+        .map(
+          ([key, nestedValue]) =>
+            `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`
+        )
+        .join(',')}}`;
+    }
+
+    return JSON.stringify(value);
+  };
+
+  return createHash('sha256').update(stableSerialize(services)).digest('hex');
+}
 
 vi.mock('../service-containers.js', () => ({
   buildServiceContainerContext: vi.fn((services, taskId, iteration) => ({
@@ -444,6 +469,7 @@ describe('Sandbox service cleanup', () => {
       containerNames: ['rover-svc-12-3-postgres'],
       taskId: 12,
       iteration: 3,
+      serviceConfigHash: 'service-hash',
     };
 
     expect(sandbox.getSandboxMetadata()).toEqual({
@@ -453,6 +479,7 @@ describe('Sandbox service cleanup', () => {
         containerNames: ['rover-svc-12-3-postgres'],
         taskId: 12,
         iteration: 3,
+        serviceConfigHash: 'service-hash',
       },
     });
   });
@@ -595,25 +622,27 @@ describe('Sandbox service cleanup', () => {
         sandboxMetadata: {
           serviceContext: {
             networkName: 'rover-services-12-3',
-            containerNames: ['rover-svc-12-3-old-postgres'],
+            containerNames: ['rover-svc-12-3-postgres'],
             taskId: 12,
             iteration: 3,
+            serviceConfigHash: 'outdated-hash',
           },
         },
       }
     );
 
-    await expect(
-      sandbox.ensureServicesForTest([
-        { name: 'postgres', image: 'postgres:16', readyTimeout: 30 },
-      ])
-    ).resolves.toEqual({
+    const services = [
+      { name: 'postgres', image: 'postgres:16', readyTimeout: 30 },
+    ];
+
+    await expect(sandbox.ensureServicesForTest(services)).resolves.toEqual({
       started: true,
       serviceContext: {
         networkName: 'rover-services-12-3',
         containerNames: ['rover-svc-12-3-postgres'],
         taskId: 12,
         iteration: 3,
+        serviceConfigHash: hashServices(services),
       },
     });
 
@@ -622,9 +651,10 @@ describe('Sandbox service cleanup', () => {
       'docker',
       {
         networkName: 'rover-services-12-3',
-        containerNames: ['rover-svc-12-3-old-postgres'],
+        containerNames: ['rover-svc-12-3-postgres'],
         taskId: 12,
         iteration: 3,
+        serviceConfigHash: 'outdated-hash',
       },
       undefined
     );
@@ -636,7 +666,7 @@ describe('Sandbox service cleanup', () => {
     );
     expect(mockStartServiceContainers).toHaveBeenCalledWith(
       'docker',
-      [{ name: 'postgres', image: 'postgres:16', readyTimeout: 30 }],
+      services,
       'rover-services-12-3',
       12,
       3,
@@ -645,7 +675,7 @@ describe('Sandbox service cleanup', () => {
     );
     expect(mockWaitForServicesReady).toHaveBeenCalledWith(
       'docker',
-      [{ name: 'postgres', image: 'postgres:16', readyTimeout: 30 }],
+      services,
       ['rover-svc-12-3-postgres'],
       undefined
     );
@@ -683,6 +713,9 @@ describe('Sandbox service cleanup', () => {
         containerNames: ['rover-svc-12-3-postgres'],
         taskId: 12,
         iteration: 3,
+        serviceConfigHash: hashServices([
+          { name: 'postgres', image: 'postgres:16', readyTimeout: 30 },
+        ]),
       },
     });
 
@@ -692,6 +725,9 @@ describe('Sandbox service cleanup', () => {
         containerNames: ['rover-svc-12-3-postgres'],
         taskId: 12,
         iteration: 3,
+        serviceConfigHash: hashServices([
+          { name: 'postgres', image: 'postgres:16', readyTimeout: 30 },
+        ]),
       },
     });
   });
@@ -719,6 +755,9 @@ describe('Sandbox service cleanup', () => {
         containerNames: ['rover-svc-12-3-postgres'],
         taskId: 12,
         iteration: 3,
+        serviceConfigHash: hashServices([
+          { name: 'postgres', image: 'postgres:16', readyTimeout: 30 },
+        ]),
       },
     });
 
@@ -729,6 +768,9 @@ describe('Sandbox service cleanup', () => {
         containerNames: ['rover-svc-12-3-postgres'],
         taskId: 12,
         iteration: 3,
+        serviceConfigHash: hashServices([
+          { name: 'postgres', image: 'postgres:16', readyTimeout: 30 },
+        ]),
       },
       undefined
     );

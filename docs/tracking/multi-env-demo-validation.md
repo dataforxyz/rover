@@ -5,8 +5,9 @@
 Validate that Rover can run a single task against a multi-repo workspace with:
 
 - Flutter/Dart web frontend
-- Go backend
+- Go backend (backed by PostgreSQL)
 - Python `nodriver` E2E tests
+- PostgreSQL sidecar container
 
 Each part should have its own git repository, its own install requirements, and tests that fit the `swe-tdd` workflow.
 
@@ -36,13 +37,14 @@ Each part should have its own git repository, its own install requirements, and 
 ## Demo shape
 
 - `demo/frontend`: Flutter web app
-- `demo/backend`: Go API
+- `demo/backend`: Go API (stores jokes in PostgreSQL)
 - `demo/e2e`: Python `nodriver` tests
+- `postgres` sidecar: PostgreSQL 15 (auto-started by Rover via `sandbox.services[]`)
 
 Shared demo behavior:
 
 - Frontend renders a simple form/button.
-- Backend returns one random joke from a list of 10.
+- Backend stores seed jokes in PostgreSQL on startup and reads from the DB for each request. Falls back to in-memory seed list when no DB is available (unit tests).
 - E2E test opens the frontend, triggers the same Dart fetch path from the browser, and asserts a joke is shown.
 
 ## Resolved questions
@@ -95,6 +97,11 @@ Shared demo behavior:
 - [x] Validate `rover task -a claude:haiku -w swe-tdd` against a fresh clone using `test_command=make validate`
 - [x] Validate `rover rebase` against the demo workspace
 - [x] Draft user-facing setup/configuration doc after command validation
+- [ ] Add PostgreSQL sidecar to demo (`sandbox.services[]` in `rover.json`)
+- [ ] Update Go backend to store/retrieve jokes from Postgres
+- [ ] Validate sidecar lifecycle (start, healthcheck, teardown)
+- [ ] Validate `rover task -a claude:haiku -w swe-tdd` with Postgres sidecar
+- [ ] Write user-facing demo guide: `docs/demo-project-guide.md`
 
 ## Validated commands
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -132,6 +133,30 @@ vi.mock('../worktree-path.js', () => ({
 import { DockerSandbox } from '../docker.js';
 import { PodmanSandbox } from '../podman.js';
 
+function hashServices(services: unknown): string {
+  const stableSerialize = (value: unknown): string => {
+    if (Array.isArray(value)) {
+      return `[${value.map(item => stableSerialize(item)).join(',')}]`;
+    }
+
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>).sort(
+        ([left], [right]) => left.localeCompare(right)
+      );
+      return `{${entries
+        .map(
+          ([key, nestedValue]) =>
+            `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`
+        )
+        .join(',')}}`;
+    }
+
+    return JSON.stringify(value);
+  };
+
+  return createHash('sha256').update(stableSerialize(services)).digest('hex');
+}
+
 function createTaskFixture() {
   const baseDir = mkdtempSync(join(tmpdir(), 'rover-interactive-cleanup-'));
   const worktreePath = join(baseDir, 'worktree');
@@ -204,21 +229,24 @@ describe('interactive sandbox cleanup', () => {
     if (backend === 'docker') {
       expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
         backend,
-        {
+        expect.objectContaining({
           networkName: 'rover-services-1-1',
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
-        },
+        }),
         expect.any(Object)
       );
     } else {
-      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(backend, {
-        networkName: 'rover-services-1-1',
-        containerNames: ['rover-svc-1-1-postgres'],
-        taskId: 1,
-        iteration: 1,
-      });
+      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+        backend,
+        expect.objectContaining({
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        })
+      );
     }
     expect((sandbox as any).serviceContext).toBeUndefined();
   });
@@ -272,23 +300,23 @@ describe('interactive sandbox cleanup', () => {
     if (backend === 'docker') {
       expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
         backend,
-        {
+        expect.objectContaining({
           networkName: 'rover-services-1-1',
           containerNames: [],
           taskId: 1,
           iteration: 1,
-        },
+        }),
         undefined
       );
     } else {
       expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
         backend,
-        {
+        expect.objectContaining({
           networkName: 'rover-services-1-1',
           containerNames: [],
           taskId: 1,
           iteration: 1,
-        },
+        }),
         undefined
       );
     }
@@ -326,6 +354,7 @@ describe('interactive sandbox cleanup', () => {
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
+          serviceConfigHash: hashServices([{ name: 'postgres' }]),
         },
       },
     });
@@ -345,6 +374,7 @@ describe('interactive sandbox cleanup', () => {
         containerNames: ['rover-svc-1-1-postgres'],
         taskId: 1,
         iteration: 1,
+        serviceConfigHash: hashServices([{ name: 'postgres' }]),
       },
     });
   });
@@ -361,6 +391,7 @@ describe('interactive sandbox cleanup', () => {
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
+          serviceConfigHash: hashServices([{ name: 'postgres' }]),
         },
       },
     });
@@ -405,6 +436,7 @@ describe('interactive sandbox cleanup', () => {
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
+          serviceConfigHash: hashServices([{ name: 'postgres' }]),
         },
       },
     });
@@ -453,21 +485,25 @@ describe('interactive sandbox cleanup', () => {
     if (backend === 'docker') {
       expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
         backend,
-        {
+        expect.objectContaining({
           networkName: 'rover-services-1-1',
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
-        },
+        }),
         undefined
       );
     } else {
-      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(backend, {
-        networkName: 'rover-services-1-1',
-        containerNames: ['rover-svc-1-1-postgres'],
-        taskId: 1,
-        iteration: 1,
-      });
+      expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+        backend,
+        expect.objectContaining({
+          networkName: 'rover-services-1-1',
+          containerNames: ['rover-svc-1-1-postgres'],
+          taskId: 1,
+          iteration: 1,
+        }),
+        undefined
+      );
     }
     expect(mockCreateServiceNetwork).toHaveBeenCalled();
     expect(mockStartServiceContainers).toHaveBeenCalled();

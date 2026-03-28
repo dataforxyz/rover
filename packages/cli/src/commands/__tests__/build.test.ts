@@ -48,9 +48,11 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain(
       "git clone 'https://github.com/dataforxyz/frontend.git' '/workspace/frontend'"
     );
+    expect(script).toContain("rm -rf '/workspace/frontend'");
     expect(script).toContain(
       "git clone 'https://github.com/dataforxyz/backend.git' '/workspace/backend'"
     );
+    expect(script).toContain("rm -rf '/workspace/backend'");
     expect(script).toContain(
       "git -C '/workspace/frontend' fetch --all --tags --prune"
     );
@@ -74,6 +76,30 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain('bash "$workspace_script_2"');
   });
 
+  it('keeps a cloned default checkout when origin head is not advertised during cache builds', () => {
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [],
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://github.com/dataforxyz/frontend.git',
+        },
+      ],
+      mcps: [],
+    } as any);
+
+    expect(script).toContain(
+      'echo "🔀 Remote HEAD not advertised for \'frontend\'; using cloned default checkout"'
+    );
+    expect(script).not.toContain(
+      'echo "❌ Could not determine default remote branch for \'frontend\'"'
+    );
+  });
+
   it('copies credentials before syncing child repositories for cache builds', () => {
     const script = generateBuildEntrypoint('claude', {
       allLanguages: [],
@@ -92,7 +118,7 @@ describe('generateBuildEntrypoint', () => {
     } as any);
 
     const credentialInstallIndex = script.indexOf(
-      'run_as_root rover-agent-install $AGENT || true'
+      'run_as_root rover-agent-install $AGENT_NAME || true'
     );
     const repoSyncIndex = script.indexOf(
       'Syncing external repositories for cache build'
@@ -139,9 +165,30 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain('run_as_root() {');
     expect(script).toContain('run_as_root_with_env() {');
     expect(script).toContain(
-      'run_as_root_with_env rover-agent install $AGENT || echo "Agent install failed (non-fatal for build)"'
+      'run_as_root_with_env rover-agent install $AGENT_NAME || echo "Agent install failed (non-fatal for build)"'
     );
-    expect(script).not.toContain('$_SUDO -E rover-agent install $AGENT');
+    expect(script).not.toContain('$_SUDO -E rover-agent install $AGENT_NAME');
+  });
+
+  it('strips model suffix from agent string for install and credential commands', () => {
+    const script = generateBuildEntrypoint('claude:haiku', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [],
+      projects: [],
+      mcps: [],
+    } as any);
+
+    // Full agent:model stored in AGENT variable
+    expect(script).toContain("AGENT='claude:haiku'");
+    // Stripped to agent name only in AGENT_NAME
+    expect(script).toContain('AGENT_NAME="${AGENT%%:*}"');
+    // Install commands use AGENT_NAME, not AGENT
+    expect(script).toContain('rover-agent install $AGENT_NAME');
+    expect(script).toContain('rover-agent-install $AGENT_NAME');
+    // MCP config uses agent name (from JS-side stripping)
+    expect(script).toContain("rover-agent config mcp 'claude' package-manager");
   });
 
   it('syncs child repositories before installing languages for cache builds', () => {
@@ -446,6 +493,84 @@ describe('generateBuildEntrypoint', () => {
     expect(repositoryMounts).toEqual([
       {
         hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(buildProjectConfig.projects?.[0]?.repository).toBe(
+      '/workspace-repos/0'
+    );
+  });
+
+  it('rewrites file URL repositories during build config preparation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    const hostRepo = mkdtempSync(join(tmpdir(), 'rover-build-host-repo-'));
+    testDirs.push(root, hostRepo);
+
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      root,
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: `file://${hostRepo}`,
+            },
+          ],
+        } as any,
+        root
+      )
+    );
+
+    expect(repositoryMounts).toEqual([
+      {
+        hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(buildProjectConfig.projects?.[0]?.repository).toBe(
+      '/workspace-repos/0'
+    );
+  });
+
+  it('resolves relative local repositories against projectRoot during build config preparation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    const invocationDir = join(root, 'nested');
+    testDirs.push(root);
+    mkdirSync(invocationDir, { recursive: true });
+    mkdirSync(join(root, 'repos', 'frontend.git'), { recursive: true });
+
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      invocationDir,
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: './repos/frontend.git',
+            },
+          ],
+        } as any,
+        root
+      )
+    );
+
+    expect(repositoryMounts).toEqual([
+      {
+        hostPath: join(root, 'repos', 'frontend.git'),
         containerPath: '/workspace-repos/0',
       },
     ]);

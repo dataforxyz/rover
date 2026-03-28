@@ -738,13 +738,19 @@ else
 fi`
           : `
 default_remote_ref=$(git -C ${escapedPath} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
-if [ -z "$default_remote_ref" ]; then
-  echo "❌ Could not determine default remote branch for ${escapedName}"
-  safe_exit 1
-fi
-default_branch="\${default_remote_ref#origin/}"
-echo "🔀 Checking out default branch $default_branch for ${escapedName}"
-git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"`;
+if [ -n "$default_remote_ref" ]; then
+  default_branch="\${default_remote_ref#origin/}"
+  echo "🔀 Checking out default branch $default_branch for ${escapedName}"
+  git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"
+else
+  current_branch=$(git -C ${escapedPath} branch --show-current 2>/dev/null || true)
+  if [ -n "$current_branch" ] && git -C ${escapedPath} rev-parse --verify refs/remotes/origin/$current_branch >/dev/null 2>&1; then
+    echo "🔀 Remote HEAD not advertised for ${escapedName}; reusing checked out branch $current_branch"
+    git -C ${escapedPath} checkout -B "$current_branch" "refs/remotes/origin/$current_branch"
+  else
+    echo "🔀 Remote HEAD not advertised for ${escapedName}; keeping current checkout"
+  fi
+fi`;
 
         if (this.resumeFromCheckpoint) {
           return `echo "📥 Verifying repository ${escapedName} for checkpoint resume"

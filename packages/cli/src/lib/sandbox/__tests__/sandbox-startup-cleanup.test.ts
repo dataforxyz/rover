@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockCreateServiceNetwork,
@@ -50,6 +51,30 @@ vi.mock('rover-core', async () => {
 
 import { DockerSandbox } from '../docker.js';
 import { PodmanSandbox } from '../podman.js';
+
+function hashServices(services: unknown): string {
+  const stableSerialize = (value: unknown): string => {
+    if (Array.isArray(value)) {
+      return `[${value.map(item => stableSerialize(item)).join(',')}]`;
+    }
+
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>).sort(
+        ([left], [right]) => left.localeCompare(right)
+      );
+      return `{${entries
+        .map(
+          ([key, nestedValue]) =>
+            `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`
+        )
+        .join(',')}}`;
+    }
+
+    return JSON.stringify(value);
+  };
+
+  return createHash('sha256').update(stableSerialize(services)).digest('hex');
+}
 
 function createFakeTask() {
   return {
@@ -127,12 +152,12 @@ describe('sandbox startup cleanup', () => {
     );
     expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
       'docker',
-      {
+      expect.objectContaining({
         networkName: 'rover-services-1-1',
         containerNames: ['rover-svc-1-1-postgres'],
         taskId: 1,
         iteration: 1,
-      },
+      }),
       expect.any(Object)
     );
     expect((sandbox as any).serviceContext).toBeUndefined();
@@ -158,12 +183,15 @@ describe('sandbox startup cleanup', () => {
     await expect(sandbox.createAndStart()).rejects.toThrow(
       'podman create failed'
     );
-    expect(mockTeardownServiceContainers).toHaveBeenCalledWith('podman', {
-      networkName: 'rover-services-1-1',
-      containerNames: ['rover-svc-1-1-postgres'],
-      taskId: 1,
-      iteration: 1,
-    });
+    expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
+      'podman',
+      expect.objectContaining({
+        networkName: 'rover-services-1-1',
+        containerNames: ['rover-svc-1-1-postgres'],
+        taskId: 1,
+        iteration: 1,
+      })
+    );
     expect((sandbox as any).serviceContext).toBeUndefined();
   });
 
@@ -187,12 +215,12 @@ describe('sandbox startup cleanup', () => {
     );
     expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
       'docker',
-      {
+      expect.objectContaining({
         networkName: 'rover-services-1-1',
         containerNames: [],
         taskId: 1,
         iteration: 1,
-      },
+      }),
       undefined
     );
   });
@@ -235,6 +263,7 @@ describe('sandbox startup cleanup', () => {
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
+          serviceConfigHash: hashServices([{ name: 'postgres' }]),
         },
       },
     });
@@ -271,6 +300,7 @@ describe('sandbox startup cleanup', () => {
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
+          serviceConfigHash: 'outdated-hash',
         },
       },
     });
@@ -286,23 +316,23 @@ describe('sandbox startup cleanup', () => {
     if (backend === 'docker') {
       expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
         backend,
-        {
+        expect.objectContaining({
           networkName: 'rover-services-1-1',
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
-        },
+        }),
         undefined
       );
     } else {
       expect(mockTeardownServiceContainers).toHaveBeenCalledWith(
         backend,
-        {
+        expect.objectContaining({
           networkName: 'rover-services-1-1',
           containerNames: ['rover-svc-1-1-postgres'],
           taskId: 1,
           iteration: 1,
-        },
+        }),
         undefined
       );
     }

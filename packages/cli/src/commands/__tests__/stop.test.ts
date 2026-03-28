@@ -341,10 +341,10 @@ describe('stop command', () => {
   });
 
   describe('Workspace cleanup', () => {
-    it('should clear workspace information', async () => {
+    it('should preserve workspace information by default', async () => {
       const task = createTestTask(6, 'Task with Workspace');
-      expect(task.worktreePath).toBeTruthy();
-      expect(task.branchName).toBeTruthy();
+      const originalWorktreePath = task.worktreePath;
+      const originalBranchName = task.branchName;
 
       await stopCommand('6', { json: true });
 
@@ -352,8 +352,8 @@ describe('stop command', () => {
         join(testDir, '.rover', 'tasks', '6'),
         6
       );
-      expect(reloadedTask.worktreePath).toBe('');
-      expect(reloadedTask.branchName).toBe('');
+      expect(reloadedTask.worktreePath).toBe(originalWorktreePath);
+      expect(reloadedTask.branchName).toBe(originalBranchName);
     });
 
     it('should not remove git worktree and branch by default', async () => {
@@ -380,6 +380,12 @@ describe('stop command', () => {
       expect(existsSync(worktreePath)).toBe(false);
       const branches = launchSync('git', ['branch']).stdout;
       expect(branches).not.toContain(branchName);
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '8'),
+        8
+      );
+      expect(reloadedTask.worktreePath).toBe('');
+      expect(reloadedTask.branchName).toBe('');
     });
 
     it('should remove git worktree and branch with removeGitWorktreeAndBranch option', async () => {
@@ -396,11 +402,17 @@ describe('stop command', () => {
       expect(existsSync(worktreePath)).toBe(false);
       const branches = launchSync('git', ['branch']).stdout;
       expect(branches).not.toContain(branchName);
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '9'),
+        9
+      );
+      expect(reloadedTask.worktreePath).toBe('');
+      expect(reloadedTask.branchName).toBe('');
     });
   });
 
   describe('Iterations cleanup', () => {
-    it('should delete iterations directory', async () => {
+    it('should preserve iterations directory', async () => {
       const task = createTestTask(10, 'Task with Iterations');
 
       // Create iterations directory with content
@@ -413,9 +425,9 @@ describe('stop command', () => {
 
       await stopCommand('10', { json: true });
 
-      // Iterations directory should be deleted
+      // Iterations directory should remain for inspection/restart context
       const iterationsPath = join('.rover', 'tasks', '10', 'iterations');
-      expect(existsSync(iterationsPath)).toBe(false);
+      expect(existsSync(iterationsPath)).toBe(true);
     });
   });
 

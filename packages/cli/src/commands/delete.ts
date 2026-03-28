@@ -57,10 +57,10 @@ const deleteCommand = async (
   // Convert string taskId to number
   const numericTaskIds: number[] = [];
   for (const taskId of taskIds) {
-    const numericTaskId = parseInt(taskId, 10);
-    if (Number.isNaN(numericTaskId)) {
+    if (!/^\d+$/.test(taskId)) {
       jsonOutput.errors?.push(`Invalid task ID '${taskId}' - must be a number`);
     } else {
+      const numericTaskId = parseInt(taskId, 10);
       numericTaskIds.push(numericTaskId);
     }
   }

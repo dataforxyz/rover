@@ -74,13 +74,12 @@ const logsCommand = async (
     success: false,
   };
 
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Require project context
   let project;
@@ -102,12 +101,12 @@ const logsCommand = async (
     // Parse iteration number if provided
     let targetIteration: number | undefined;
     if (iterationNumber) {
-      targetIteration = parseInt(iterationNumber, 10);
-      if (Number.isNaN(targetIteration)) {
+      if (!/^\d+$/.test(iterationNumber)) {
         jsonOutput.error = `Invalid iteration number: '${iterationNumber}'`;
         await exitWithError(jsonOutput, { telemetry });
         return;
       }
+      targetIteration = parseInt(iterationNumber, 10);
     }
 
     // Get available iterations for context

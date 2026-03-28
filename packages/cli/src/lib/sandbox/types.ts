@@ -4,6 +4,7 @@ import {
   ProjectConfigManager,
   TaskDescriptionManager,
 } from 'rover-core';
+import { createHash } from 'node:crypto';
 import {
   loadEnvsFile,
   parseCustomEnvironmentVariables,
@@ -24,6 +25,36 @@ import {
 import type { ServiceContainer } from 'rover-schemas';
 
 const SERVICE_CONTEXT_METADATA_KEY = 'serviceContext';
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableSerialize(item)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(
+      ([left], [right]) => left.localeCompare(right)
+    );
+    return `{${entries
+      .map(
+        ([key, nestedValue]) =>
+          `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`
+      )
+      .join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function getServiceConfigHash(
+  services: ServiceContainer[] | undefined
+): string | undefined {
+  if (!services || services.length === 0) {
+    return undefined;
+  }
+
+  return createHash('sha256').update(stableSerialize(services)).digest('hex');
+}
 
 export interface SandboxOptions {
   /** Extra arguments to pass to Docker/Podman from CLI */
@@ -123,6 +154,10 @@ export abstract class Sandbox {
         containerNames: [...record.containerNames],
         taskId: record.taskId,
         iteration: record.iteration,
+        serviceConfigHash:
+          typeof record.serviceConfigHash === 'string'
+            ? record.serviceConfigHash
+            : undefined,
       };
     }
 
@@ -203,6 +238,7 @@ export abstract class Sandbox {
       this.task.id,
       this.task.iterations
     );
+    expectedServiceContext.serviceConfigHash = getServiceConfigHash(services);
 
     if (existingServiceContext) {
       const matchesConfiguredServices =
@@ -210,6 +246,8 @@ export abstract class Sandbox {
           expectedServiceContext.networkName &&
         existingServiceContext.taskId === expectedServiceContext.taskId &&
         existingServiceContext.iteration === expectedServiceContext.iteration &&
+        existingServiceContext.serviceConfigHash ===
+          expectedServiceContext.serviceConfigHash &&
         existingServiceContext.containerNames.length ===
           expectedServiceContext.containerNames.length &&
         existingServiceContext.containerNames.every(
@@ -264,6 +302,7 @@ export abstract class Sandbox {
       containerNames: [],
       taskId: this.task.id,
       iteration: this.task.iterations,
+      serviceConfigHash: expectedServiceContext.serviceConfigHash,
     };
 
     try {
@@ -280,6 +319,7 @@ export abstract class Sandbox {
             containerNames: startedContainerNames,
             taskId: this.task.id,
             iteration: this.task.iterations,
+            serviceConfigHash: expectedServiceContext.serviceConfigHash,
           };
         }
       );
@@ -288,6 +328,7 @@ export abstract class Sandbox {
         containerNames,
         taskId: this.task.id,
         iteration: this.task.iterations,
+        serviceConfigHash: expectedServiceContext.serviceConfigHash,
       };
       await waitForServicesReady(
         this.getContainerBackend(),
@@ -335,12 +376,17 @@ export abstract class Sandbox {
 
     const serviceContext = this.resolveServiceContext();
     if (serviceContext) {
-      metadata[SERVICE_CONTEXT_METADATA_KEY] = {
+      const persistedServiceContext: Record<string, unknown> = {
         networkName: serviceContext.networkName,
         containerNames: [...serviceContext.containerNames],
         taskId: serviceContext.taskId,
         iteration: serviceContext.iteration,
       };
+      if (typeof serviceContext.serviceConfigHash === 'string') {
+        persistedServiceContext.serviceConfigHash =
+          serviceContext.serviceConfigHash;
+      }
+      metadata[SERVICE_CONTEXT_METADATA_KEY] = persistedServiceContext;
     }
 
     return Object.keys(metadata).length > 0 ? metadata : undefined;

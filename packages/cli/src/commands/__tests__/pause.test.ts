@@ -191,4 +191,22 @@ describe('pause command', () => {
       })
     );
   });
+
+  it('returns an already-paused error for paused tasks', async () => {
+    const { exitWithError } = await import('../../utils/exit.js');
+
+    const task = createTestTask(2);
+    task.markPaused('Paused earlier');
+
+    await pauseCommand('2', { json: true });
+
+    expect(exitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: 'Task 2 is already paused',
+      }),
+      expect.objectContaining({
+        telemetry: expect.anything(),
+      })
+    );
+  });
 });

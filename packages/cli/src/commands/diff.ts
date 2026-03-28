@@ -68,9 +68,7 @@ const diffCommand = async (
   }
 
   const telemetry = getTelemetry();
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  if (!/^\d+$/.test(taskId)) {
     await exitWithError(
       {
         success: false,
@@ -80,6 +78,7 @@ const diffCommand = async (
     );
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Require project context
   let project;
@@ -407,6 +406,8 @@ const diffCommand = async (
         { telemetry }
       );
     }
+  } finally {
+    await telemetry?.shutdown();
   }
 };
 

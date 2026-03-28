@@ -16,6 +16,7 @@ export interface ServiceContainerContext {
   containerNames: string[];
   taskId: number;
   iteration: number;
+  serviceConfigHash?: string;
 }
 
 function serviceContainerName(

@@ -42,6 +42,7 @@ function makeInputs(overrides: Partial<SetupHashInputs> = {}): SetupHashInputs {
     taskManagers: ['make'],
     agent: 'claude',
     roverVersion: '1.0.0',
+    sandboxExtraArgs: [],
     initScriptPath: '',
     initScriptContent: '',
     cacheFilesContent: '',
@@ -162,6 +163,16 @@ describe('computeSetupHash', () => {
         initScriptPath: 'scripts/bootstrap.sh',
         initScriptContent: '#!/bin/sh\necho hi\n',
       })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when sandboxExtraArgs change', () => {
+    const a = computeSetupHash(
+      makeInputs({ sandboxExtraArgs: ['--env', 'FOO=one'] })
+    );
+    const b = computeSetupHash(
+      makeInputs({ sandboxExtraArgs: ['--env', 'FOO=two'] })
     );
     expect(a).not.toBe(b);
   });
@@ -923,6 +934,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -985,6 +997,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -1013,11 +1026,80 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
     });
     expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
+  it('changes when effective sandbox extra args change', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env API_URL=https://one.example',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env API_URL=https://two.example',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).not.toBe(result2.cacheTag);
+  });
+
+  it('ignores volume-only sandbox extra args in the cache hash', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env FOO=bar -v named:/cache',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env FOO=bar --volume different:/cache',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).toBe(result2.cacheTag);
   });
 
   it('hashes sub-project init scripts using the project-relative path first', () => {
@@ -1064,6 +1146,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -1117,6 +1200,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -1173,6 +1257,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptPath: '../shared/setup.sh',
       initScriptContent: '#!/bin/sh\necho shared root init\n',
       cacheFilesContent: '',
@@ -1291,6 +1376,105 @@ describe('checkImageCache', () => {
       ['ls-remote', hostRepo, 'main'],
       { reject: false }
     );
+  });
+
+  it('resolves file URL repositories for cache hashing', () => {
+    const hostRepo = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: `file://${hostRepo}`,
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', hostRepo, 'main'],
+      { reject: false }
+    );
+  });
+
+  it('includes local child repository working tree contents in the cache hash', () => {
+    const projectRoot = createTmpDir();
+    const hostRepo = join(projectRoot, 'repos', 'api');
+    mkdirSync(join(hostRepo, '.git'), { recursive: true });
+    writeFileSync(
+      join(hostRepo, 'package.json'),
+      '{"name":"api","version":"1.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: './repos/api',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    const expectedHash = computeSetupHash({
+      agentImage: 'sha256:img',
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      taskManagers: [],
+      agent: 'claude',
+      roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
+      initScriptContent: '',
+      cacheFilesContent: '',
+      mcps: [],
+      projects: [
+        {
+          name: 'api',
+          path: 'packages/api',
+          repository: './repos/api',
+          ref: 'main',
+          repositoryRevision: 'abc123',
+          localContentHash: hashDirectoryContents(hostRepo),
+        },
+      ],
+    });
+
+    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
   });
 
   it('changes when a local materialized child project changes locally', () => {

@@ -154,6 +154,14 @@ describe('diff command', () => {
       );
     });
 
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      await diffCommand('12abc');
+
+      expect(consoleSpy.log).toHaveBeenCalledWith(
+        expect.stringContaining("✗ Invalid task ID '12abc' - must be a number")
+      );
+    });
+
     it('should handle non-existent task', async () => {
       await diffCommand('999');
 

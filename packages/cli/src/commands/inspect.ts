@@ -118,10 +118,7 @@ const inspectCommand = async (
   const telemetry = getTelemetry();
   telemetry?.eventInspectTask();
 
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-
-  if (isNaN(numericTaskId)) {
+  if (!/^\d+$/.test(taskId)) {
     const errorOutput = jsonErrorOutput(
       `Invalid task ID '${taskId}' - must be a number`
     );
@@ -135,6 +132,7 @@ const inspectCommand = async (
     });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Validate mutually exclusive options
   if (options.file && options.rawFile) {

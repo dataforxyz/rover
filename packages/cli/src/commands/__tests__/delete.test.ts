@@ -184,12 +184,31 @@ describe('delete command', () => {
 
       await deleteCommand(['1.5']);
 
-      // parseInt('1.5') = 1, so this should try to delete task 1
       expect(exitWithErrors).toHaveBeenCalledWith(
-        {
-          errors: ['Task with ID 1 was not found'],
+        expect.objectContaining({
+          errors: expect.arrayContaining([
+            "Invalid task ID '1.5' - must be a number",
+          ]),
           success: false,
-        },
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      const { exitWithErrors } = await import('../../utils/exit.js');
+
+      await deleteCommand(['12abc']);
+
+      expect(exitWithErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errors: expect.arrayContaining([
+            "Invalid task ID '12abc' - must be a number",
+          ]),
+          success: false,
+        }),
         expect.objectContaining({
           telemetry: expect.anything(),
         })
@@ -220,10 +239,12 @@ describe('delete command', () => {
       await deleteCommand(['-1']);
 
       expect(exitWithErrors).toHaveBeenCalledWith(
-        {
-          errors: ['Task with ID -1 was not found'],
+        expect.objectContaining({
+          errors: expect.arrayContaining([
+            "Invalid task ID '-1' - must be a number",
+          ]),
           success: false,
-        },
+        }),
         expect.objectContaining({
           telemetry: expect.anything(),
         })

@@ -198,10 +198,9 @@ describe('logs command', () => {
 
       await logsCommand('1.5');
 
-      // parseInt('1.5') = 1, so this should try to load task 1
       expect(exitWithError).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: 'The task with ID 1 was not found',
+          error: "Invalid task ID '1.5' - must be a number",
         }),
         expect.objectContaining({
           telemetry: expect.anything(),
@@ -233,7 +232,22 @@ describe('logs command', () => {
 
       expect(exitWithError).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: 'The task with ID -1 was not found',
+          error: "Invalid task ID '-1' - must be a number",
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      const { exitWithError } = await import('../../utils/exit.js');
+
+      await logsCommand('12abc');
+
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Invalid task ID '12abc' - must be a number",
         }),
         expect.objectContaining({
           telemetry: expect.anything(),
@@ -254,6 +268,24 @@ describe('logs command', () => {
       expect(exitWithError).toHaveBeenCalledWith(
         expect.objectContaining({
           error: "Invalid iteration number: 'invalid'",
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
+    it('should reject malformed numeric iteration values with trailing characters', async () => {
+      await createTestTaskWithContainer(1, 'Test Task', 'container123');
+      createIterations(1, [1, 2]);
+
+      const { exitWithError } = await import('../../utils/exit.js');
+
+      await logsCommand('1', '2abc');
+
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Invalid iteration number: '2abc'",
         }),
         expect.objectContaining({
           telemetry: expect.anything(),

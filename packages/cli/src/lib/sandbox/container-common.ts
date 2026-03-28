@@ -475,3 +475,29 @@ export function normalizeExtraArgs(
   // Split string by whitespace, respecting quoted strings
   return extraArgs.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
 }
+
+/**
+ * Return the effective extra args used for cache-image builds.
+ * Volume mounts are excluded because cache builds intentionally bake
+ * installed artifacts into the image filesystem rather than external volumes.
+ */
+export function getBuildContainerExtraArgs(
+  extraArgs: string | string[] | undefined
+): string[] {
+  const normalized = normalizeExtraArgs(extraArgs);
+  const filtered: string[] = [];
+
+  for (let i = 0; i < normalized.length; i++) {
+    const arg = normalized[i];
+    if (arg === '-v' || arg === '--volume') {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('--volume=') || arg.startsWith('-v=')) {
+      continue;
+    }
+    filtered.push(arg);
+  }
+
+  return filtered;
+}

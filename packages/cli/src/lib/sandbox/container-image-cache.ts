@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -9,7 +9,11 @@ import {
   ProjectConfigManager,
   VERBOSE,
 } from 'rover-core';
-import { ContainerBackend, resolveInitScriptPath } from './container-common.js';
+import {
+  ContainerBackend,
+  getBuildContainerExtraArgs,
+  resolveInitScriptPath,
+} from './container-common.js';
 import {
   isSafeRelativePath,
   resolvePathWithinRoot,
@@ -45,6 +49,7 @@ export interface SetupHashInputs {
   taskManagers: string[];
   agent: string;
   roverVersion: string;
+  sandboxExtraArgs: string[];
   initScriptPath?: string;
   initScriptContent: string;
   cacheFilesContent: string;
@@ -83,6 +88,7 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
     taskManagers: [...inputs.taskManagers].sort(),
     agent: inputs.agent,
     roverVersion: inputs.roverVersion,
+    sandboxExtraArgs: [...inputs.sandboxExtraArgs],
     initScriptPath: inputs.initScriptPath || '',
     initScriptContent: inputs.initScriptContent,
     cacheFilesContent: inputs.cacheFilesContent,
@@ -294,6 +300,40 @@ function resolveRepositoryForLookup(
   return repository;
 }
 
+function isLocalRepositoryReference(repository: string): boolean {
+  return (
+    repository.startsWith('file://') ||
+    (isAbsolute(repository) && !repository.startsWith('/workspace/')) ||
+    repository === '.' ||
+    repository === '..' ||
+    repository.startsWith('./') ||
+    repository.startsWith('../')
+  );
+}
+
+function resolveLocalRepositoryContentHash(
+  projectRoot: string,
+  repository: string
+): string {
+  if (!isLocalRepositoryReference(repository)) {
+    return '';
+  }
+
+  const hostRepositoryPath = resolveRepositoryForLookup(
+    projectRoot,
+    repository
+  );
+
+  // Only hash local working trees. Bare repos do not have materialized files
+  // that can change outside of commits, so hashing their internals would add
+  // noise without improving cache correctness.
+  if (!existsSync(join(hostRepositoryPath, '.git'))) {
+    return '';
+  }
+
+  return hashMaterializedProjectContents(hostRepositoryPath);
+}
+
 function resolveRepositoryRevision(
   projectRoot: string,
   repository: string,
@@ -466,7 +506,10 @@ export function checkImageCache(
               : '',
           localContentHash:
             typeof p.repository === 'string'
-              ? ''
+              ? resolveLocalRepositoryContentHash(
+                  projectConfig.projectRoot,
+                  p.repository
+                )
               : hashMaterializedProjectContents(
                   join(projectConfig.projectRoot, p.path)
                 ),
@@ -488,6 +531,9 @@ export function checkImageCache(
     taskManagers,
     agent,
     roverVersion: getVersion(),
+    sandboxExtraArgs: getBuildContainerExtraArgs(
+      projectConfig.sandboxExtraArgs
+    ),
     initScriptPath,
     initScriptContent,
     cacheFilesContent,

@@ -27,8 +27,8 @@ export class GoSandboxPackage extends SandboxPackage {
 GO_VERSION=""
 for go_mod_path in ${escapedPaths}; do
   if [ -f "$go_mod_path" ]; then
-    GO_VERSION=$(grep -oP '^go \\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' "$go_mod_path" | head -1)
-    TC_VERSION=$(grep -oP '^toolchain go\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' "$go_mod_path" | head -1)
+    GO_VERSION=$(grep -oP '^go \\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' "$go_mod_path" | head -1 || true)
+    TC_VERSION=$(grep -oP '^toolchain go\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?' "$go_mod_path" | head -1 || true)
     [ -n "$TC_VERSION" ] && GO_VERSION="$TC_VERSION"
     [ -n "$GO_VERSION" ] && break
   fi

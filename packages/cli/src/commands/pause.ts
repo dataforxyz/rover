@@ -86,15 +86,15 @@ const pauseCommand = async (
       throw new TaskNotFoundError(numericTaskId);
     }
 
-    // Only running tasks can be paused
-    if (!task.isInProgress() && !task.isIterating()) {
-      jsonOutput.error = `Task ${numericTaskId} is not running (status: ${task.status}). Only IN_PROGRESS or ITERATING tasks can be paused.`;
+    if (task.isPaused()) {
+      jsonOutput.error = `Task ${numericTaskId} is already paused`;
       await exitWithError(jsonOutput, { telemetry });
       return;
     }
 
-    if (task.isPaused()) {
-      jsonOutput.error = `Task ${numericTaskId} is already paused`;
+    // Only running tasks can be paused
+    if (!task.isInProgress() && !task.isIterating()) {
+      jsonOutput.error = `Task ${numericTaskId} is not running (status: ${task.status}). Only IN_PROGRESS or ITERATING tasks can be paused.`;
       await exitWithError(jsonOutput, { telemetry });
       return;
     }
