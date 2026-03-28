@@ -714,9 +714,12 @@ describe('SetupBuilder multi-repo projects', () => {
     );
   });
 
-  it('does not treat absolute container repository paths as host mounts', () => {
+  it('treats absolute repository paths under /workspace as host mounts', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
-    testDirs.push(root);
+    const hostRepoRoot = mkdtempSync(join(tmpdir(), 'rover-setup-host-'));
+    const hostRepo = join(hostRepoRoot, 'sources', 'frontend.git');
+    mkdirSync(hostRepo, { recursive: true });
+    testDirs.push(root, hostRepoRoot);
 
     const fakeTask = {
       id: 1,
@@ -741,7 +744,7 @@ describe('SetupBuilder multi-repo projects', () => {
         {
           name: 'frontend',
           path: 'frontend',
-          repository: '/workspace/sources/frontend.git',
+          repository: hostRepo,
         },
       ],
     };
@@ -755,9 +758,14 @@ describe('SetupBuilder multi-repo projects', () => {
     const entrypointPath = builder.generateEntrypoint(false);
     const script = readFileSync(entrypointPath, 'utf8');
 
-    expect(builder.getRepositoryMounts()).toEqual([]);
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
     expect(script).toContain(
-      "git clone '/workspace/sources/frontend.git' '/workspace/frontend'"
+      "git clone '/workspace-repos/0' '/workspace/frontend'"
     );
   });
 
@@ -932,7 +940,7 @@ describe('SetupBuilder multi-repo projects', () => {
     );
   });
 
-  it('does not require checkpoint external repository state for local child repositories during checkpoint resume', () => {
+  it('requires checkpoint external repository state for local child repositories during checkpoint resume', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);
 
@@ -979,11 +987,11 @@ describe('SetupBuilder multi-repo projects', () => {
       "current_origin=$(git -C '/workspace/frontend' remote get-url origin 2>/dev/null || true)"
     );
     expect(script).toContain('Checkpoint file is missing; cannot resume');
-    expect(script).not.toContain('Checkpoint is missing repository state for');
-    expect(script).not.toContain(
+    expect(script).toContain('Checkpoint is missing repository state for');
+    expect(script).toContain(
       "current_head=$(git -C '/workspace/frontend' rev-parse HEAD)"
     );
-    expect(script).not.toContain(
+    expect(script).toContain(
       "Repository 'frontend' no longer matches the checkpointed revision"
     );
   });

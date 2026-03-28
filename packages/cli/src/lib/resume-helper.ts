@@ -226,8 +226,7 @@ function checkpointHasRequiredExternalRepoState(
         return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
           project =>
             typeof project?.path === 'string' &&
-            typeof project?.repository === 'string' &&
-            !isLocalRepositoryReference(project.repository)
+            typeof project?.repository === 'string'
               ? [project.path]
               : []
         );
@@ -245,8 +244,7 @@ function checkpointHasRequiredExternalRepoState(
         return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
           project =>
             typeof project?.path === 'string' &&
-            typeof project?.repository === 'string' &&
-            !isLocalRepositoryReference(project.repository)
+            typeof project?.repository === 'string'
               ? [project.path]
               : []
         );

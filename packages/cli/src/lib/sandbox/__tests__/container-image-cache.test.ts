@@ -1379,6 +1379,48 @@ describe('checkImageCache', () => {
     );
   });
 
+  it('resolves absolute local repositories under /workspace for cache hashing', () => {
+    const projectRoot = createTmpDir();
+    const hostRepoRoot = createTmpDir();
+    const hostRepo = join(hostRepoRoot, 'sources', 'api.git');
+    mkdirSync(hostRepo, { recursive: true });
+    writeFileSync(join(hostRepo, 'README.md'), '# api\n', 'utf8');
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: hostRepo,
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', hostRepo, 'main'],
+      { reject: false }
+    );
+  });
+
   it('preserves SCP-style repository URLs for cache hashing', () => {
     mockedLaunchSync.mockReturnValueOnce({
       stdout: 'abc123\trefs/heads/main\n',

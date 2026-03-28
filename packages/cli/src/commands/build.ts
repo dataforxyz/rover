@@ -44,7 +44,10 @@ import {
   isSafeRelativePath,
   resolvePathWithinRoot,
 } from '../utils/path-safety.js';
-import { isLocalRepositoryReference } from '../utils/repository-reference.js';
+import {
+  isLocalRepositoryReference,
+  resolveRepositoryHostPath,
+} from '../utils/repository-reference.js';
 import { shellEscape } from '../utils/shell.js';
 
 interface BuildRepositoryMount {
@@ -84,7 +87,10 @@ export function prepareBuildProjectConfig(
 
       const hostPath = project.repository.startsWith('file://')
         ? fileURLToPath(project.repository)
-        : resolve(repositoryResolutionRoot, project.repository);
+        : resolveRepositoryHostPath(
+            project.repository,
+            repositoryResolutionRoot
+          );
 
       if (!existsSync(hostPath)) {
         throw new Error(

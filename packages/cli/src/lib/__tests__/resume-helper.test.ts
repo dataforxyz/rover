@@ -375,7 +375,7 @@ describe('resumeTask', () => {
     expect(mockedLaunchSync).not.toHaveBeenCalled();
   });
 
-  it('resumes from checkpoint when a multi-repo workspace only uses plain relative local repositories', async () => {
+  it('falls back to a full rerun when a local child repository checkpoint is missing repository state', async () => {
     const iterationPath = join(tempDir, 'iterations');
     const worktreePath = join(tempDir, 'worktree');
     mkdirSync(worktreePath, { recursive: true });
@@ -402,6 +402,134 @@ describe('resumeTask', () => {
             name: 'frontend',
             path: 'frontend',
             repository: 'repos/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-resume'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: undefined,
+      resumeFromCheckpoint: false,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('resumes from checkpoint when a local child repository has checkpointed repository state', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      JSON.stringify({
+        completedSteps: [{ id: 'step1' }],
+        externalRepositories: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'repos/frontend.git',
+            head: 'abc123',
+            trackedDiffHash: 'def456',
+            untrackedHash: 'ghi789',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'repos/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-resume'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: join(iterationPath, '1', 'checkpoint.json'),
+      resumeFromCheckpoint: true,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('resumes from checkpoint when a multi-repo workspace uses absolute local repositories under /workspace', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      JSON.stringify({
+        completedSteps: [{ id: 'step1' }],
+        externalRepositories: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: '/workspace/sources/frontend.git',
+            head: 'abc123',
+            trackedDiffHash: 'def456',
+            untrackedHash: 'ghi789',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: '/workspace/sources/frontend.git',
           },
         ],
       }),

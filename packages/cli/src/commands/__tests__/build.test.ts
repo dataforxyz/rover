@@ -469,9 +469,12 @@ describe('generateBuildEntrypoint', () => {
     ).toThrow(/Local workspace repository for frontend not found/);
   });
 
-  it('does not rewrite absolute container repository paths during build config preparation', () => {
+  it('rewrites absolute repository paths under /workspace during build config preparation', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
-    testDirs.push(root);
+    const hostRepoRoot = mkdtempSync(join(tmpdir(), 'rover-build-host-'));
+    const hostRepo = join(hostRepoRoot, 'sources', 'frontend.git');
+    mkdirSync(hostRepo, { recursive: true });
+    testDirs.push(root, hostRepoRoot);
 
     const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
       root,
@@ -487,7 +490,7 @@ describe('generateBuildEntrypoint', () => {
             {
               name: 'frontend',
               path: 'frontend',
-              repository: '/workspace/sources/frontend.git',
+              repository: hostRepo,
             },
           ],
         } as any,
@@ -495,9 +498,14 @@ describe('generateBuildEntrypoint', () => {
       )
     );
 
-    expect(repositoryMounts).toEqual([]);
+    expect(repositoryMounts).toEqual([
+      {
+        hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
     expect(buildProjectConfig.projects?.[0]?.repository).toBe(
-      '/workspace/sources/frontend.git'
+      '/workspace-repos/0'
     );
   });
 

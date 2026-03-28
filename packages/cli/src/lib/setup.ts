@@ -29,7 +29,10 @@ import {
   isSafeRelativePath,
   resolvePathWithinRoot,
 } from '../utils/path-safety.js';
-import { isLocalRepositoryReference } from '../utils/repository-reference.js';
+import {
+  isLocalRepositoryReference,
+  resolveRepositoryHostPath,
+} from '../utils/repository-reference.js';
 
 import { getRootInitScriptMountPath } from './sandbox/container-common.js';
 import { getPackagesFromConfig } from './sandbox/packages.js';
@@ -291,7 +294,7 @@ export class SetupBuilder {
       this.projectConfig.projectRoot ?? this.taskBasePath;
     const hostPath = repository.startsWith('file://')
       ? fileURLToPath(repository)
-      : resolve(repositoryResolutionRoot, repository);
+      : resolveRepositoryHostPath(repository, repositoryResolutionRoot);
 
     if (!existsSync(hostPath)) {
       throw new Error(`Local workspace repository not found: ${hostPath}`);
@@ -713,9 +716,6 @@ NODE
           project.runtimeRepository ?? project.repository!
         );
         const escapedRef = project.ref ? shellEscape(project.ref) : '';
-        const requiresCheckpointRepoState =
-          typeof project.repository === 'string' &&
-          !isLocalRepositoryReference(project.repository);
         const checkpointLookupScript = shellEscape(
           `const fs=require('fs'); const checkpoint=JSON.parse(fs.readFileSync('/output/checkpoint.json','utf8')); const entry=(checkpoint.externalRepositories||[]).find(repo => repo.path === ${JSON.stringify(project.path)}); if (!entry) process.exit(2); process.stdout.write([entry.head, entry.trackedDiffHash, entry.untrackedHash].join('\\t'));`
         );
@@ -748,8 +748,7 @@ else
 fi`;
 
         if (this.resumeFromCheckpoint) {
-          const checkpointStateValidation = requiresCheckpointRepoState
-            ? `if ! expected_state=$(node -e ${checkpointLookupScript}); then
+          const checkpointStateValidation = `if ! expected_state=$(node -e ${checkpointLookupScript}); then
   echo "❌ Checkpoint is missing repository state for ${escapedName}; cannot resume safely"
   safe_exit 1
 fi
@@ -760,8 +759,7 @@ current_untracked_hash=$(compute_repo_untracked_hash ${escapedPath})
 if [ "$current_head" != "$expected_head" ] || [ "$current_tracked_diff_hash" != "$expected_tracked_diff_hash" ] || [ "$current_untracked_hash" != "$expected_untracked_hash" ]; then
   echo "❌ Repository ${escapedName} no longer matches the checkpointed revision"
   safe_exit 1
-fi`
-            : '';
+fi`;
           return `echo "📥 Verifying repository ${escapedName} for checkpoint resume"
 if [ ! -d ${escapedPath}/.git ]; then
   echo "❌ Repository ${escapedName} is missing at ${escapedPath}; cannot resume from checkpoint safely"
