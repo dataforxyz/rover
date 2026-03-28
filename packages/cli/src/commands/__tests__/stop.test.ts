@@ -47,6 +47,7 @@ vi.mock('../../lib/telemetry.js', () => ({
 // Mock exit utilities to prevent process.exit
 vi.mock('../../utils/exit.js', () => ({
   exitWithError: vi.fn().mockImplementation(() => {}),
+  exitWithWarn: vi.fn().mockImplementation(() => {}),
   exitWithSuccess: vi.fn().mockImplementation(() => {}),
 }));
 
@@ -55,6 +56,13 @@ vi.mock('../../lib/sandbox/index.js', () => ({
   createSandbox: vi.fn().mockResolvedValue({
     stopAndRemove: vi.fn().mockResolvedValue(undefined),
     teardownServices: vi.fn().mockResolvedValue(undefined),
+  }),
+  isSandboxBackendUnavailableError: vi.fn((error: unknown) => {
+    return (
+      error instanceof Error &&
+      error.message ===
+        'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+    );
   }),
 }));
 
@@ -337,6 +345,52 @@ describe('stop command', () => {
         })
       );
       expect(exitWithSuccess).not.toHaveBeenCalled();
+    });
+
+    it('should continue resetting the task when metadata-only cleanup cannot run without a backend', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const { exitWithError, exitWithSuccess, exitWithWarn } = await import(
+        '../../utils/exit.js'
+      );
+      vi.mocked(createSandbox).mockRejectedValueOnce(
+        new Error(
+          'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+        )
+      );
+
+      const task = createTestTask(18, 'Paused task without backend');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+      });
+
+      await stopCommand('18', { json: true });
+
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '18'),
+        18
+      );
+      expect(reloadedTask.status).toBe('NEW');
+      expect(reloadedTask.containerId).toBe('');
+      expect(reloadedTask.sandboxMetadata).toEqual({
+        dockerHost: 'tcp://remote:2375',
+      });
+      expect(exitWithError).not.toHaveBeenCalled();
+      expect(exitWithSuccess).not.toHaveBeenCalled();
+      expect(exitWithWarn).toHaveBeenCalledWith(
+        'Task stopped with warnings',
+        expect.objectContaining({
+          success: false,
+          taskId: 18,
+          status: 'NEW',
+          error: expect.stringContaining(
+            'Task metadata was preserved so cleanup can be retried later'
+          ),
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
     });
   });
 

@@ -14,6 +14,10 @@ function hasContainerId(task: TaskDescriptionManager): boolean {
   return Boolean(task.containerId);
 }
 
+function clearTaskContainerIdentity(task: TaskDescriptionManager): void {
+  task.setContainerInfo('', '', task.sandboxMetadata);
+}
+
 /** Maximum time (ms) to consider a restart "in flight" before treating it as stale.
  *  NOTE: This is intentionally shorter than LOCK_STALENESS_TIMEOUT_MS (30 min)
  *  in resume-lock.ts. If a startup exceeds this timeout, the orphan detector
@@ -140,6 +144,7 @@ export async function detectOrphanedTasks(
               )
             );
           }
+          clearTaskContainerIdentity(task);
           task.markFailed(CONTAINER_EXITED_ERROR);
           warn(
             colors.yellow(
@@ -170,6 +175,7 @@ export async function detectOrphanedTasks(
               )
             );
           }
+          clearTaskContainerIdentity(task);
           return;
         }
 
@@ -178,6 +184,7 @@ export async function detectOrphanedTasks(
         // file should already reflect this, so just refresh from disk.
         if (state.exitCode === AGENT_EXIT_CODE.SUCCESS) {
           task.updateStatusFromIteration();
+          clearTaskContainerIdentity(task);
           // If status is already terminal after refresh, nothing more to do.
           if (task.isPaused()) {
             return;
@@ -206,6 +213,7 @@ export async function detectOrphanedTasks(
         // The iteration status file should already say "paused", so read it.
         if (state.exitCode === AGENT_EXIT_CODE.PAUSED) {
           task.updateStatusFromIteration();
+          clearTaskContainerIdentity(task);
           if (task.isPaused() || task.isFailed()) {
             return;
           }
@@ -230,6 +238,7 @@ export async function detectOrphanedTasks(
             )
           );
         }
+        clearTaskContainerIdentity(task);
         if (!task.isFailed()) {
           task.markFailed(CONTAINER_EXITED_ERROR);
         }

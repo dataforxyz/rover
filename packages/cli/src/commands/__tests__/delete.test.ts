@@ -74,6 +74,13 @@ vi.mock('../../lib/sandbox/index.js', () => ({
     stopAndRemove: vi.fn().mockResolvedValue(undefined),
     teardownServices: vi.fn().mockResolvedValue(undefined),
   }),
+  isSandboxBackendUnavailableError: vi.fn((error: unknown) => {
+    return (
+      error instanceof Error &&
+      error.message ===
+        'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+    );
+  }),
 }));
 
 describe('delete command', () => {
@@ -374,6 +381,42 @@ describe('delete command', () => {
       expect(
         TaskDescriptionManager.exists(join(testDir, '.rover', 'tasks', '21'))
       ).toBe(false);
+    });
+
+    it('preserves the task when metadata-only cleanup cannot run without a backend', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const { exitWithErrors, exitWithWarn } = await import(
+        '../../utils/exit.js'
+      );
+      vi.mocked(createSandbox).mockRejectedValueOnce(
+        new Error(
+          'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+        )
+      );
+
+      const task = createTestTask(27, 'Paused Task Without Backend');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+      });
+
+      await deleteCommand(['27'], { json: true });
+
+      expect(exitWithWarn).not.toHaveBeenCalled();
+      expect(exitWithErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          errors: expect.arrayContaining([
+            'Task 27: sandbox service cleanup could not run because no container backend is available; task metadata was preserved so cleanup can be retried later',
+          ]),
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+      expect(
+        TaskDescriptionManager.exists(join(testDir, '.rover', 'tasks', '27'))
+      ).toBe(true);
     });
   });
 

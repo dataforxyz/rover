@@ -7,11 +7,14 @@ import {
   requireProjectContext,
   setJsonMode,
 } from '../lib/context.js';
-import { createSandbox } from '../lib/sandbox/index.js';
+import {
+  createSandbox,
+  isSandboxBackendUnavailableError,
+} from '../lib/sandbox/index.js';
 import { getTelemetry } from '../lib/telemetry.js';
 import type { TaskStopOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
-import { exitWithError, exitWithSuccess } from '../utils/exit.js';
+import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
 
 /**
  * Stop a running task and optionally clean up its resources.
@@ -49,6 +52,7 @@ const stopCommand = async (
   let jsonOutput: TaskStopOutput = {
     success: false,
   };
+  let stopWarning: string | undefined;
 
   const processManager = json
     ? undefined
@@ -91,19 +95,35 @@ const stopCommand = async (
 
       await sandbox.stopAndRemove();
     } else if (task.sandboxMetadata) {
-      const sandbox = await createSandbox(task, processManager, {
-        projectPath: project.path,
-        sandboxMetadata: task.sandboxMetadata,
-      });
+      try {
+        const sandbox = await createSandbox(task, processManager, {
+          projectPath: project.path,
+          sandboxMetadata: task.sandboxMetadata,
+        });
 
-      await sandbox.teardownServices();
+        await sandbox.teardownServices();
+      } catch (error) {
+        if (!isSandboxBackendUnavailableError(error)) {
+          throw error;
+        }
+
+        stopWarning =
+          'Skipped sandbox service cleanup because no container backend is available. Task metadata was preserved so cleanup can be retried later.';
+        if (!isJsonMode()) {
+          console.warn(colors.yellow(`Warning: ${stopWarning}`));
+        }
+      }
     }
 
     processManager?.completeLastItem();
 
     // Reset task status to NEW and clear container info
     task.resetToNew();
-    task.setContainerInfo('', '');
+    task.setContainerInfo(
+      '',
+      '',
+      stopWarning ? task.sandboxMetadata : undefined
+    );
 
     const shouldRemoveWorkspace =
       options.removeAll || options.removeGitWorktreeAndBranch;
@@ -171,12 +191,28 @@ const stopCommand = async (
 
     jsonOutput = {
       ...jsonOutput,
-      success: true,
+      success: stopWarning === undefined,
       taskId: task.id,
       title: task.title,
       status: task.status,
       stoppedAt: new Date().toISOString(),
     };
+    if (stopWarning) {
+      jsonOutput.error = stopWarning;
+      await exitWithWarn('Task stopped with warnings', jsonOutput, {
+        tips: [
+          'Use ' +
+            colors.cyan(`rover stop ${task.id}`) +
+            ' to retry sandbox cleanup',
+          'Use ' +
+            colors.cyan(`rover delete ${task.id}`) +
+            ' to delete and clean up the task',
+        ],
+        telemetry,
+      });
+      return;
+    }
+
     await exitWithSuccess('Task stopped successfully!', jsonOutput, {
       tips: [
         'Use ' + colors.cyan(`rover logs ${task.id}`) + ' to check the logs',

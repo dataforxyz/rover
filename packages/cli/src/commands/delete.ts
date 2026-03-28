@@ -20,7 +20,10 @@ import {
   setJsonMode,
   requireProjectContext,
 } from '../lib/context.js';
-import { createSandbox } from '../lib/sandbox/index.js';
+import {
+  createSandbox,
+  isSandboxBackendUnavailableError,
+} from '../lib/sandbox/index.js';
 import type { CommandDefinition } from '../types.js';
 
 const { prompt } = enquirer;
@@ -174,7 +177,7 @@ const deleteCommand = async (
   // Process deletions
   const succeededTasks: number[] = [];
   const failedTasks: number[] = [];
-  const warningTasks: number[] = [];
+  const warningTasks = new Set<number>();
 
   try {
     for (const task of tasksToDelete) {
@@ -186,11 +189,23 @@ const deleteCommand = async (
           });
           await sandbox.stopAndRemove();
         } else if (task.sandboxMetadata) {
-          const sandbox = await createSandbox(task, undefined, {
-            projectPath: project.path,
-            sandboxMetadata: task.sandboxMetadata,
-          });
-          await sandbox.teardownServices();
+          try {
+            const sandbox = await createSandbox(task, undefined, {
+              projectPath: project.path,
+              sandboxMetadata: task.sandboxMetadata,
+            });
+            await sandbox.teardownServices();
+          } catch (error) {
+            if (!isSandboxBackendUnavailableError(error)) {
+              throw error;
+            }
+
+            jsonOutput.errors?.push(
+              `Task ${task.id}: sandbox service cleanup could not run because no container backend is available; task metadata was preserved so cleanup can be retried later`
+            );
+            failedTasks.push(task.id);
+            continue;
+          }
         }
 
         // Delete the task using ProjectManager
@@ -203,7 +218,7 @@ const deleteCommand = async (
         if (prune) {
           succeededTasks.push(task.id);
         } else {
-          warningTasks.push(task.id);
+          warningTasks.add(task.id);
           jsonOutput.errors?.push(
             `There was an error pruning task ${task.id.toString()} worktree`
           );
@@ -217,7 +232,7 @@ const deleteCommand = async (
     }
   } finally {
     // Determine overall success
-    const allSucceeded = failedTasks.length === 0 && warningTasks.length === 0;
+    const allSucceeded = failedTasks.length === 0 && warningTasks.size === 0;
     const someSucceeded = succeededTasks.length > 0;
 
     jsonOutput.success = allSucceeded;

@@ -28,7 +28,7 @@ import {
 } from '../lib/merge-rebase-utils.js';
 import { collapseTaskCommits } from '../lib/squash.js';
 import { getTelemetry } from '../lib/telemetry.js';
-import { getWorkspaceRepositories } from '../lib/workspace-repositories.js';
+import { getWorkspaceRepositoriesLookupResult } from '../lib/workspace-repositories.js';
 import type { CLIJsonOutput, CommandDefinition } from '../types.js';
 import { parseAgentString } from '../utils/agent-parser.js';
 import { showRoverChat } from '../utils/display.js';
@@ -97,14 +97,10 @@ const resolveSubprojectRebaseBase = (
   worktreePath: string,
   baseBranch: string
 ): string => {
-  const remoteTrackingRef = `refs/remotes/origin/${baseBranch}`;
-  const remoteRefResult = launchSync(
-    'git',
-    ['-C', worktreePath, 'show-ref', '--verify', '--quiet', remoteTrackingRef],
-    { reject: false }
-  );
-
-  return remoteRefResult.exitCode === 0 ? `origin/${baseBranch}` : baseBranch;
+  const worktreeGit = new Git({ cwd: worktreePath });
+  return worktreeGit.remoteBranchExists(baseBranch, 'origin', { refresh: true })
+    ? `origin/${baseBranch}`
+    : baseBranch;
 };
 
 /**
@@ -252,18 +248,36 @@ export const rebaseCommand = async (
     const currentBranch = options.base || git.getCurrentBranch();
     jsonOutput.currentBranch = currentBranch;
 
-    const workspaceRepositories =
+    const workspaceRepositoryLookup =
       projectConfig && task.worktreePath
-        ? getWorkspaceRepositories(
+        ? getWorkspaceRepositoriesLookupResult(
             task.worktreePath,
             task.getBasePath(),
             projectConfig
           )
-        : [];
-    const missingWorkspaceRepositories = workspaceRepositories.filter(
+        : {
+            foundPersistedState: false,
+            hasPersistedParseErrors: false,
+            repositories: [],
+          };
+    if (workspaceRepositoryLookup.hasPersistedParseErrors) {
+      jsonOutput.error =
+        'Persisted workspace repository metadata is invalid. Fix or remove the task workspace description before rebasing.';
+      await exitWithError(jsonOutput, { telemetry });
+      return;
+    }
+    const missingWorkspaceRepositories =
+      workspaceRepositoryLookup.repositories.filter(repo => {
+        if (!existsSync(repo.worktreePath)) {
+          return workspaceRepositoryLookup.foundPersistedState;
+        }
+
+        return !existsSync(join(repo.worktreePath, '.git'));
+      });
+    const workspaceRepositories = workspaceRepositoryLookup.repositories.filter(
       repo =>
-        !existsSync(repo.worktreePath) ||
-        !existsSync(join(repo.worktreePath, '.git'))
+        existsSync(repo.worktreePath) &&
+        existsSync(join(repo.worktreePath, '.git'))
     );
 
     if (missingWorkspaceRepositories.length > 0) {

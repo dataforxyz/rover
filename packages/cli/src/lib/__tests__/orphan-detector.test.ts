@@ -38,11 +38,15 @@ function mockTask(
     id,
     status,
     containerId,
+    sandboxMetadata: {
+      dockerHost: `tcp://remote-${id}:2375`,
+    },
     iterations: 1,
     iterationsPath: () => `/projects/test/.rover/tasks/${id}`,
     markFailed: vi.fn(),
     markCompleted: vi.fn(),
     markPaused: vi.fn(),
+    setContainerInfo: vi.fn(),
     updateStatusFromIteration: vi.fn(),
     lastRestartAt: undefined,
     runningAt: undefined,
@@ -86,6 +90,11 @@ describe('detectOrphanedTasks', () => {
     expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
+    );
+    expect(task.setContainerInfo).toHaveBeenCalledWith(
+      '',
+      '',
+      task.sandboxMetadata
     );
     expect(console.warn).toHaveBeenCalledTimes(1);
   });
@@ -151,7 +160,7 @@ describe('detectOrphanedTasks', () => {
 
     expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
       projectPath: '/projects/test',
-      sandboxMetadata: undefined,
+      sandboxMetadata: task.sandboxMetadata,
     });
     expect(sandbox.inspect).toHaveBeenCalledWith({ teardownServices: false });
     expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
@@ -284,6 +293,11 @@ describe('detectOrphanedTasks', () => {
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
     );
+    expect(task.setContainerInfo).toHaveBeenCalledWith(
+      '',
+      '',
+      task.sandboxMetadata
+    );
   });
 
   it('skips PAUSED, FAILED, COMPLETED, and NEW tasks', async () => {
@@ -388,6 +402,11 @@ describe('detectOrphanedTasks', () => {
     expect(sandbox.inspect).toHaveBeenCalledWith({ teardownServices: false });
     expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
+    expect(task.setContainerInfo).toHaveBeenCalledWith(
+      '',
+      '',
+      task.sandboxMetadata
+    );
     expect(task.markCompleted).toHaveBeenCalledTimes(1);
     expect(task.markFailed).not.toHaveBeenCalled();
   });
@@ -425,6 +444,11 @@ describe('detectOrphanedTasks', () => {
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
     );
+    expect(task.setContainerInfo).toHaveBeenCalledWith(
+      '',
+      '',
+      task.sandboxMetadata
+    );
   });
 
   it('marks task as PAUSED when container exited with PAUSED exit code and status file not written', async () => {
@@ -442,6 +466,11 @@ describe('detectOrphanedTasks', () => {
     expect(sandbox.inspect).toHaveBeenCalledWith({ teardownServices: false });
     expect(sandbox.teardownServices).not.toHaveBeenCalled();
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
+    expect(task.setContainerInfo).toHaveBeenCalledWith(
+      '',
+      '',
+      task.sandboxMetadata
+    );
     expect(task.markPaused).toHaveBeenCalledWith(
       'Workflow paused due to retryable error (e.g. credit limit)'
     );
@@ -466,6 +495,11 @@ describe('detectOrphanedTasks', () => {
     expect(sandbox.inspect).toHaveBeenCalledWith({ teardownServices: false });
     expect(sandbox.teardownServices).not.toHaveBeenCalled();
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
+    expect(task.setContainerInfo).toHaveBeenCalledWith(
+      '',
+      '',
+      task.sandboxMetadata
+    );
     expect(task.markPaused).not.toHaveBeenCalled();
     expect(task.markFailed).not.toHaveBeenCalled();
   });
@@ -507,6 +541,11 @@ describe('detectOrphanedTasks', () => {
     expect(sandbox.inspect).toHaveBeenCalledWith({ teardownServices: false });
     expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
     expect(task.updateStatusFromIteration).toHaveBeenCalledTimes(1);
+    expect(task.setContainerInfo).toHaveBeenCalledWith(
+      '',
+      '',
+      task.sandboxMetadata
+    );
     // Should NOT call markFailed again since updateStatusFromIteration already set FAILED
     expect(task.markFailed).not.toHaveBeenCalled();
   });

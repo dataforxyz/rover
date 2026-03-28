@@ -7,7 +7,7 @@ const {
   mockExitWithSuccess,
   mockGetTelemetry,
   mockRequireProjectContext,
-  mockGetWorkspaceRepositories,
+  mockGetWorkspaceRepositoriesLookupResult,
   mockGetAIAgentTool,
   mockRepoGitInstance,
   mockLaunchSync,
@@ -17,10 +17,11 @@ const {
   mockExitWithSuccess: vi.fn(),
   mockGetTelemetry: vi.fn(),
   mockRequireProjectContext: vi.fn(),
-  mockGetWorkspaceRepositories: vi.fn(),
+  mockGetWorkspaceRepositoriesLookupResult: vi.fn(),
   mockGetAIAgentTool: vi.fn(),
   mockRepoGitInstance: {
     getMainBranch: vi.fn().mockReturnValue('develop'),
+    remoteBranchExists: vi.fn().mockReturnValue(true),
   },
   mockLaunchSync: vi.fn(),
   mockExistsSync: vi.fn(),
@@ -117,7 +118,8 @@ vi.mock('../../lib/context-optimizer.js', () => ({
 }));
 
 vi.mock('../../lib/workspace-repositories.js', () => ({
-  getWorkspaceRepositories: mockGetWorkspaceRepositories,
+  getWorkspaceRepositoriesLookupResult:
+    mockGetWorkspaceRepositoriesLookupResult,
 }));
 
 import { rebaseCommand } from '../rebase.js';
@@ -130,13 +132,30 @@ describe('rebase command', () => {
     });
     mockExitWithError.mockResolvedValue(undefined);
     mockExitWithSuccess.mockResolvedValue(undefined);
-    mockGetWorkspaceRepositories.mockReturnValue([]);
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [],
+    });
     mockGetAIAgentTool.mockReturnValue({});
     mockRepoGitInstance.getMainBranch.mockClear();
     mockRepoGitInstance.getMainBranch.mockReturnValue('develop');
+    mockRepoGitInstance.remoteBranchExists.mockClear();
+    mockRepoGitInstance.remoteBranchExists.mockReturnValue(true);
     mockLaunchSync.mockReset();
     mockLaunchSync.mockReturnValue({ exitCode: 0, stdout: '' });
     mockExistsSync.mockReturnValue(true);
+    mockGitInstance.isGitRepo.mockReturnValue(true);
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }): string =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
+    mockGitInstance.getMainBranch.mockReturnValue('main');
+    mockGitInstance.hasUncommittedChanges.mockReturnValue(false);
+    mockGitInstance.getRecentCommits.mockReturnValue([]);
+    mockGitInstance.rebaseBranch.mockReturnValue({ success: true });
+    mockGitInstance.getMergeConflicts.mockReturnValue([]);
+    mockGitInstance.getCommitHash.mockReturnValue('new-base');
     mockRequireProjectContext.mockResolvedValue({
       path: '/repo',
       getTask: vi.fn().mockReturnValue({
@@ -196,15 +215,19 @@ describe('rebase command', () => {
   });
 
   it('rebases configured workspace repositories onto the requested base branch', async () => {
-    mockGetWorkspaceRepositories.mockReturnValue([
-      {
-        name: 'frontend',
-        relativePath: 'frontend',
-        worktreePath: '/tmp/task-1/frontend',
-        repository: 'https://example.com/frontend.git',
-        ref: 'main',
-      },
-    ]);
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+          ref: 'main',
+        },
+      ],
+    });
 
     await rebaseCommand('1', {
       json: true,
@@ -226,6 +249,13 @@ describe('rebase command', () => {
       'origin',
       'release/x',
     ]);
+    expect(mockRepoGitInstance.remoteBranchExists).toHaveBeenCalledWith(
+      'release/x',
+      'origin',
+      expect.objectContaining({
+        refresh: true,
+      })
+    );
     expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith(
       'origin/release/x',
       {
@@ -236,15 +266,19 @@ describe('rebase command', () => {
   });
 
   it('rebases each workspace repository onto its configured ref by default', async () => {
-    mockGetWorkspaceRepositories.mockReturnValue([
-      {
-        name: 'frontend',
-        relativePath: 'frontend',
-        worktreePath: '/tmp/task-1/frontend',
-        repository: 'https://example.com/frontend.git',
-        ref: 'release/1.0',
-      },
-    ]);
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+          ref: 'release/1.0',
+        },
+      ],
+    });
     mockGitInstance.getCurrentBranch.mockImplementation(
       (options?: { worktreePath?: string }) =>
         options?.worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
@@ -265,6 +299,13 @@ describe('rebase command', () => {
       'origin',
       'release/1.0',
     ]);
+    expect(mockRepoGitInstance.remoteBranchExists).toHaveBeenCalledWith(
+      'release/1.0',
+      'origin',
+      expect.objectContaining({
+        refresh: true,
+      })
+    );
     expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith(
       'origin/release/1.0',
       {
@@ -275,14 +316,18 @@ describe('rebase command', () => {
   });
 
   it('rebases workspace repositories without refs onto their own default branch', async () => {
-    mockGetWorkspaceRepositories.mockReturnValue([
-      {
-        name: 'frontend',
-        relativePath: 'frontend',
-        worktreePath: '/tmp/task-1/frontend',
-        repository: 'https://example.com/frontend.git',
-      },
-    ]);
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
     mockGitInstance.getCurrentBranch.mockImplementation(
       (options?: { worktreePath?: string }) =>
         options?.worktreePath === '/tmp/task-1/frontend'
@@ -307,6 +352,13 @@ describe('rebase command', () => {
       'origin',
       'develop',
     ]);
+    expect(mockRepoGitInstance.remoteBranchExists).toHaveBeenCalledWith(
+      'develop',
+      'origin',
+      expect.objectContaining({
+        refresh: true,
+      })
+    );
     expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith(
       'origin/develop',
       {
@@ -316,15 +368,110 @@ describe('rebase command', () => {
     expect(mockExitWithSuccess).toHaveBeenCalled();
   });
 
-  it('fails when a configured workspace repository is missing from the task workspace', async () => {
-    mockGetWorkspaceRepositories.mockReturnValue([
+  it('falls back to the local base branch when refresh shows the remote base ref is stale', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+          ref: 'develop',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'task/1' : 'main'
+    );
+    mockRepoGitInstance.remoteBranchExists.mockImplementation(
+      (branchName, _remoteName, options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend'
+          ? branchName === 'task/1'
+          : false
+    );
+
+    await rebaseCommand('1', {
+      json: true,
+      force: true,
+    });
+
+    expect(mockRepoGitInstance.remoteBranchExists).toHaveBeenCalledWith(
+      'develop',
+      'origin',
+      expect.objectContaining({
+        refresh: true,
+      })
+    );
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('develop', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+    expect(mockGitInstance.rebaseBranch).not.toHaveBeenCalledWith(
+      'origin/develop',
       {
-        name: 'frontend',
-        relativePath: 'frontend',
         worktreePath: '/tmp/task-1/frontend',
-        repository: 'https://example.com/frontend.git',
-      },
-    ]);
+      }
+    );
+  });
+
+  it('skips configured workspace repositories that have not been cloned yet', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockExistsSync.mockImplementation((targetPath: string) => {
+      if (targetPath === '/tmp/task-1/frontend') {
+        return false;
+      }
+      return true;
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend'
+          ? 'task/1'
+          : 'release/root'
+    );
+
+    await rebaseCommand('1', {
+      json: true,
+      force: true,
+    });
+
+    expect(mockExitWithError).not.toHaveBeenCalled();
+    expect(mockGitInstance.rebaseBranch).toHaveBeenCalledWith('release/root', {
+      worktreePath: '/tmp/task-1',
+    });
+    expect(mockGitInstance.rebaseBranch).not.toHaveBeenCalledWith(
+      expect.any(String),
+      {
+        worktreePath: '/tmp/task-1/frontend',
+      }
+    );
+  });
+
+  it('fails when a persisted workspace repository is missing from the task workspace', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: true,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
     mockExistsSync.mockImplementation((targetPath: string) => {
       if (targetPath === '/tmp/task-1/frontend') {
         return false;
@@ -347,6 +494,28 @@ describe('rebase command', () => {
       expect.objectContaining({
         error:
           'Configured workspace repositories are missing or invalid: frontend (frontend)',
+      }),
+      expect.anything()
+    );
+  });
+
+  it('fails closed when persisted workspace repository metadata is malformed', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: true,
+      hasPersistedParseErrors: true,
+      repositories: [],
+    });
+
+    await rebaseCommand('1', {
+      json: true,
+      force: true,
+    });
+
+    expect(mockGitInstance.rebaseBranch).not.toHaveBeenCalled();
+    expect(mockExitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error:
+          'Persisted workspace repository metadata is invalid. Fix or remove the task workspace description before rebasing.',
       }),
       expect.anything()
     );

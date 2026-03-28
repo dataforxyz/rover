@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   getWorkspaceDescriptionRepositories,
   getConfiguredWorkspaceRepositories,
+  getWorkspaceRepositoriesLookupResult,
   getWorkspaceRepositories,
 } from '../workspace-repositories.js';
 
@@ -505,6 +506,66 @@ describe('workspace-repositories', () => {
   });
 
   // ── getWorkspaceRepositories (priority fallback) ──────────────────
+
+  describe('getWorkspaceRepositoriesLookupResult', () => {
+    it('reports config fallback when no persisted workspace description exists', () => {
+      const dir = makeTmpDir();
+      const config = {
+        projects: [
+          {
+            name: 'from-config',
+            path: 'cfg',
+            repository: 'https://example.com/cfg.git',
+          },
+        ],
+      } as any;
+
+      const result = getWorkspaceRepositoriesLookupResult(dir, dir, config);
+      expect(result).toEqual({
+        foundPersistedState: false,
+        hasPersistedParseErrors: false,
+        repositories: [
+          {
+            name: 'from-config',
+            relativePath: 'cfg',
+            worktreePath: join(dir, 'cfg'),
+            repository: 'https://example.com/cfg.git',
+            ref: undefined,
+          },
+        ],
+      });
+    });
+
+    it('reports persisted state when workspace description exists even if malformed', () => {
+      const dir = makeTmpDir();
+      const iterationDir = makeIterationDir(dir, 1);
+      writeFileSync(
+        join(iterationDir, 'workspace-description.json'),
+        'not json {{{'
+      );
+
+      const config = {
+        projects: [
+          {
+            name: 'from-config',
+            path: 'cfg',
+            repository: 'https://example.com/cfg.git',
+          },
+        ],
+      } as any;
+
+      const result = getWorkspaceRepositoriesLookupResult(
+        dir,
+        dirname(dir),
+        config
+      );
+      expect(result).toEqual({
+        foundPersistedState: true,
+        hasPersistedParseErrors: true,
+        repositories: [],
+      });
+    });
+  });
 
   describe('getWorkspaceRepositories', () => {
     it('prefers workspace description over project config', () => {

@@ -17,7 +17,7 @@ import {
 } from '../lib/context.js';
 import { executeHooks } from '../lib/hooks.js';
 import { getTelemetry } from '../lib/telemetry.js';
-import { getWorkspaceRepositories } from '../lib/workspace-repositories.js';
+import { getWorkspaceRepositoriesLookupResult } from '../lib/workspace-repositories.js';
 import type { TaskPushOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
 import { showRoverChat, TIP_TITLES } from '../utils/display.js';
@@ -198,19 +198,33 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       });
     }
 
-    const workspaceRepositories = getWorkspaceRepositories(
+    const workspaceRepositoryLookup = getWorkspaceRepositoriesLookupResult(
       task.worktreePath,
       task.getBasePath(),
       projectConfig
     );
-    const missingWorkspaceRepositories = workspaceRepositories.filter(
+    if (workspaceRepositoryLookup.hasPersistedParseErrors) {
+      result.error =
+        'Persisted workspace repository metadata is invalid. Fix or remove the task workspace description before pushing.';
+      await exitWithError(result, { telemetry });
+      return;
+    }
+    const invalidWorkspaceRepositories =
+      workspaceRepositoryLookup.repositories.filter(repo => {
+        if (!existsSync(repo.worktreePath)) {
+          return workspaceRepositoryLookup.foundPersistedState;
+        }
+
+        return !existsSync(join(repo.worktreePath, '.git'));
+      });
+    const workspaceRepositories = workspaceRepositoryLookup.repositories.filter(
       repo =>
-        !existsSync(repo.worktreePath) ||
-        !existsSync(join(repo.worktreePath, '.git'))
+        existsSync(repo.worktreePath) &&
+        existsSync(join(repo.worktreePath, '.git'))
     );
 
-    if (missingWorkspaceRepositories.length > 0) {
-      const missingLabels = missingWorkspaceRepositories
+    if (invalidWorkspaceRepositories.length > 0) {
+      const missingLabels = invalidWorkspaceRepositories
         .map(repo => `${repo.name} (${repo.relativePath})`)
         .join(', ');
       result.error = `Configured workspace repositories are missing or invalid: ${missingLabels}`;
@@ -265,7 +279,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         'origin',
         {
           worktreePath: target.worktreePath,
-          refreshIfMissing: true,
+          refresh: true,
         }
       );
 

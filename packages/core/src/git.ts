@@ -43,6 +43,7 @@ export type GitWorktreeOptions = {
 
 export type GitRemoteBranchOptions = GitWorktreeOptions & {
   refreshIfMissing?: boolean;
+  refresh?: boolean;
 };
 
 export type GitCheckoutOptions = GitWorktreeOptions & {
@@ -718,6 +719,12 @@ export class Git {
   ): boolean {
     const effectiveCwd = options.worktreePath ?? this.cwd;
 
+    if (options.refresh) {
+      return this.refreshRemoteBranch(branch, remote, {
+        worktreePath: effectiveCwd,
+      });
+    }
+
     try {
       const exists =
         launchSync(
@@ -798,7 +805,7 @@ export class Git {
       if (
         this.remoteBranchExists(branch, 'origin', {
           worktreePath: effectiveCwd,
-          refreshIfMissing: true,
+          refresh: true,
         })
       ) {
         launchSync(
