@@ -17,6 +17,7 @@ const {
   mockExecuteHooks,
   mockCollapseTaskCommits,
   mockShowRoverChat,
+  mockGetWorkspaceRepositoriesLookupResult,
 } = vi.hoisted(() => ({
   mockRequireProjectContext: vi.fn(),
   mockSetJsonMode: vi.fn(),
@@ -26,14 +27,21 @@ const {
   mockExecuteHooks: vi.fn(),
   mockCollapseTaskCommits: vi.fn(),
   mockShowRoverChat: vi.fn(),
+  mockGetWorkspaceRepositoriesLookupResult: vi.fn(),
 }));
 
 const mockGitInstance = vi.hoisted(() => ({
   uncommittedChanges: vi.fn(),
   hasUnmergedCommits: vi.fn(),
+  branchExists: vi.fn(),
+  remoteBranchExists: vi.fn(),
   addAndCommit: vi.fn(),
   push: vi.fn(),
   remoteUrl: vi.fn(),
+  checkoutBranch: vi.fn(),
+  getCurrentBranch: vi.fn((options?: { worktreePath?: string }) =>
+    options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+  ),
 }));
 
 vi.mock('../../utils/exit.js', () => ({
@@ -71,6 +79,11 @@ vi.mock('../../lib/squash.js', () => ({
   collapseTaskCommits: mockCollapseTaskCommits,
 }));
 
+vi.mock('../../lib/workspace-repositories.js', () => ({
+  getWorkspaceRepositoriesLookupResult:
+    mockGetWorkspaceRepositoriesLookupResult,
+}));
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual('node:fs');
   return {
@@ -91,7 +104,10 @@ vi.mock('enquirer', () => ({
 
 vi.mock('rover-core', () => ({
   ProjectConfigManager: {
-    load: vi.fn().mockReturnValue(null),
+    load: vi.fn().mockReturnValue({
+      hooks: undefined,
+      projects: [],
+    }),
   },
   Git: vi.fn(() => mockGitInstance),
   showTitle: vi.fn(),
@@ -112,9 +128,16 @@ describe('push command', () => {
     mockExistsSync.mockReturnValue(true);
     mockGitInstance.uncommittedChanges.mockReturnValue([]);
     mockGitInstance.hasUnmergedCommits.mockReturnValue(true);
+    mockGitInstance.branchExists.mockReturnValue(true);
+    mockGitInstance.remoteBranchExists.mockReturnValue(true);
     mockGitInstance.addAndCommit.mockReturnValue(undefined);
     mockGitInstance.push.mockReturnValue(undefined);
     mockGitInstance.remoteUrl.mockReturnValue('');
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [],
+    });
 
     const task = {
       id: 1,
@@ -122,6 +145,7 @@ describe('push command', () => {
       branchName: 'task/1',
       baseCommit: 'abc123',
       worktreePath: '/tmp/task-1',
+      getBasePath: () => '/tmp/tasks/1',
       status: 'COMPLETED',
       isInProgress: () => false,
       isIterating: () => false,
@@ -148,6 +172,379 @@ describe('push command', () => {
         success: true,
         pushed: true,
         committed: false,
+      }),
+      expect.anything()
+    );
+  });
+
+  it('pushes configured workspace repositories alongside the root workspace', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend'
+          ? [' M src/app.ts']
+          : []
+    );
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
+    );
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (_branchName, _remoteName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1',
+    });
+    expect(mockGitInstance.checkoutBranch).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+      createIfMissing: true,
+    });
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
+  it('refreshes remote-tracking refs before deciding a workspace repo has an upstream task branch', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockReturnValue([]);
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) => true
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (
+        _branchName,
+        _remoteName,
+        options?: { worktreePath?: string; refresh?: boolean }
+      ) => options?.worktreePath === '/tmp/task-1/frontend'
+    );
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (
+        _branchName,
+        options?: { targetBranch?: string; worktreePath?: string }
+      ) =>
+        options?.worktreePath === '/tmp/task-1/frontend' &&
+        options?.targetBranch === 'origin/task/1'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.remoteBranchExists).toHaveBeenCalledWith(
+      'task/1',
+      'origin',
+      expect.objectContaining({
+        worktreePath: '/tmp/task-1/frontend',
+        refresh: true,
+      })
+    );
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
+  it('treats a stale remote-tracking ref as missing when refresh shows the upstream branch was deleted', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockReturnValue([]);
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) => true
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (_branchName, _remoteName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
+    );
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (
+        _branchName,
+        options?: { targetBranch?: string; worktreePath?: string }
+      ) =>
+        options?.worktreePath === '/tmp/task-1/frontend' &&
+        options?.targetBranch === 'main'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.hasUnmergedCommits).toHaveBeenCalledWith('task/1', {
+      targetBranch: 'main',
+      worktreePath: '/tmp/task-1/frontend',
+    });
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
+  it('does not create or push task branches for untouched workspace repositories without upstream branches', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockReturnValue([]);
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (
+        _branchName,
+        options?: { worktreePath?: string; targetBranch?: string }
+      ) => options?.worktreePath === '/tmp/task-1'
+    );
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1'
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (_branchName, _remoteName, options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.checkoutBranch).not.toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+      createIfMissing: true,
+    });
+    expect(mockGitInstance.push).not.toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1',
+    });
+  });
+
+  it('pushes workspace repositories with local task commits even when the upstream branch does not exist yet', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockReturnValue([]);
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) => true
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (_branchName, _remoteName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
+    );
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (
+        _branchName,
+        options?: { targetBranch?: string; worktreePath?: string }
+      ) =>
+        options?.worktreePath === '/tmp/task-1/frontend' &&
+        options?.targetBranch === 'main'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.checkoutBranch).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+      createIfMissing: true,
+    });
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
+  it('pushes workspace repositories from detached HEAD without diffing against an invalid current branch', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? '' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockReturnValue([]);
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) => true
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (_branchName, _remoteName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
+    );
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (
+        _branchName,
+        options?: { targetBranch?: string; worktreePath?: string }
+      ) => options?.worktreePath === '/tmp/task-1'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.hasUnmergedCommits).not.toHaveBeenCalledWith(
+      'task/1',
+      expect.objectContaining({
+        targetBranch: 'unknown',
+        worktreePath: '/tmp/task-1/frontend',
+      })
+    );
+    expect(mockGitInstance.checkoutBranch).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+      createIfMissing: true,
+    });
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
+  it('skips configured workspace repositories that have not been cloned yet', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockExistsSync.mockImplementation((targetPath: string) => {
+      if (targetPath === '/tmp/task-1/frontend') {
+        return false;
+      }
+      return true;
+    });
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockExitWithError).not.toHaveBeenCalled();
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1',
+    });
+    expect(mockGitInstance.push).not.toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
+  it('fails when a persisted workspace repository is missing from the task workspace', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: true,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockExistsSync.mockImplementation((targetPath: string) => {
+      if (targetPath === '/tmp/task-1/frontend') {
+        return false;
+      }
+      return true;
+    });
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.push).not.toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+    expect(mockExitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error:
+          'Configured workspace repositories are missing or invalid: frontend (frontend)',
+      }),
+      expect.anything()
+    );
+  });
+
+  it('fails closed when persisted workspace repository metadata is malformed', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: true,
+      hasPersistedParseErrors: true,
+      repositories: [],
+    });
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.push).not.toHaveBeenCalled();
+    expect(mockExitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error:
+          'Persisted workspace repository metadata is invalid. Fix or remove the task workspace description before pushing.',
       }),
       expect.anything()
     );

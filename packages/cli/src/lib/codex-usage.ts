@@ -104,7 +104,9 @@ export function invalidateCodexUsageCache(): void {
   cacheTimestamp = 0;
 }
 
-function normalizeWindow(w: CodexRateWindow | null | undefined): NormalizedBucket | null {
+function normalizeWindow(
+  w: CodexRateWindow | null | undefined
+): NormalizedBucket | null {
   if (!w) return null;
   return {
     utilization: w.used_percent,
@@ -221,14 +223,22 @@ export function analyzeCodexUsage(
   if (model) {
     const modelLower = model.toLowerCase();
     for (const [slug, limits] of Object.entries(usage.models)) {
-      if (slug.toLowerCase().includes(modelLower) || modelLower.includes(slug.toLowerCase())) {
+      if (
+        slug.toLowerCase().includes(modelLower) ||
+        modelLower.includes(slug.toLowerCase())
+      ) {
         checkBucket(limits.five_hour, `${slug}/five_hour`);
         checkBucket(limits.seven_day, `${slug}/seven_day`);
       }
     }
   }
 
-  return { isExhausted, resetsAt: earliestReset, utilization: highestUtil, limitingBucket };
+  return {
+    isExhausted,
+    resetsAt: earliestReset,
+    utilization: highestUtil,
+    limitingBucket,
+  };
 }
 
 /**

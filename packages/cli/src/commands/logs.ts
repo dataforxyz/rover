@@ -74,13 +74,12 @@ const logsCommand = async (
     success: false,
   };
 
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Require project context
   let project;
@@ -102,12 +101,12 @@ const logsCommand = async (
     // Parse iteration number if provided
     let targetIteration: number | undefined;
     if (iterationNumber) {
-      targetIteration = parseInt(iterationNumber, 10);
-      if (Number.isNaN(targetIteration)) {
+      if (!/^\d+$/.test(iterationNumber)) {
         jsonOutput.error = `Invalid iteration number: '${iterationNumber}'`;
         await exitWithError(jsonOutput, { telemetry });
         return;
       }
+      targetIteration = parseInt(iterationNumber, 10);
     }
 
     // Get available iterations for context
@@ -123,13 +122,22 @@ const logsCommand = async (
     }
 
     // Determine which iteration to show logs for
-    const actualIteration =
-      targetIteration || availableIterations[availableIterations.length - 1];
+    const latestIteration = availableIterations[availableIterations.length - 1];
+    const actualIteration = targetIteration || latestIteration;
 
     // Check if specific iteration exists (if requested)
     if (targetIteration && !availableIterations.includes(targetIteration)) {
       jsonOutput.error = `Iteration ${targetIteration} not found for task '${numericTaskId}'. Available iterations: ${availableIterations.join(', ')}`;
       await exitWithError(jsonOutput, { telemetry });
+      return;
+    }
+
+    if (targetIteration && targetIteration !== latestIteration) {
+      await exitWithWarn(
+        `Logs for iteration ${targetIteration} are no longer available for task '${numericTaskId}'. Rover can only read logs for the latest iteration's container.`,
+        jsonOutput,
+        { telemetry }
+      );
       return;
     }
 
@@ -289,8 +297,8 @@ const logsCommand = async (
           console.log(colors.gray('💡 Tips:'));
           tips.push(
             'Use ' +
-              colors.cyan(`rover logs ${numericTaskId} <iteration>`) +
-              ' to view specific iteration (if container exists)'
+              colors.cyan(`rover logs ${numericTaskId} ${latestIteration}`) +
+              ' to view the latest iteration logs'
           );
         }
       }

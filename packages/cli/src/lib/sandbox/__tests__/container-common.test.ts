@@ -1,12 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
+  getBuildContainerExtraArgs,
   normalizeExtraArgs,
   getWorktreeGitMounts,
   getCheckpointArgs,
   resolveInitScriptPath,
 } from '../container-common.js';
 import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 describe('normalizeExtraArgs', () => {
@@ -71,6 +72,33 @@ describe('normalizeExtraArgs', () => {
       '--add-host',
       'host.docker.internal:host-gateway',
     ]);
+  });
+});
+
+describe('getBuildContainerExtraArgs', () => {
+  it('returns normalized args when no volume flags are present', () => {
+    expect(getBuildContainerExtraArgs('--network mynet --env FOO=bar')).toEqual(
+      ['--network', 'mynet', '--env', 'FOO=bar']
+    );
+  });
+
+  it('removes short volume flags and their values', () => {
+    expect(
+      getBuildContainerExtraArgs('--env FOO=bar -v data:/data --network mynet')
+    ).toEqual(['--env', 'FOO=bar', '--network', 'mynet']);
+  });
+
+  it('removes long volume flags and inline assignments', () => {
+    expect(
+      getBuildContainerExtraArgs([
+        '--volume',
+        'data:/data',
+        '--env',
+        'FOO=bar',
+        '--volume=/cache:/cache',
+        '-v=/tmp:/tmp',
+      ])
+    ).toEqual(['--env', 'FOO=bar']);
   });
 });
 
@@ -198,7 +226,7 @@ describe('resolveInitScriptPath', () => {
     tmpDirs.length = 0;
   });
 
-  it('resolves sub-project init scripts from the workspace root first', () => {
+  it('resolves sub-project init scripts from the project path first', () => {
     const dir = createTmpDir();
     mkdirSync(join(dir, 'packages', 'api', 'scripts'), { recursive: true });
     mkdirSync(join(dir, 'scripts'), { recursive: true });
@@ -209,7 +237,7 @@ describe('resolveInitScriptPath', () => {
     writeFileSync(rootScript, '#!/bin/sh\necho root\n');
 
     expect(resolveInitScriptPath(dir, 'scripts/setup.sh', 'packages/api')).toBe(
-      rootScript
+      projectScript
     );
   });
 
@@ -232,6 +260,33 @@ describe('resolveInitScriptPath', () => {
 
     expect(resolveInitScriptPath(dir, 'scripts/setup.sh', 'packages/api')).toBe(
       rootScript
+    );
+  });
+
+  it('ignores unsafe project paths when resolving init scripts', () => {
+    const dir = createTmpDir();
+    mkdirSync(join(dir, 'scripts'), { recursive: true });
+    const rootScript = join(dir, 'scripts', 'setup.sh');
+    writeFileSync(rootScript, '#!/bin/sh\necho root\n');
+
+    expect(resolveInitScriptPath(dir, 'scripts/setup.sh', '../../escape')).toBe(
+      rootScript
+    );
+  });
+
+  it('falls back to the workspace root when neither location contains the script', () => {
+    const dir = createTmpDir();
+
+    expect(resolveInitScriptPath(dir, 'scripts/setup.sh', 'packages/api')).toBe(
+      join(dir, 'scripts', 'setup.sh')
+    );
+  });
+
+  it('resolves root init scripts outside the workspace root', () => {
+    const dir = createTmpDir();
+
+    expect(resolveInitScriptPath(dir, '../shared/setup.sh')).toBe(
+      resolve(dir, '../shared/setup.sh')
     );
   });
 });

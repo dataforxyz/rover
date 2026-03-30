@@ -1,6 +1,3 @@
-# Agents
-.claude/settings.local.json
-
 # Logs
 logs
 *.log
@@ -161,3 +158,4 @@ demos/*
 !demos/*.tape
 !demos/README.md
 !demos/run.sh
+!demos/create-multi-env-demo.sh

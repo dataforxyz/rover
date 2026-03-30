@@ -277,4 +277,308 @@ describe('Git', () => {
       expect(existsSync(join(worktreePath, 'README.md'))).toBe(true);
     });
   });
+
+  describe('checkoutBranch', () => {
+    it('creates a missing local branch from the remote task branch when available', () => {
+      const remoteDir = join(
+        tmpdir(),
+        `git-remote-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const cloneDir = join(
+        tmpdir(),
+        `git-clone-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+
+      mkdirSync(remoteDir, { recursive: true });
+
+      try {
+        launchSync('git', ['init', '--bare', remoteDir]);
+        launchSync('git', ['remote', 'add', 'origin', remoteDir], {
+          cwd: testDir,
+        });
+
+        writeFileSync(join(testDir, 'README.md'), '# Test');
+        launchSync('git', ['add', '.'], { cwd: testDir });
+        launchSync('git', ['commit', '-m', 'Initial commit'], { cwd: testDir });
+        launchSync('git', ['branch', '-M', 'main'], { cwd: testDir });
+        launchSync('git', ['push', '-u', 'origin', 'main'], { cwd: testDir });
+
+        launchSync('git', ['checkout', '-b', 'task/test-branch'], {
+          cwd: testDir,
+        });
+        writeFileSync(join(testDir, 'task.txt'), 'remote task branch commit\n');
+        launchSync('git', ['add', '.'], { cwd: testDir });
+        launchSync('git', ['commit', '-m', 'Task branch commit'], {
+          cwd: testDir,
+        });
+        const remoteTaskCommit = launchSync('git', ['rev-parse', 'HEAD'], {
+          cwd: testDir,
+        })
+          .stdout?.toString()
+          .trim();
+        launchSync('git', ['push', '-u', 'origin', 'task/test-branch'], {
+          cwd: testDir,
+        });
+
+        launchSync('git', ['checkout', 'main'], { cwd: testDir });
+
+        launchSync('git', ['clone', remoteDir, cloneDir]);
+        launchSync('git', ['config', 'user.email', 'test@example.com'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'user.name', 'Test User'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'commit.gpgsign', 'false'], {
+          cwd: cloneDir,
+        });
+
+        const clonedGit = new Git({ cwd: cloneDir });
+        expect(clonedGit.branchExists('task/test-branch')).toBe(false);
+        expect(clonedGit.remoteBranchExists('task/test-branch')).toBe(true);
+
+        clonedGit.checkoutBranch('task/test-branch', { createIfMissing: true });
+
+        expect(clonedGit.getCurrentBranch()).toBe('task/test-branch');
+        expect(clonedGit.getCommitHash('HEAD')).toBe(remoteTaskCommit);
+      } finally {
+        rmSync(cloneDir, { recursive: true, force: true });
+        rmSync(remoteDir, { recursive: true, force: true });
+      }
+    });
+
+    it('fetches a task branch before creating it locally when remote refs are stale', () => {
+      const remoteDir = join(
+        tmpdir(),
+        `git-remote-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const sourceDir = join(
+        tmpdir(),
+        `git-source-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const cloneDir = join(
+        tmpdir(),
+        `git-clone-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+
+      mkdirSync(remoteDir, { recursive: true });
+      mkdirSync(sourceDir, { recursive: true });
+
+      try {
+        launchSync('git', ['init', '--bare', remoteDir]);
+
+        launchSync('git', ['init'], { cwd: sourceDir });
+        launchSync('git', ['config', 'user.email', 'test@example.com'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['config', 'user.name', 'Test User'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['config', 'commit.gpgsign', 'false'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['remote', 'add', 'origin', remoteDir], {
+          cwd: sourceDir,
+        });
+
+        writeFileSync(join(sourceDir, 'README.md'), '# Test');
+        launchSync('git', ['add', '.'], { cwd: sourceDir });
+        launchSync('git', ['commit', '-m', 'Initial commit'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['branch', '-M', 'main'], { cwd: sourceDir });
+        launchSync('git', ['push', '-u', 'origin', 'main'], { cwd: sourceDir });
+
+        launchSync('git', ['clone', remoteDir, cloneDir]);
+        launchSync('git', ['config', 'user.email', 'test@example.com'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'user.name', 'Test User'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'commit.gpgsign', 'false'], {
+          cwd: cloneDir,
+        });
+
+        launchSync('git', ['checkout', '-b', 'task/test-branch'], {
+          cwd: sourceDir,
+        });
+        writeFileSync(
+          join(sourceDir, 'task.txt'),
+          'remote task branch commit\n'
+        );
+        launchSync('git', ['add', '.'], { cwd: sourceDir });
+        launchSync('git', ['commit', '-m', 'Task branch commit'], {
+          cwd: sourceDir,
+        });
+        const remoteTaskCommit = launchSync('git', ['rev-parse', 'HEAD'], {
+          cwd: sourceDir,
+        })
+          .stdout?.toString()
+          .trim();
+        launchSync('git', ['push', '-u', 'origin', 'task/test-branch'], {
+          cwd: sourceDir,
+        });
+
+        const clonedGit = new Git({ cwd: cloneDir });
+        expect(clonedGit.branchExists('task/test-branch')).toBe(false);
+        expect(clonedGit.remoteBranchExists('task/test-branch')).toBe(false);
+
+        clonedGit.checkoutBranch('task/test-branch', { createIfMissing: true });
+
+        expect(clonedGit.getCurrentBranch()).toBe('task/test-branch');
+        expect(clonedGit.getCommitHash('HEAD')).toBe(remoteTaskCommit);
+        expect(clonedGit.remoteBranchExists('task/test-branch')).toBe(true);
+      } finally {
+        rmSync(cloneDir, { recursive: true, force: true });
+        rmSync(sourceDir, { recursive: true, force: true });
+        rmSync(remoteDir, { recursive: true, force: true });
+      }
+    });
+
+    it('refreshes an existing remote-tracking ref before recreating a missing local branch', () => {
+      const remoteDir = join(
+        tmpdir(),
+        `git-remote-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const sourceDir = join(
+        tmpdir(),
+        `git-source-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const cloneDir = join(
+        tmpdir(),
+        `git-clone-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+
+      mkdirSync(remoteDir, { recursive: true });
+      mkdirSync(sourceDir, { recursive: true });
+
+      try {
+        launchSync('git', ['init', '--bare', remoteDir]);
+
+        launchSync('git', ['init'], { cwd: sourceDir });
+        launchSync('git', ['config', 'user.email', 'test@example.com'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['config', 'user.name', 'Test User'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['config', 'commit.gpgsign', 'false'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['remote', 'add', 'origin', remoteDir], {
+          cwd: sourceDir,
+        });
+
+        writeFileSync(join(sourceDir, 'README.md'), '# Test');
+        launchSync('git', ['add', '.'], { cwd: sourceDir });
+        launchSync('git', ['commit', '-m', 'Initial commit'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['branch', '-M', 'main'], { cwd: sourceDir });
+        launchSync('git', ['push', '-u', 'origin', 'main'], { cwd: sourceDir });
+
+        launchSync('git', ['checkout', '-b', 'task/test-branch'], {
+          cwd: sourceDir,
+        });
+        writeFileSync(join(sourceDir, 'task.txt'), 'first remote commit\n');
+        launchSync('git', ['add', '.'], { cwd: sourceDir });
+        launchSync('git', ['commit', '-m', 'First task branch commit'], {
+          cwd: sourceDir,
+        });
+        launchSync('git', ['push', '-u', 'origin', 'task/test-branch'], {
+          cwd: sourceDir,
+        });
+
+        launchSync('git', ['clone', remoteDir, cloneDir]);
+        launchSync('git', ['config', 'user.email', 'test@example.com'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'user.name', 'Test User'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'commit.gpgsign', 'false'], {
+          cwd: cloneDir,
+        });
+
+        writeFileSync(join(sourceDir, 'task.txt'), 'second remote commit\n');
+        launchSync('git', ['add', '.'], { cwd: sourceDir });
+        launchSync('git', ['commit', '-m', 'Second task branch commit'], {
+          cwd: sourceDir,
+        });
+        const latestRemoteTaskCommit = launchSync(
+          'git',
+          ['rev-parse', 'HEAD'],
+          {
+            cwd: sourceDir,
+          }
+        )
+          .stdout?.toString()
+          .trim();
+        launchSync('git', ['push', 'origin', 'task/test-branch'], {
+          cwd: sourceDir,
+        });
+
+        const clonedGit = new Git({ cwd: cloneDir });
+        expect(clonedGit.branchExists('task/test-branch')).toBe(false);
+        expect(clonedGit.remoteBranchExists('task/test-branch')).toBe(true);
+
+        clonedGit.checkoutBranch('task/test-branch', { createIfMissing: true });
+
+        expect(clonedGit.getCurrentBranch()).toBe('task/test-branch');
+        expect(clonedGit.getCommitHash('HEAD')).toBe(latestRemoteTaskCommit);
+      } finally {
+        rmSync(cloneDir, { recursive: true, force: true });
+        rmSync(sourceDir, { recursive: true, force: true });
+        rmSync(remoteDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not create a local task branch from HEAD when fetching the remote branch fails unexpectedly', () => {
+      const cloneDir = join(
+        tmpdir(),
+        `git-clone-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+
+      mkdirSync(cloneDir, { recursive: true });
+
+      try {
+        launchSync('git', ['init'], { cwd: cloneDir });
+        launchSync('git', ['config', 'user.email', 'test@example.com'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'user.name', 'Test User'], {
+          cwd: cloneDir,
+        });
+        launchSync('git', ['config', 'commit.gpgsign', 'false'], {
+          cwd: cloneDir,
+        });
+
+        writeFileSync(join(cloneDir, 'README.md'), '# Test');
+        launchSync('git', ['add', '.'], { cwd: cloneDir });
+        launchSync('git', ['commit', '-m', 'Initial commit'], {
+          cwd: cloneDir,
+        });
+
+        launchSync(
+          'git',
+          ['remote', 'add', 'origin', 'https://127.0.0.1:1/repo.git'],
+          {
+            cwd: cloneDir,
+          }
+        );
+
+        const clonedGit = new Git({ cwd: cloneDir });
+
+        expect(() =>
+          clonedGit.checkoutBranch('task/test-branch', {
+            createIfMissing: true,
+          })
+        ).toThrow(/Failed to fetch remote branch 'origin\/task\/test-branch'/);
+        expect(clonedGit.branchExists('task/test-branch')).toBe(false);
+      } finally {
+        rmSync(cloneDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

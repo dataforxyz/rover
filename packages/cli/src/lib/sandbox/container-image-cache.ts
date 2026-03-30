@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import {
   launch,
   launchSync,
@@ -8,7 +8,19 @@ import {
   ProjectConfigManager,
   VERBOSE,
 } from 'rover-core';
-import { ContainerBackend, resolveInitScriptPath } from './container-common.js';
+import {
+  ContainerBackend,
+  getBuildContainerExtraArgs,
+  resolveInitScriptPath,
+} from './container-common.js';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../../utils/path-safety.js';
+import {
+  isLocalRepositoryReference,
+  resolveLocalRepositoryReference,
+} from '../../utils/repository-reference.js';
 
 /**
  * Build a process env with DOCKER_HOST set when the sandbox metadata
@@ -40,6 +52,8 @@ export interface SetupHashInputs {
   taskManagers: string[];
   agent: string;
   roverVersion: string;
+  sandboxExtraArgs: string[];
+  initScriptPath?: string;
   initScriptContent: string;
   cacheFilesContent: string;
   mcps: Array<{
@@ -54,9 +68,12 @@ export interface SetupHashInputs {
     path: string;
     repository?: string;
     ref?: string;
+    repositoryRevision?: string;
+    localContentHash?: string;
     languages?: string[];
     packageManagers?: string[];
     taskManagers?: string[];
+    initScriptPath?: string;
     initScriptContent?: string;
   }>;
 }
@@ -74,6 +91,8 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
     taskManagers: [...inputs.taskManagers].sort(),
     agent: inputs.agent,
     roverVersion: inputs.roverVersion,
+    sandboxExtraArgs: [...inputs.sandboxExtraArgs],
+    initScriptPath: inputs.initScriptPath || '',
     initScriptContent: inputs.initScriptContent,
     cacheFilesContent: inputs.cacheFilesContent,
     mcps: [...inputs.mcps]
@@ -93,9 +112,12 @@ export function computeSetupHash(inputs: SetupHashInputs): string {
       path: p.path,
       repository: p.repository || '',
       ref: p.ref || '',
+      repositoryRevision: p.repositoryRevision || '',
+      localContentHash: p.localContentHash || '',
       languages: [...(p.languages || [])].sort(),
       packageManagers: [...(p.packageManagers || [])].sort(),
       taskManagers: [...(p.taskManagers || [])].sort(),
+      initScriptPath: p.initScriptPath || '',
       initScriptContent: p.initScriptContent || '',
     }));
   }
@@ -144,6 +166,7 @@ export async function waitForInitAndCommit(
 ): Promise<boolean> {
   const env = envFromSandboxMetadata(sandboxMetadata);
   const opts = env ? { env } : undefined;
+  const keepFailedContainer = process.env.ROVER_DEBUG_KEEP_FAILED_BUILD === '1';
   try {
     // `docker/podman wait` prints the exit code to stdout
     const waitResult = await launch(backend, ['wait', containerName], opts);
@@ -167,15 +190,26 @@ export async function waitForInitAndCommit(
       // Run a quick fixup container (without volumes) to set correct permissions.
       const fixupName = `${containerName}-fixup`;
       try {
-        await launch(backend, [
-          'run', '--name', fixupName,
-          '--entrypoint', '/bin/bash',
-          cacheTag,
-          '-c', 'chmod -R a+rwX /home/agent 2>/dev/null || true',
-        ], opts);
+        await launch(
+          backend,
+          [
+            'run',
+            '--name',
+            fixupName,
+            '--entrypoint',
+            '/bin/bash',
+            cacheTag,
+            '-c',
+            'chmod -R a+rwX /home/agent 2>/dev/null || true',
+          ],
+          opts
+        );
         const fixupCommitArgs = ['commit'];
         if (projectPath) {
-          fixupCommitArgs.push('--change', `LABEL rover.project.path=${projectPath}`);
+          fixupCommitArgs.push(
+            '--change',
+            `LABEL rover.project.path=${projectPath}`
+          );
         }
         if (agent) {
           fixupCommitArgs.push('--change', `LABEL rover.agent=${agent}`);
@@ -196,14 +230,32 @@ export async function waitForInitAndCommit(
     }
 
     // Container exited with an unexpected code — don't commit
-    await launch(backend, ['rm', '-f', containerName], opts);
-    return false;
-  } catch {
-    // Best-effort cleanup
-    try {
+    if (!keepFailedContainer) {
       await launch(backend, ['rm', '-f', containerName], opts);
-    } catch {
-      // ignore cleanup errors
+    } else if (VERBOSE) {
+      console.error(
+        `[rover] keeping failed build container for debugging: ${containerName}`
+      );
+    }
+    return false;
+  } catch (error) {
+    if (VERBOSE) {
+      console.error(
+        `[rover] waitForInitAndCommit failed for ${containerName}:`,
+        error
+      );
+    }
+    // Best-effort cleanup
+    if (!keepFailedContainer) {
+      try {
+        await launch(backend, ['rm', '-f', containerName], opts);
+      } catch {
+        // ignore cleanup errors
+      }
+    } else if (VERBOSE) {
+      console.error(
+        `[rover] preserving build container after failure: ${containerName}`
+      );
     }
     return false;
   }
@@ -227,6 +279,123 @@ function resolveImageId(backend: ContainerBackend, imageTag: string): string {
   }
 }
 
+function resolveRepositoryForLookup(
+  projectRoot: string,
+  repository: string
+): string {
+  if (isLocalRepositoryReference(repository)) {
+    return resolveLocalRepositoryReference(repository, projectRoot);
+  }
+
+  return repository;
+}
+
+function resolveLocalRepositoryContentHash(
+  projectRoot: string,
+  repository: string
+): string {
+  if (!isLocalRepositoryReference(repository)) {
+    return '';
+  }
+
+  const hostRepositoryPath = resolveRepositoryForLookup(
+    projectRoot,
+    repository
+  );
+
+  // Only hash local working trees. Bare repos do not have materialized files
+  // that can change outside of commits, so hashing their internals would add
+  // noise without improving cache correctness.
+  if (!existsSync(join(hostRepositoryPath, '.git'))) {
+    return '';
+  }
+
+  return hashMaterializedProjectContents(hostRepositoryPath);
+}
+
+function resolveRepositoryRevision(
+  projectRoot: string,
+  repository: string,
+  ref?: string
+): string {
+  try {
+    const target = ref || 'HEAD';
+    const lookupRepository = resolveRepositoryForLookup(
+      projectRoot,
+      repository
+    );
+    const result = launchSync('git', ['ls-remote', lookupRepository, target], {
+      reject: false,
+    });
+    const line = result.stdout?.toString().trim().split('\n')[0]?.trim();
+    if (!line) {
+      if (VERBOSE) {
+        console.warn(
+          `[rover] git ls-remote returned no output for ${lookupRepository} ref=${target} — cache hash will not include this repo's revision`
+        );
+      }
+      return '';
+    }
+
+    const [sha] = line.split(/\s+/);
+    return sha || '';
+  } catch (error) {
+    if (VERBOSE) {
+      console.warn(
+        `[rover] Warning: failed to resolve revision for ${repository}${ref ? ` ref=${ref}` : ''} — cache may not invalidate when this repo changes. ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    return '';
+  }
+}
+
+function hashMaterializedProjectContents(projectPath: string): string {
+  const hash = createHash('sha256');
+
+  try {
+    const visit = (currentPath: string, relativePath: string): void => {
+      const entries = readdirSync(currentPath, { withFileTypes: true }).sort(
+        (a, b) => a.name.localeCompare(b.name)
+      );
+
+      for (const entry of entries) {
+        if (entry.name === '.git') {
+          continue;
+        }
+
+        const entryRelativePath = relativePath
+          ? `${relativePath}/${entry.name}`
+          : entry.name;
+        const entryPath = join(currentPath, entry.name);
+
+        if (entry.isDirectory()) {
+          hash.update(`dir\0${entryRelativePath}\0`);
+          visit(entryPath, entryRelativePath);
+          continue;
+        }
+
+        if (entry.isFile()) {
+          hash.update(`file\0${entryRelativePath}\0`);
+          hash.update(readFileSync(entryPath));
+          hash.update('\0');
+          continue;
+        }
+
+        if (entry.isSymbolicLink()) {
+          hash.update(
+            `symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`
+          );
+        }
+      }
+    };
+
+    visit(projectPath, '');
+    return hash.digest('hex');
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Convenience function: compute hash, build tag, check existence.
  * Returns the cache tag and whether a cached image already exists.
@@ -244,9 +413,11 @@ export function checkImageCache(
     projectConfig.allTaskManagers ?? projectConfig.taskManagers ?? [];
 
   let initScriptContent = '';
+  let initScriptPath = '';
   if (projectConfig.initScript) {
+    initScriptPath = projectConfig.initScript;
     try {
-      const initScriptAbsPath = join(
+      const initScriptAbsPath = resolveInitScriptPath(
         projectConfig.projectRoot,
         projectConfig.initScript
       );
@@ -275,7 +446,16 @@ export function checkImageCache(
   // Read per-project init script contents for hashing
   let projects: SetupHashInputs['projects'];
   if (projectConfig.projects && projectConfig.projects.length > 0) {
-    projects = projectConfig.projects.map(p => {
+    projects = projectConfig.projects.flatMap(p => {
+      const projectPathIsSafe =
+        typeof p.path === 'string' &&
+        (typeof projectConfig.projectRoot !== 'string'
+          ? isSafeRelativePath(p.path)
+          : resolvePathWithinRoot(projectConfig.projectRoot, p.path) !== null);
+      if (!projectPathIsSafe) {
+        return [];
+      }
+
       let projectInitContent = '';
       if (p.initScript) {
         try {
@@ -289,16 +469,36 @@ export function checkImageCache(
           // treat as empty
         }
       }
-      return {
-        name: p.name,
-        path: p.path,
-        repository: p.repository,
-        ref: p.ref,
-        languages: p.languages,
-        packageManagers: p.packageManagers,
-        taskManagers: p.taskManagers,
-        initScriptContent: projectInitContent,
-      };
+      return [
+        {
+          name: p.name,
+          path: p.path,
+          repository: p.repository,
+          ref: p.ref,
+          repositoryRevision:
+            typeof p.repository === 'string'
+              ? resolveRepositoryRevision(
+                  projectConfig.projectRoot,
+                  p.repository,
+                  p.ref
+                )
+              : '',
+          localContentHash:
+            typeof p.repository === 'string'
+              ? resolveLocalRepositoryContentHash(
+                  projectConfig.projectRoot,
+                  p.repository
+                )
+              : hashMaterializedProjectContents(
+                  join(projectConfig.projectRoot, p.path)
+                ),
+          languages: p.languages,
+          packageManagers: p.packageManagers,
+          taskManagers: p.taskManagers,
+          initScriptPath: p.initScript,
+          initScriptContent: projectInitContent,
+        },
+      ];
     });
   }
 
@@ -310,6 +510,10 @@ export function checkImageCache(
     taskManagers,
     agent,
     roverVersion: getVersion(),
+    sandboxExtraArgs: getBuildContainerExtraArgs(
+      projectConfig.sandboxExtraArgs
+    ),
+    initScriptPath,
     initScriptContent,
     cacheFilesContent,
     mcps: projectConfig.mcps,

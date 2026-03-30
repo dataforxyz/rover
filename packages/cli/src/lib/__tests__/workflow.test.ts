@@ -158,17 +158,25 @@ describe('workflow utilities', () => {
         expect(typeof step.id).toBe('string');
         expect(step.id.length).toBeGreaterThan(0);
 
-        expect(step.type).toBe('agent');
+        expect(['agent', 'command', 'loop']).toContain(step.type);
 
         expect(step.name).toBeDefined();
         expect(typeof step.name).toBe('string');
 
-        expect(step.prompt).toBeDefined();
-        expect(typeof step.prompt).toBe('string');
-        expect(step.prompt.length).toBeGreaterThan(0);
+        if (step.type === 'agent') {
+          expect(step.prompt).toBeDefined();
+          expect(typeof step.prompt).toBe('string');
+          expect(step.prompt.length).toBeGreaterThan(0);
 
-        expect(step.outputs).toBeDefined();
-        expect(Array.isArray(step.outputs)).toBe(true);
+          expect(step.outputs).toBeDefined();
+          expect(Array.isArray(step.outputs)).toBe(true);
+        }
+
+        if (step.type === 'command') {
+          expect(step.command).toBeDefined();
+          expect(typeof step.command).toBe('string');
+          expect(step.command.length).toBeGreaterThan(0);
+        }
       }
     });
 
@@ -405,6 +413,10 @@ describe('workflow utilities', () => {
 
       // Check that step prompts reference valid inputs and previous steps
       for (const step of sweWorkflow!.steps) {
+        if (!step.prompt) {
+          continue;
+        }
+
         // Prompts should not be empty
         expect(step.prompt.trim().length).toBeGreaterThan(0);
 
@@ -439,6 +451,10 @@ describe('workflow utilities', () => {
 
       // Check that step prompts can contain input references
       for (const step of sweWorkflow!.steps) {
+        if (!step.prompt) {
+          continue;
+        }
+
         // Extract input references from prompt (e.g., {{inputs.description}})
         const inputReferencePattern = /{{inputs\.(\w+)}}/g;
         const matches = [...step.prompt.matchAll(inputReferencePattern)];
@@ -465,8 +481,10 @@ describe('workflow utilities', () => {
             continue;
           }
 
-          // Each step should have outputs defined
-          expect(step.outputs).toBeDefined();
+          if (!step.outputs) {
+            continue;
+          }
+
           expect(Array.isArray(step.outputs)).toBe(true);
 
           // Each output should have required properties

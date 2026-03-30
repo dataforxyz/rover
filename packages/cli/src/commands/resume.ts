@@ -102,7 +102,8 @@ const resumeCommand = async (
           );
         }
       } catch (error) {
-        jsonOutput.error = error instanceof Error ? error.message : String(error);
+        jsonOutput.error =
+          error instanceof Error ? error.message : String(error);
         await exitWithError(jsonOutput, { telemetry });
         return;
       }
@@ -140,8 +141,8 @@ const resumeCommand = async (
           colors.cyan(task.branchName || 'will be created')
       );
       console.log(
-        colors.gray('├── Checkpoint: ') +
-          (hasCheckpoint ? colors.green('found') : colors.yellow('not found'))
+        colors.gray('├── Checkpoint File: ') +
+          (hasCheckpoint ? colors.green('present') : colors.yellow('absent'))
       );
       if (process.env.ROVER_AGENT_IMAGE) {
         console.log(
@@ -193,7 +194,7 @@ const resumeCommand = async (
       description: updatedTask.description,
       status: updatedTask.status,
       resumedAt,
-      hasCheckpoint,
+      hasCheckpoint: result.resumedFromCheckpoint,
     };
 
     await exitWithSuccess('Task resumed successfully!', jsonOutput, {

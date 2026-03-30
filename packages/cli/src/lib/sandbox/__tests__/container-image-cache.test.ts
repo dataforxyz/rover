@@ -1,4 +1,13 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -33,11 +42,56 @@ function makeInputs(overrides: Partial<SetupHashInputs> = {}): SetupHashInputs {
     taskManagers: ['make'],
     agent: 'claude',
     roverVersion: '1.0.0',
+    sandboxExtraArgs: [],
+    initScriptPath: '',
     initScriptContent: '',
     cacheFilesContent: '',
     mcps: [],
     ...overrides,
   };
+}
+
+function hashDirectoryContents(dirPath: string): string {
+  const hash = createHash('sha256');
+
+  const visit = (currentPath: string, relativePath: string): void => {
+    const entries = readdirSync(currentPath, { withFileTypes: true }).sort(
+      (a, b) => a.name.localeCompare(b.name)
+    );
+
+    for (const entry of entries) {
+      if (entry.name === '.git') {
+        continue;
+      }
+
+      const entryRelativePath = relativePath
+        ? `${relativePath}/${entry.name}`
+        : entry.name;
+      const entryPath = join(currentPath, entry.name);
+
+      if (entry.isDirectory()) {
+        hash.update(`dir\0${entryRelativePath}\0`);
+        visit(entryPath, entryRelativePath);
+        continue;
+      }
+
+      if (entry.isFile()) {
+        hash.update(`file\0${entryRelativePath}\0`);
+        hash.update(readFileSync(entryPath));
+        hash.update('\0');
+        continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        hash.update(
+          `symlink\0${entryRelativePath}\0${readlinkSync(entryPath)}\0`
+        );
+      }
+    }
+  };
+
+  visit(dirPath, '');
+  return hash.digest('hex');
 }
 
 describe('computeSetupHash', () => {
@@ -93,6 +147,32 @@ describe('computeSetupHash', () => {
     const a = computeSetupHash(makeInputs({ initScriptContent: '' }));
     const b = computeSetupHash(
       makeInputs({ initScriptContent: 'apt-get install -y vim' })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when initScriptPath changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        initScriptPath: 'scripts/setup.sh',
+        initScriptContent: '#!/bin/sh\necho hi\n',
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        initScriptPath: 'scripts/bootstrap.sh',
+        initScriptContent: '#!/bin/sh\necho hi\n',
+      })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when sandboxExtraArgs change', () => {
+    const a = computeSetupHash(
+      makeInputs({ sandboxExtraArgs: ['--env', 'FOO=one'] })
+    );
+    const b = computeSetupHash(
+      makeInputs({ sandboxExtraArgs: ['--env', 'FOO=two'] })
     );
     expect(a).not.toBe(b);
   });
@@ -268,16 +348,84 @@ describe('computeSetupHash', () => {
     expect(a).not.toBe(b);
   });
 
-  it('changes when project initScriptContent changes', () => {
+  it('changes when project repositoryRevision changes', () => {
     const a = computeSetupHash(
       makeInputs({
-        projects: [{ name: 'api', path: 'api', initScriptContent: '' }],
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            repositoryRevision: 'abc123',
+          },
+        ],
       })
     );
     const b = computeSetupHash(
       makeInputs({
         projects: [
-          { name: 'api', path: 'api', initScriptContent: 'npm install' },
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            repositoryRevision: 'def456',
+          },
+        ],
+      })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when project initScriptContent changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/setup.sh',
+            initScriptContent: '',
+          },
+        ],
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/setup.sh',
+            initScriptContent: 'npm install',
+          },
+        ],
+      })
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when project initScriptPath changes', () => {
+    const a = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/setup.sh',
+            initScriptContent: '#!/bin/sh\necho api\n',
+          },
+        ],
+      })
+    );
+    const b = computeSetupHash(
+      makeInputs({
+        projects: [
+          {
+            name: 'api',
+            path: 'api',
+            initScriptPath: 'scripts/bootstrap.sh',
+            initScriptContent: '#!/bin/sh\necho api\n',
+          },
         ],
       })
     );
@@ -337,6 +485,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -345,7 +496,7 @@ describe('waitForInitAndCommit', () => {
     );
 
     expect(result).toBe(true);
-    expect(mockedLaunch).toHaveBeenCalledTimes(3);
+    expect(mockedLaunch).toHaveBeenCalledTimes(6);
     expect(mockedLaunch).toHaveBeenNthCalledWith(
       1,
       ContainerBackend.Docker,
@@ -364,6 +515,21 @@ describe('waitForInitAndCommit', () => {
       ['rm', '-f', 'test-container'],
       undefined
     );
+    expect(mockedLaunch).toHaveBeenNthCalledWith(
+      4,
+      ContainerBackend.Docker,
+      [
+        'run',
+        '--name',
+        'test-container-fixup',
+        '--entrypoint',
+        '/bin/bash',
+        'rover-cache:abc123',
+        '-c',
+        'chmod -R a+rwX /home/agent 2>/dev/null || true',
+      ],
+      undefined
+    );
   });
 
   it('includes LABEL change when projectPath is provided', async () => {
@@ -372,6 +538,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -401,6 +570,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -433,6 +605,9 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
+    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const metadata = { dockerHost: 'tcp://remote:2375' };
     const result = await waitForInitAndCommit(
@@ -446,7 +621,7 @@ describe('waitForInitAndCommit', () => {
 
     expect(result).toBe(true);
     // Every launch call should receive { env: { DOCKER_HOST: ... } }
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= 6; i++) {
       const callOpts = mockedLaunch.mock.calls[i - 1][2] as any;
       expect(callOpts?.env?.DOCKER_HOST).toBe('tcp://remote:2375');
     }
@@ -759,6 +934,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -821,6 +997,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -849,6 +1026,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -856,7 +1034,75 @@ describe('checkImageCache', () => {
     expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
   });
 
-  it('hashes sub-project init scripts using the root-relative configured path', () => {
+  it('changes when effective sandbox extra args change', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env API_URL=https://one.example',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env API_URL=https://two.example',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).not.toBe(result2.cacheTag);
+  });
+
+  it('ignores volume-only sandbox extra args in the cache hash', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env FOO=bar -v named:/cache',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        sandboxExtraArgs: '--env FOO=bar --volume different:/cache',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).toBe(result2.cacheTag);
+  });
+
+  it('hashes sub-project init scripts using the project-relative path first', () => {
     const projectRoot = createTmpDir();
     mkdirSync(join(projectRoot, 'packages', 'api', 'scripts'), {
       recursive: true,
@@ -900,6 +1146,7 @@ describe('checkImageCache', () => {
       taskManagers: [],
       agent: 'claude',
       roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
       initScriptContent: '',
       cacheFilesContent: '',
       mcps: [],
@@ -907,11 +1154,671 @@ describe('checkImageCache', () => {
         {
           name: 'api',
           path: 'packages/api',
-          initScriptContent: '#!/bin/sh\necho root\n',
+          localContentHash: hashDirectoryContents(
+            join(projectRoot, 'packages', 'api')
+          ),
+          initScriptPath: 'scripts/setup.sh',
+          initScriptContent: '#!/bin/sh\necho subproject\n',
         },
       ],
     });
 
     expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
+  it('includes external project repository revisions in the cache hash', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    const expectedHash = computeSetupHash({
+      agentImage: 'sha256:img',
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      taskManagers: [],
+      agent: 'claude',
+      roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
+      initScriptContent: '',
+      cacheFilesContent: '',
+      mcps: [],
+      projects: [
+        {
+          name: 'api',
+          path: 'packages/api',
+          repository: 'https://github.com/dataforxyz/api.git',
+          ref: 'main',
+          repositoryRevision: 'abc123',
+          localContentHash: '',
+        },
+      ],
+    });
+
+    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', 'https://github.com/dataforxyz/api.git', 'main'],
+      { reject: false }
+    );
+  });
+
+  it('includes root init script content from paths outside the workspace root', () => {
+    const projectRoot = createTmpDir();
+    const sharedDir = join(projectRoot, '..', 'shared');
+    mkdirSync(sharedDir, { recursive: true });
+    writeFileSync(
+      join(sharedDir, 'setup.sh'),
+      '#!/bin/sh\necho shared root init\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        initScript: '../shared/setup.sh',
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    const expectedHash = computeSetupHash({
+      agentImage: 'sha256:img',
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      taskManagers: [],
+      agent: 'claude',
+      roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
+      initScriptPath: '../shared/setup.sh',
+      initScriptContent: '#!/bin/sh\necho shared root init\n',
+      cacheFilesContent: '',
+      mcps: [],
+    });
+
+    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
+  it('resolves relative local project repositories against projectRoot for cache hashing', () => {
+    const projectRoot = createTmpDir();
+    mkdirSync(join(projectRoot, 'repos', 'api.git'), { recursive: true });
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: './repos/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', join(projectRoot, 'repos', 'api.git'), 'main'],
+      { reject: false }
+    );
+  });
+
+  it('maps absolute container repository paths back to the host project root for cache hashing', () => {
+    const projectRoot = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: '/workspace/sources/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', join(projectRoot, 'sources', 'api.git'), 'main'],
+      { reject: false }
+    );
+  });
+
+  it('maps file URL repositories under /workspace back to the host project root for cache hashing', () => {
+    const projectRoot = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'file:///workspace/sources/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', join(projectRoot, 'sources', 'api.git'), 'main'],
+      { reject: false }
+    );
+  });
+
+  it('resolves plain relative repositories for cache hashing', () => {
+    const projectRoot = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'repos/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', join(projectRoot, 'repos', 'api.git'), 'main'],
+      { reject: false }
+    );
+  });
+
+  it('resolves absolute local repositories under /workspace for cache hashing', () => {
+    const projectRoot = createTmpDir();
+    const hostRepoRoot = createTmpDir();
+    const hostRepo = join(hostRepoRoot, 'sources', 'api.git');
+    mkdirSync(hostRepo, { recursive: true });
+    writeFileSync(join(hostRepo, 'README.md'), '# api\n', 'utf8');
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: hostRepo,
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', hostRepo, 'main'],
+      { reject: false }
+    );
+  });
+
+  it('preserves SCP-style repository URLs for cache hashing', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'git@github.com:dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', 'git@github.com:dataforxyz/api.git', 'main'],
+      { reject: false }
+    );
+  });
+
+  it('uses absolute host repository paths for cache hashing', () => {
+    const hostRepo = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: hostRepo,
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', hostRepo, 'main'],
+      { reject: false }
+    );
+  });
+
+  it('resolves file URL repositories for cache hashing', () => {
+    const hostRepo = createTmpDir();
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: `file://${hostRepo}`,
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(mockedLaunchSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['ls-remote', hostRepo, 'main'],
+      { reject: false }
+    );
+  });
+
+  it('includes local child repository working tree contents in the cache hash', () => {
+    const projectRoot = createTmpDir();
+    const hostRepo = join(projectRoot, 'repos', 'api');
+    mkdirSync(join(hostRepo, '.git'), { recursive: true });
+    writeFileSync(
+      join(hostRepo, 'package.json'),
+      '{"name":"api","version":"1.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: './repos/api',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    const expectedHash = computeSetupHash({
+      agentImage: 'sha256:img',
+      languages: ['typescript'],
+      packageManagers: ['pnpm'],
+      taskManagers: [],
+      agent: 'claude',
+      roverVersion: '1.0.0-test',
+      sandboxExtraArgs: [],
+      initScriptContent: '',
+      cacheFilesContent: '',
+      mcps: [],
+      projects: [
+        {
+          name: 'api',
+          path: 'packages/api',
+          repository: './repos/api',
+          ref: 'main',
+          repositoryRevision: 'abc123',
+          localContentHash: hashDirectoryContents(hostRepo),
+        },
+      ],
+    });
+
+    expect(result.cacheTag).toBe(getCacheImageTag(expectedHash));
+  });
+
+  it('changes when a local materialized child project changes locally', () => {
+    const projectRoot = createTmpDir();
+    mkdirSync(join(projectRoot, 'packages', 'api'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"1.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [{ name: 'api', path: 'packages/api' }],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"2.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [{ name: 'api', path: 'packages/api' }],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).not.toBe(result2.cacheTag);
+  });
+
+  it('does not change when a repository-backed child project changes locally', () => {
+    const projectRoot = createTmpDir();
+    mkdirSync(join(projectRoot, 'packages', 'api'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"1.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result1 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    writeFileSync(
+      join(projectRoot, 'packages', 'api', 'package.json'),
+      '{"name":"api","version":"2.0.0"}\n'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'abc123\trefs/heads/main\n',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result2 = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projectRoot,
+        projects: [
+          {
+            name: 'api',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result1.cacheTag).toBe(result2.cacheTag);
+  });
+
+  it('ignores unsafe child projects when hashing cache inputs', () => {
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: '',
+      exitCode: 1,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const result = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'unsafe',
+            path: '../../escape',
+            repository: 'https://github.com/dataforxyz/unsafe.git',
+          },
+          {
+            name: 'safe',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: 'sha256:img',
+      exitCode: 0,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({
+      stdout: '',
+      exitCode: 1,
+    } as any);
+    mockedLaunchSync.mockReturnValueOnce({ exitCode: 1 } as any);
+
+    const safeOnlyResult = checkImageCache(
+      ContainerBackend.Docker,
+      makeProjectConfig({
+        projects: [
+          {
+            name: 'safe',
+            path: 'packages/api',
+            repository: 'https://github.com/dataforxyz/api.git',
+            ref: 'main',
+          },
+        ],
+      }),
+      'my-agent:latest',
+      'claude'
+    );
+
+    expect(result.cacheTag).toBe(safeOnlyResult.cacheTag);
+    expect(mockedLaunchSync).toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', 'https://github.com/dataforxyz/api.git', 'main'],
+      { reject: false }
+    );
+    expect(mockedLaunchSync).not.toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', 'https://github.com/dataforxyz/unsafe.git', 'HEAD'],
+      { reject: false }
+    );
   });
 });

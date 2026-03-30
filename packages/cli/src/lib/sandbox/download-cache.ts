@@ -1,7 +1,9 @@
 import { launch, launchSync, ProjectConfigManager, VERBOSE } from 'rover-core';
+import type { Language, PackageManager } from 'rover-schemas';
 import { ContainerBackend } from './container-common.js';
 
 const VOLUME_PREFIX = 'rover-dlcache';
+type CacheTrigger = Language | PackageManager;
 
 interface DownloadCacheEntry {
   /** Docker/Podman named volume name */
@@ -21,7 +23,7 @@ interface DownloadCacheEntry {
  * re-downloading the same files from the network.
  */
 const CACHE_DEFINITIONS: Array<{
-  triggers: string[];
+  triggers: CacheTrigger[];
   volume: string;
   containerPath: string;
 }> = [
@@ -84,10 +86,7 @@ export function getDownloadCacheEntries(
   const entries: DownloadCacheEntry[] = [];
 
   for (const def of CACHE_DEFINITIONS) {
-    if (
-      def.triggers.length === 0 ||
-      def.triggers.some(t => allNames.has(t))
-    ) {
+    if (def.triggers.length === 0 || def.triggers.some(t => allNames.has(t))) {
       entries.push({ volume: def.volume, containerPath: def.containerPath });
     }
   }
@@ -191,9 +190,7 @@ export async function removeDownloadCacheVolumes(
       removed.push(vol);
     } catch {
       if (VERBOSE) {
-        console.warn(
-          `Warning: Failed to remove download cache volume: ${vol}`
-        );
+        console.warn(`Warning: Failed to remove download cache volume: ${vol}`);
       }
     }
   }

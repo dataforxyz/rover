@@ -47,6 +47,7 @@ vi.mock('../../lib/telemetry.js', () => ({
 // Mock exit utilities to prevent process.exit
 vi.mock('../../utils/exit.js', () => ({
   exitWithError: vi.fn().mockImplementation(() => {}),
+  exitWithWarn: vi.fn().mockImplementation(() => {}),
   exitWithSuccess: vi.fn().mockImplementation(() => {}),
 }));
 
@@ -54,6 +55,14 @@ vi.mock('../../utils/exit.js', () => ({
 vi.mock('../../lib/sandbox/index.js', () => ({
   createSandbox: vi.fn().mockResolvedValue({
     stopAndRemove: vi.fn().mockResolvedValue(undefined),
+    teardownServices: vi.fn().mockResolvedValue(undefined),
+  }),
+  isSandboxBackendUnavailableError: vi.fn((error: unknown) => {
+    return (
+      error instanceof Error &&
+      error.message ===
+        'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+    );
   }),
 }));
 
@@ -127,6 +136,21 @@ describe('stop command', () => {
       expect(exitWithError).toHaveBeenCalledWith(
         expect.objectContaining({
           error: expect.stringContaining('Invalid task ID'),
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      const { exitWithError } = await import('../../utils/exit.js');
+
+      await stopCommand('12abc', { json: true });
+
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Invalid task ID '12abc' - must be a number",
         }),
         expect.objectContaining({
           telemetry: expect.anything(),
@@ -243,13 +267,138 @@ describe('stop command', () => {
       // Verify sandbox was not created since there's no container
       expect(createSandbox).not.toHaveBeenCalled();
     });
+
+    it('should tear down persisted sidecars even when task has no container id', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const sandbox = {
+        stopAndRemove: vi.fn().mockResolvedValue(undefined),
+        teardownServices: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createSandbox).mockResolvedValueOnce(sandbox as any);
+
+      const task = createTestTask(17, 'Paused task with sidecars');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-17-1',
+          containerNames: ['rover-svc-17-1-postgres'],
+          taskId: 17,
+          iteration: 1,
+        },
+      });
+
+      await stopCommand('17', { json: true });
+
+      expect(createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 17 }),
+        undefined,
+        {
+          projectPath: testDir,
+          sandboxMetadata: {
+            dockerHost: 'tcp://remote:2375',
+            serviceContext: {
+              networkName: 'rover-services-17-1',
+              containerNames: ['rover-svc-17-1-postgres'],
+              taskId: 17,
+              iteration: 1,
+            },
+          },
+        }
+      );
+      expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
+      expect(sandbox.stopAndRemove).not.toHaveBeenCalled();
+    });
+
+    it('should not clear task metadata when sandbox stopAndRemove fails', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const { exitWithError, exitWithSuccess } = await import(
+        '../../utils/exit.js'
+      );
+      vi.mocked(createSandbox).mockResolvedValueOnce({
+        stopAndRemove: vi.fn().mockRejectedValue(new Error('remove failed')),
+      } as any);
+
+      const task = createTestTask(16, 'Task with failing stop');
+      task.setContainerInfo('container-16', 'running', {
+        dockerHost: 'tcp://remote:2375',
+      });
+      task.markInProgress();
+
+      await stopCommand('16', { json: true });
+
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '16'),
+        16
+      );
+      expect(reloadedTask.status).toBe('IN_PROGRESS');
+      expect(reloadedTask.containerId).toBe('container-16');
+      expect(reloadedTask.sandboxMetadata).toEqual({
+        dockerHost: 'tcp://remote:2375',
+      });
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('remove failed'),
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+      expect(exitWithSuccess).not.toHaveBeenCalled();
+    });
+
+    it('should continue resetting the task when metadata-only cleanup cannot run without a backend', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const { exitWithError, exitWithSuccess, exitWithWarn } = await import(
+        '../../utils/exit.js'
+      );
+      vi.mocked(createSandbox).mockRejectedValueOnce(
+        new Error(
+          'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+        )
+      );
+
+      const task = createTestTask(18, 'Paused task without backend');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+      });
+
+      await stopCommand('18', { json: true });
+
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '18'),
+        18
+      );
+      expect(reloadedTask.status).toBe('NEW');
+      expect(reloadedTask.containerId).toBe('');
+      expect(reloadedTask.sandboxMetadata).toEqual({
+        dockerHost: 'tcp://remote:2375',
+      });
+      expect(exitWithError).not.toHaveBeenCalled();
+      expect(exitWithSuccess).not.toHaveBeenCalled();
+      expect(exitWithWarn).toHaveBeenCalledWith(
+        'Task stopped with warnings',
+        expect.objectContaining({
+          success: false,
+          taskId: 18,
+          status: 'NEW',
+          error: expect.stringContaining(
+            'Task metadata was preserved so cleanup can be retried later'
+          ),
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
   });
 
   describe('Workspace cleanup', () => {
-    it('should clear workspace information', async () => {
+    it('should preserve workspace information by default', async () => {
       const task = createTestTask(6, 'Task with Workspace');
-      expect(task.worktreePath).toBeTruthy();
-      expect(task.branchName).toBeTruthy();
+      const originalWorktreePath = task.worktreePath;
+      const originalBranchName = task.branchName;
 
       await stopCommand('6', { json: true });
 
@@ -257,8 +406,8 @@ describe('stop command', () => {
         join(testDir, '.rover', 'tasks', '6'),
         6
       );
-      expect(reloadedTask.worktreePath).toBe('');
-      expect(reloadedTask.branchName).toBe('');
+      expect(reloadedTask.worktreePath).toBe(originalWorktreePath);
+      expect(reloadedTask.branchName).toBe(originalBranchName);
     });
 
     it('should not remove git worktree and branch by default', async () => {
@@ -285,6 +434,12 @@ describe('stop command', () => {
       expect(existsSync(worktreePath)).toBe(false);
       const branches = launchSync('git', ['branch']).stdout;
       expect(branches).not.toContain(branchName);
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '8'),
+        8
+      );
+      expect(reloadedTask.worktreePath).toBe('');
+      expect(reloadedTask.branchName).toBe('');
     });
 
     it('should remove git worktree and branch with removeGitWorktreeAndBranch option', async () => {
@@ -301,11 +456,17 @@ describe('stop command', () => {
       expect(existsSync(worktreePath)).toBe(false);
       const branches = launchSync('git', ['branch']).stdout;
       expect(branches).not.toContain(branchName);
+      const reloadedTask = TaskDescriptionManager.load(
+        join(testDir, '.rover', 'tasks', '9'),
+        9
+      );
+      expect(reloadedTask.worktreePath).toBe('');
+      expect(reloadedTask.branchName).toBe('');
     });
   });
 
   describe('Iterations cleanup', () => {
-    it('should delete iterations directory', async () => {
+    it('should preserve iterations directory', async () => {
       const task = createTestTask(10, 'Task with Iterations');
 
       // Create iterations directory with content
@@ -318,9 +479,9 @@ describe('stop command', () => {
 
       await stopCommand('10', { json: true });
 
-      // Iterations directory should be deleted
+      // Iterations directory should remain for inspection/restart context
       const iterationsPath = join('.rover', 'tasks', '10', 'iterations');
-      expect(existsSync(iterationsPath)).toBe(false);
+      expect(existsSync(iterationsPath)).toBe(true);
     });
   });
 

@@ -76,3 +76,11 @@ export async function createSandbox(
     'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
   );
 }
+
+export function isSandboxBackendUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message ===
+      'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+  );
+}

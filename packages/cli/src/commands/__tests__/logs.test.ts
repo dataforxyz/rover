@@ -198,10 +198,9 @@ describe('logs command', () => {
 
       await logsCommand('1.5');
 
-      // parseInt('1.5') = 1, so this should try to load task 1
       expect(exitWithError).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: 'The task with ID 1 was not found',
+          error: "Invalid task ID '1.5' - must be a number",
         }),
         expect.objectContaining({
           telemetry: expect.anything(),
@@ -233,7 +232,22 @@ describe('logs command', () => {
 
       expect(exitWithError).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: 'The task with ID -1 was not found',
+          error: "Invalid task ID '-1' - must be a number",
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      const { exitWithError } = await import('../../utils/exit.js');
+
+      await logsCommand('12abc');
+
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Invalid task ID '12abc' - must be a number",
         }),
         expect.objectContaining({
           telemetry: expect.anything(),
@@ -254,6 +268,24 @@ describe('logs command', () => {
       expect(exitWithError).toHaveBeenCalledWith(
         expect.objectContaining({
           error: "Invalid iteration number: 'invalid'",
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
+    it('should reject malformed numeric iteration values with trailing characters', async () => {
+      await createTestTaskWithContainer(1, 'Test Task', 'container123');
+      createIterations(1, [1, 2]);
+
+      const { exitWithError } = await import('../../utils/exit.js');
+
+      await logsCommand('1', '2abc');
+
+      expect(exitWithError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Invalid iteration number: '2abc'",
         }),
         expect.objectContaining({
           telemetry: expect.anything(),
@@ -803,13 +835,16 @@ Last line`;
 
       await logsCommand('14', '2', { follow: true });
 
-      expect(launch).toHaveBeenCalledWith(
-        'docker',
-        ['logs', '-f', 'follow456'],
+      const { exitWithWarn } = await import('../../utils/exit.js');
+      expect(launch).not.toHaveBeenCalled();
+      expect(exitWithWarn).toHaveBeenCalledWith(
+        "Logs for iteration 2 are no longer available for task '14'. Rover can only read logs for the latest iteration's container.",
         expect.objectContaining({
-          stdout: ['inherit'],
-          stderr: ['inherit'],
-          cancelSignal: expect.any(AbortSignal),
+          logs: '',
+          success: false,
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
         })
       );
     });
@@ -873,7 +908,7 @@ Last line`;
       );
     });
 
-    it('should use specific iteration when provided', async () => {
+    it('should only read logs for the latest iteration when explicitly requested', async () => {
       await createTestTaskWithContainer(
         17,
         'Specific Iteration Task',
@@ -891,12 +926,34 @@ Last line`;
         pid: 1234,
       } as any);
 
-      await logsCommand('17', '2');
+      await logsCommand('17', '3');
 
       expect(launchSync).toHaveBeenCalledWith(
         'docker',
         ['logs', 'specific123'],
         expect.objectContaining({ env: process.env })
+      );
+    });
+
+    it('should warn instead of reading the current container for older iterations', async () => {
+      await createTestTaskWithContainer(24, 'Older Iteration Task', 'older123');
+      createIterations(24, [1, 2, 3]);
+
+      const { launchSync } = await import('rover-core');
+      const { exitWithWarn } = await import('../../utils/exit.js');
+
+      await logsCommand('24', '2');
+
+      expect(launchSync).not.toHaveBeenCalled();
+      expect(exitWithWarn).toHaveBeenCalledWith(
+        "Logs for iteration 2 are no longer available for task '24'. Rover can only read logs for the latest iteration's container.",
+        expect.objectContaining({
+          logs: '',
+          success: false,
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
       );
     });
   });
@@ -934,6 +991,7 @@ Last line`;
       createIterations(19, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
       const { launchSync } = await import('rover-core');
+      const { exitWithWarn } = await import('../../utils/exit.js');
       vi.mocked(launchSync).mockReturnValue({
         stdout: 'Many iterations logs',
         stderr: '',
@@ -945,10 +1003,16 @@ Last line`;
 
       await logsCommand('19', '5');
 
-      expect(launchSync).toHaveBeenCalledWith(
-        'docker',
-        ['logs', 'many123'],
-        expect.objectContaining({ env: process.env })
+      expect(launchSync).not.toHaveBeenCalled();
+      expect(exitWithWarn).toHaveBeenCalledWith(
+        "Logs for iteration 5 are no longer available for task '19'. Rover can only read logs for the latest iteration's container.",
+        expect.objectContaining({
+          logs: '',
+          success: false,
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
       );
     });
   });

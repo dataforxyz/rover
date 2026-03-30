@@ -4,11 +4,57 @@ import {
   ProjectConfigManager,
   TaskDescriptionManager,
 } from 'rover-core';
-import { AIAgentTool } from '../agents/index.js';
+import { createHash } from 'node:crypto';
 import {
   loadEnvsFile,
   parseCustomEnvironmentVariables,
 } from '../../utils/env-variables.js';
+import { AIAgentTool } from '../agents/index.js';
+import { ContainerBackend } from './container-common.js';
+import { isContainerMissingInspectError } from './inspect-errors.js';
+import {
+  buildServiceContainerContext,
+  createServiceNetwork,
+  hasAnyServiceContainerResources,
+  isServiceContainerContextAvailable,
+  startServiceContainers,
+  type ServiceContainerContext,
+  teardownServiceContainers,
+  waitForServicesReady,
+} from './service-containers.js';
+import type { ServiceContainer } from 'rover-schemas';
+
+const SERVICE_CONTEXT_METADATA_KEY = 'serviceContext';
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableSerialize(item)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(
+      ([left], [right]) => left.localeCompare(right)
+    );
+    return `{${entries
+      .map(
+        ([key, nestedValue]) =>
+          `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`
+      )
+      .join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function getServiceConfigHash(
+  services: ServiceContainer[] | undefined
+): string | undefined {
+  if (!services || services.length === 0) {
+    return undefined;
+  }
+
+  return createHash('sha256').update(stableSerialize(services)).digest('hex');
+}
 
 export interface SandboxOptions {
   /** Extra arguments to pass to Docker/Podman from CLI */
@@ -25,6 +71,15 @@ export interface SandboxOptions {
   resumeFromCheckpoint?: boolean;
 }
 
+export interface SandboxInspectOptions {
+  /**
+   * Whether inspecting a missing task container should also tear down
+   * persisted sidecars. Exited containers keep their service state until an
+   * explicit stop/remove path confirms the task container is gone.
+   */
+  teardownServices?: boolean;
+}
+
 export abstract class SandboxPackage {
   abstract name: string;
 
@@ -38,6 +93,8 @@ export abstract class Sandbox {
   processManager?: ProcessManager;
   task: TaskDescriptionManager;
   options?: SandboxOptions;
+  protected serviceContext?: ServiceContainerContext;
+  private servicesTornDown = false;
 
   constructor(
     task: TaskDescriptionManager,
@@ -50,8 +107,10 @@ export abstract class Sandbox {
   }
 
   abstract isBackendAvailable(): Promise<boolean>;
-  abstract openShellAtWorktree(): Promise<void>;
-  abstract inspect(): Promise<{ status: string; exitCode?: number } | null>;
+  abstract openShellAtWorktree(): Promise<{ exitCode?: number }>;
+  abstract inspect(
+    options?: SandboxInspectOptions
+  ): Promise<{ status: string; exitCode?: number } | null>;
 
   protected abstract create(): Promise<string>;
   protected abstract start(): Promise<string>;
@@ -66,6 +125,271 @@ export abstract class Sandbox {
 
   protected get sandboxName(): string {
     return `rover-task-${this.task.id}-${this.task.iterations}`;
+  }
+
+  private getPersistedServiceContext(): ServiceContainerContext | undefined {
+    if (this.servicesTornDown) {
+      return undefined;
+    }
+
+    const persisted =
+      this.options?.sandboxMetadata?.[SERVICE_CONTEXT_METADATA_KEY];
+    const record =
+      persisted && typeof persisted === 'object'
+        ? (persisted as Record<string, unknown>)
+        : undefined;
+
+    if (
+      record &&
+      typeof record.networkName === 'string' &&
+      Array.isArray(record.containerNames) &&
+      record.containerNames.every(
+        (name: unknown) => typeof name === 'string'
+      ) &&
+      typeof record.taskId === 'number' &&
+      typeof record.iteration === 'number'
+    ) {
+      return {
+        networkName: record.networkName,
+        containerNames: [...record.containerNames],
+        taskId: record.taskId,
+        iteration: record.iteration,
+        serviceConfigHash:
+          typeof record.serviceConfigHash === 'string'
+            ? record.serviceConfigHash
+            : undefined,
+      };
+    }
+
+    return undefined;
+  }
+
+  protected resolveServiceContext(): ServiceContainerContext | undefined {
+    if (this.serviceContext) {
+      return this.serviceContext;
+    }
+
+    if (this.servicesTornDown) {
+      return undefined;
+    }
+
+    return this.getPersistedServiceContext();
+  }
+
+  protected getContainerBackend(): ContainerBackend {
+    return this.backend === 'docker'
+      ? ContainerBackend.Docker
+      : ContainerBackend.Podman;
+  }
+
+  protected getServiceEnvironment(): NodeJS.ProcessEnv | undefined {
+    const dockerHost = this.options?.sandboxMetadata?.dockerHost;
+    if (typeof dockerHost === 'string') {
+      return { ...process.env, DOCKER_HOST: dockerHost };
+    }
+
+    return undefined;
+  }
+
+  protected async teardownServicesIfConfigured(): Promise<void> {
+    const serviceContext = this.resolveServiceContext();
+    if (!serviceContext) {
+      return;
+    }
+
+    await teardownServiceContainers(
+      this.getContainerBackend(),
+      serviceContext,
+      this.getServiceEnvironment()
+    );
+    this.serviceContext = undefined;
+    this.servicesTornDown = true;
+  }
+
+  protected async ensureServiceContext(
+    services: ServiceContainer[] | undefined
+  ): Promise<{ started: boolean; serviceContext?: ServiceContainerContext }> {
+    const env = this.getServiceEnvironment();
+    const existingServiceContext = this.resolveServiceContext();
+
+    if (!services || services.length === 0) {
+      if (existingServiceContext) {
+        try {
+          await teardownServiceContainers(
+            this.getContainerBackend(),
+            existingServiceContext,
+            env
+          );
+        } catch {
+          // The current config no longer uses services, so stale cleanup
+          // failures should not block startup or shell flows.
+        }
+        this.serviceContext = undefined;
+        this.servicesTornDown = true;
+      }
+      return {
+        started: false,
+        serviceContext: undefined,
+      };
+    }
+
+    const expectedServiceContext = buildServiceContainerContext(
+      services,
+      this.task.id,
+      this.task.iterations
+    );
+    expectedServiceContext.serviceConfigHash = getServiceConfigHash(services);
+
+    if (existingServiceContext) {
+      const matchesConfiguredServices =
+        existingServiceContext.networkName ===
+          expectedServiceContext.networkName &&
+        existingServiceContext.taskId === expectedServiceContext.taskId &&
+        existingServiceContext.iteration === expectedServiceContext.iteration &&
+        existingServiceContext.serviceConfigHash ===
+          expectedServiceContext.serviceConfigHash &&
+        existingServiceContext.containerNames.length ===
+          expectedServiceContext.containerNames.length &&
+        existingServiceContext.containerNames.every(
+          (name, index) => name === expectedServiceContext.containerNames[index]
+        );
+
+      if (matchesConfiguredServices) {
+        const isAvailable = await isServiceContainerContextAvailable(
+          this.getContainerBackend(),
+          existingServiceContext,
+          env
+        );
+        if (isAvailable) {
+          return {
+            started: false,
+            serviceContext: existingServiceContext,
+          };
+        }
+      }
+
+      await teardownServiceContainers(
+        this.getContainerBackend(),
+        existingServiceContext,
+        env
+      );
+      this.serviceContext = undefined;
+    }
+
+    if (
+      await hasAnyServiceContainerResources(
+        this.getContainerBackend(),
+        expectedServiceContext,
+        env
+      )
+    ) {
+      await teardownServiceContainers(
+        this.getContainerBackend(),
+        expectedServiceContext,
+        env
+      );
+    }
+
+    const networkName = await createServiceNetwork(
+      this.getContainerBackend(),
+      this.task.id,
+      this.task.iterations,
+      env
+    );
+    this.servicesTornDown = false;
+    this.serviceContext = {
+      networkName,
+      containerNames: [],
+      taskId: this.task.id,
+      iteration: this.task.iterations,
+      serviceConfigHash: expectedServiceContext.serviceConfigHash,
+    };
+
+    try {
+      const containerNames = await startServiceContainers(
+        this.getContainerBackend(),
+        services,
+        networkName,
+        this.task.id,
+        this.task.iterations,
+        env,
+        startedContainerNames => {
+          this.serviceContext = {
+            networkName,
+            containerNames: startedContainerNames,
+            taskId: this.task.id,
+            iteration: this.task.iterations,
+            serviceConfigHash: expectedServiceContext.serviceConfigHash,
+          };
+        }
+      );
+      this.serviceContext = {
+        networkName,
+        containerNames,
+        taskId: this.task.id,
+        iteration: this.task.iterations,
+        serviceConfigHash: expectedServiceContext.serviceConfigHash,
+      };
+      await waitForServicesReady(
+        this.getContainerBackend(),
+        services,
+        containerNames,
+        env
+      );
+      return {
+        started: true,
+        serviceContext: this.serviceContext,
+      };
+    } catch (error) {
+      if (this.serviceContext) {
+        try {
+          await teardownServiceContainers(
+            this.getContainerBackend(),
+            this.serviceContext,
+            env
+          );
+        } catch {
+          // Preserve the original service startup error.
+        }
+      }
+      this.serviceContext = undefined;
+      throw error;
+    }
+  }
+
+  async teardownServices(): Promise<void> {
+    await this.teardownServicesIfConfigured();
+  }
+
+  getSandboxMetadata(): Record<string, unknown> | undefined {
+    const metadata = this.options?.sandboxMetadata
+      ? { ...this.options.sandboxMetadata }
+      : {};
+    delete metadata[SERVICE_CONTEXT_METADATA_KEY];
+
+    if (
+      typeof metadata.dockerHost !== 'string' &&
+      typeof process.env.DOCKER_HOST === 'string'
+    ) {
+      metadata.dockerHost = process.env.DOCKER_HOST;
+    }
+
+    const serviceContext = this.resolveServiceContext();
+    if (serviceContext) {
+      const persistedServiceContext: Record<string, unknown> = {
+        networkName: serviceContext.networkName,
+        containerNames: [...serviceContext.containerNames],
+        taskId: serviceContext.taskId,
+        iteration: serviceContext.iteration,
+      };
+      if (typeof serviceContext.serviceConfigHash === 'string') {
+        persistedServiceContext.serviceConfigHash =
+          serviceContext.serviceConfigHash;
+      }
+      metadata[SERVICE_CONTEXT_METADATA_KEY] = persistedServiceContext;
+    }
+
+    return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
 
   async createAndStart(): Promise<string> {
@@ -97,22 +421,38 @@ export abstract class Sandbox {
    */
   async stopGracefully(): Promise<string> {
     let sandboxId = '';
+    let stoppedOrMissing = false;
+    let stopError: unknown;
     this.processManager?.addItem(
       `Stopping sandbox (${this.backend}) | Name: ${this.sandboxName}`
     );
     try {
       sandboxId = await this.stop();
+      stoppedOrMissing = true;
       this.processManager?.completeLastItem();
     } catch (_err: any) {
+      if (isContainerMissingInspectError(_err)) {
+        stoppedOrMissing = true;
+      } else {
+        stopError = _err;
+      }
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
     }
+
+    if (stopError) {
+      throw stopError;
+    }
+
     return sandboxId;
   }
 
   async stopAndRemove(): Promise<string> {
     let sandboxId = '';
+    let removedOrMissing = false;
+    let stopError: unknown;
+    let removeError: unknown;
     this.processManager?.addItem(
       `Stopping sandbox (${this.backend}) | Name: ${this.sandboxName}`
     );
@@ -120,6 +460,11 @@ export abstract class Sandbox {
       sandboxId = await this.stop();
       this.processManager?.completeLastItem();
     } catch (_err: any) {
+      if (isContainerMissingInspectError(_err)) {
+        removedOrMissing = true;
+      } else {
+        stopError = _err;
+      }
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
@@ -131,11 +476,27 @@ export abstract class Sandbox {
 
     try {
       sandboxId = await this.remove();
+      removedOrMissing = true;
       this.processManager?.completeLastItem();
     } catch (_err: any) {
+      if (isContainerMissingInspectError(_err)) {
+        removedOrMissing = true;
+      } else {
+        removeError = _err;
+      }
       this.processManager?.failLastItem();
     } finally {
       this.processManager?.finish();
+    }
+
+    // Tear down service containers and network only after the task container
+    // is definitely gone.
+    if (removedOrMissing) {
+      await this.teardownServicesIfConfigured();
+    }
+
+    if (!removedOrMissing) {
+      throw removeError ?? stopError ?? new Error('Failed to stop sandbox');
     }
 
     return sandboxId;
@@ -168,7 +529,9 @@ export abstract class Sandbox {
         customEnvVariables = [...customEnvVariables, ...fileEnvVariables];
       }
     } catch (error) {
-      // Silently skip if there's an error loading project config
+      console.error(
+        `[rover] warning: failed to load custom environment variables: ${error instanceof Error ? error.message : error}`
+      );
     }
 
     // Merge agent environment variables with custom environment variables

@@ -13,6 +13,7 @@ import { join } from 'node:path';
 
 // Mock all external dependencies
 vi.mock('rover-core', () => ({
+  VERBOSE: false,
   IterationManager: {
     createInitial: vi.fn(),
   },
@@ -79,6 +80,7 @@ let mockIterationStatus = {
   pause: vi.fn(),
   fail: vi.fn(),
 };
+let currentProjectPath = '/tmp/project';
 
 function createMockTask(overrides: Record<string, any> = {}) {
   const merged: any = {
@@ -111,12 +113,14 @@ function createMockTask(overrides: Record<string, any> = {}) {
 
 function createMockProject(task?: any) {
   return {
-    path: '/tmp/project',
+    path: currentProjectPath,
     getTask: vi.fn().mockReturnValue(task || null),
     getWorkspacePath: vi.fn().mockReturnValue('/tmp/workspace-1'),
     getTaskIterationLogsPath: vi
       .fn()
-      .mockReturnValue('/tmp/project/logs/tasks/1/iterations/1'),
+      .mockImplementation(() =>
+        join(currentProjectPath, 'logs/tasks/1/iterations/1')
+      ),
   } as any;
 }
 
@@ -147,6 +151,7 @@ describe('resumeTask', () => {
       stderr: '',
     } as any);
     tempDir = mkdtempSync(join(tmpdir(), 'rover-resume-helper-test-'));
+    currentProjectPath = join(tempDir, 'project');
   });
 
   afterEach(() => {
@@ -188,6 +193,9 @@ describe('resumeTask', () => {
       worktreePath,
       iterationsPath: () => iterationPath,
       iterations: 1,
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+      },
     });
     const project = createMockProject(task);
     const checkpointPath = join(iterationPath, '1', 'checkpoint.json');
@@ -213,6 +221,9 @@ describe('resumeTask', () => {
     );
     expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
       projectPath: project.path,
+      sandboxMetadata: {
+        dockerHost: 'tcp://remote:2375',
+      },
       checkpointPath,
       resumeFromCheckpoint: true,
       iterationLogsPath: project.getTaskIterationLogsPath(
@@ -301,6 +312,450 @@ describe('resumeTask', () => {
       project.path,
       worktreePath
     );
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: undefined,
+      resumeFromCheckpoint: false,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+  });
+
+  it('falls back to a full rerun when a multi-repo checkpoint is missing external repository state', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      '{"completedSteps":[{"id":"step1"}]}',
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'https://example.com/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-rerun'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: undefined,
+      resumeFromCheckpoint: false,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a full rerun when a local child repository checkpoint is missing repository state', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      '{"completedSteps":[{"id":"step1"}]}',
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'repos/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-resume'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: undefined,
+      resumeFromCheckpoint: false,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('resumes from checkpoint when a local child repository has checkpointed repository state', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      JSON.stringify({
+        completedSteps: [{ id: 'step1' }],
+        externalRepositories: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'repos/frontend.git',
+            head: 'abc123',
+            trackedDiffHash: 'def456',
+            untrackedHash: 'ghi789',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'repos/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-resume'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: join(iterationPath, '1', 'checkpoint.json'),
+      resumeFromCheckpoint: true,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('resumes from checkpoint when a multi-repo workspace uses absolute local repositories under /workspace', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      JSON.stringify({
+        completedSteps: [{ id: 'step1' }],
+        externalRepositories: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: '/workspace/sources/frontend.git',
+            head: 'abc123',
+            trackedDiffHash: 'def456',
+            untrackedHash: 'ghi789',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: '/workspace/sources/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-resume'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: join(iterationPath, '1', 'checkpoint.json'),
+      resumeFromCheckpoint: true,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('still falls back to a full rerun when a multi-repo checkpoint is missing SCP-style remote repository state', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      '{"completedSteps":[{"id":"step1"}]}',
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'git@github.com:example/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-rerun'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: undefined,
+      resumeFromCheckpoint: false,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('preserves legacy root-only checkpoint resumes when current config adds workspace repositories', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(project.path, { recursive: true });
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      '{"completedSteps":[{"id":"step1"}]}',
+      'utf8'
+    );
+    mockedProjectConfigManager.load.mockReturnValue({
+      excludePatterns: [],
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    } as any);
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-rerun'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: join(iterationPath, '1', 'checkpoint.json'),
+      resumeFromCheckpoint: true,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a full rerun when legacy workspace metadata requires external repository state', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(project.path, { recursive: true });
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      '{"completedSteps":[{"id":"step1"}]}',
+      'utf8'
+    );
+    writeFileSync(
+      join(worktreePath, '.rover-workspace.json'),
+      JSON.stringify({
+        projects: [
+          {
+            name: 'frontend',
+            path: 'frontend',
+            repository: 'https://example.com/frontend.git',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    mockedProjectConfigManager.load.mockReturnValue({
+      excludePatterns: [],
+      projects: [],
+    } as any);
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-rerun'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
+    expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
+      projectPath: project.path,
+      checkpointPath: undefined,
+      resumeFromCheckpoint: false,
+      iterationLogsPath: project.getTaskIterationLogsPath(
+        task.id,
+        task.iterations
+      ),
+    });
+    expect(mockedLaunchSync).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a full rerun when persisted workspace metadata is malformed', async () => {
+    const iterationPath = join(tempDir, 'iterations');
+    const worktreePath = join(tempDir, 'worktree');
+    mkdirSync(worktreePath, { recursive: true });
+    const task = createMockTask({
+      status: 'PAUSED',
+      worktreePath,
+      branchName: 'rover/task-1',
+      sourceBranch: 'main',
+      iterationsPath: () => iterationPath,
+      iterations: 1,
+    });
+    const project = createMockProject(task);
+    mkdirSync(join(iterationPath, '1'), { recursive: true });
+    writeFileSync(
+      join(iterationPath, '1', 'checkpoint.json'),
+      '{"completedSteps":[{"id":"step1"}]}',
+      'utf8'
+    );
+    writeFileSync(
+      join(iterationPath, '1', 'workspace-description.json'),
+      'not json {{{',
+      'utf8'
+    );
+    mockedProjectConfigManager.load.mockReturnValue({
+      excludePatterns: [],
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    } as any);
+
+    mockedCreateSandbox.mockResolvedValue({
+      createAndStart: vi.fn().mockResolvedValue('container-rerun'),
+    } as any);
+
+    const result = await resumeTask(project, 1);
+
+    expect(result.status).toBe('ok');
     expect(mockedCreateSandbox).toHaveBeenCalledWith(task, undefined, {
       projectPath: project.path,
       checkpointPath: undefined,

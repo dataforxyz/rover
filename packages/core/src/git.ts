@@ -1,12 +1,19 @@
 import { createReadStream } from 'node:fs';
-import { launchSync } from './os.js';
 import { join, resolve } from 'node:path';
+import { launchSync } from './os.js';
 
 export class GitError extends Error {
   constructor(reason: string) {
     super(`Error running git command. Reason: ${reason}`);
     this.name = 'GitError';
   }
+}
+
+function isMissingRemoteRefError(message: string): boolean {
+  return (
+    message.includes("couldn't find remote ref") ||
+    message.includes('remote ref does not exist')
+  );
 }
 
 export type GitDiffOptions = {
@@ -32,6 +39,15 @@ export type GitDiffStatsResult = {
 
 export type GitWorktreeOptions = {
   worktreePath?: string;
+};
+
+export type GitRemoteBranchOptions = GitWorktreeOptions & {
+  refreshIfMissing?: boolean;
+  refresh?: boolean;
+};
+
+export type GitCheckoutOptions = GitWorktreeOptions & {
+  createIfMissing?: boolean;
 };
 
 export type GitRecentCommitOptions = {
@@ -682,13 +698,13 @@ export class Git {
   /**
    * Check if a given branch exists
    */
-  branchExists(branch: string): boolean {
+  branchExists(branch: string, options: GitWorktreeOptions = {}): boolean {
     try {
       return (
         launchSync(
           'git',
           ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`],
-          { reject: false, cwd: this.cwd }
+          { reject: false, cwd: options.worktreePath ?? this.cwd }
         ).exitCode === 0
       );
     } catch (error) {
@@ -696,6 +712,120 @@ export class Git {
     }
   }
 
+  remoteBranchExists(
+    branch: string,
+    remote: string = 'origin',
+    options: GitRemoteBranchOptions = {}
+  ): boolean {
+    const effectiveCwd = options.worktreePath ?? this.cwd;
+
+    if (options.refresh) {
+      return this.refreshRemoteBranch(branch, remote, {
+        worktreePath: effectiveCwd,
+      });
+    }
+
+    try {
+      const exists =
+        launchSync(
+          'git',
+          [
+            'show-ref',
+            '--verify',
+            '--quiet',
+            `refs/remotes/${remote}/${branch}`,
+          ],
+          { reject: false, cwd: effectiveCwd }
+        ).exitCode === 0;
+
+      if (exists || !options.refreshIfMissing) {
+        return exists;
+      }
+    } catch (error) {
+      if (!options.refreshIfMissing) {
+        return false;
+      }
+    }
+
+    return this.refreshRemoteBranch(branch, remote, {
+      worktreePath: effectiveCwd,
+    });
+  }
+
+  private refreshRemoteBranch(
+    branch: string,
+    remote: string = 'origin',
+    options: GitWorktreeOptions = {}
+  ): boolean {
+    const effectiveCwd = options.worktreePath ?? this.cwd;
+    const fetchResult = launchSync(
+      'git',
+      [
+        'fetch',
+        '--no-tags',
+        remote,
+        `refs/heads/${branch}:refs/remotes/${remote}/${branch}`,
+      ],
+      {
+        reject: false,
+        cwd: effectiveCwd,
+      }
+    );
+
+    if (fetchResult.exitCode === 0) {
+      return this.remoteBranchExists(branch, remote, {
+        worktreePath: effectiveCwd,
+      });
+    }
+
+    const stderr = fetchResult.stderr?.toString() || '';
+    const stdout = fetchResult.stdout?.toString() || '';
+    const errorMessage = stderr || stdout || 'Unknown git fetch error';
+
+    if (isMissingRemoteRefError(errorMessage)) {
+      return false;
+    }
+
+    throw new GitError(
+      `Failed to fetch remote branch '${remote}/${branch}': ${errorMessage}`
+    );
+  }
+
+  checkoutBranch(branch: string, options: GitCheckoutOptions = {}): void {
+    const effectiveCwd = options.worktreePath ?? this.cwd;
+
+    if (this.branchExists(branch, { worktreePath: effectiveCwd })) {
+      launchSync('git', ['checkout', branch], {
+        cwd: effectiveCwd,
+      });
+      return;
+    }
+
+    if (options.createIfMissing) {
+      if (
+        this.remoteBranchExists(branch, 'origin', {
+          worktreePath: effectiveCwd,
+          refresh: true,
+        })
+      ) {
+        launchSync(
+          'git',
+          ['checkout', '-B', branch, `refs/remotes/origin/${branch}`],
+          {
+            cwd: effectiveCwd,
+          }
+        );
+        return;
+      }
+
+      launchSync('git', ['checkout', '-b', branch], {
+        cwd: effectiveCwd,
+      });
+      return;
+    }
+
+    throw new GitError(`Branch '${branch}' does not exist`);
+  }
   /**
    * Create worktree
    */

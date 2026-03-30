@@ -20,6 +20,10 @@ import {
   setJsonMode,
   requireProjectContext,
 } from '../lib/context.js';
+import {
+  createSandbox,
+  isSandboxBackendUnavailableError,
+} from '../lib/sandbox/index.js';
 import type { CommandDefinition } from '../types.js';
 
 const { prompt } = enquirer;
@@ -56,10 +60,10 @@ const deleteCommand = async (
   // Convert string taskId to number
   const numericTaskIds: number[] = [];
   for (const taskId of taskIds) {
-    const numericTaskId = parseInt(taskId, 10);
-    if (Number.isNaN(numericTaskId)) {
+    if (!/^\d+$/.test(taskId)) {
       jsonOutput.errors?.push(`Invalid task ID '${taskId}' - must be a number`);
     } else {
+      const numericTaskId = parseInt(taskId, 10);
       numericTaskIds.push(numericTaskId);
     }
   }
@@ -173,11 +177,37 @@ const deleteCommand = async (
   // Process deletions
   const succeededTasks: number[] = [];
   const failedTasks: number[] = [];
-  const warningTasks: number[] = [];
+  const warningTasks = new Set<number>();
 
   try {
     for (const task of tasksToDelete) {
       try {
+        if (task.containerId) {
+          const sandbox = await createSandbox(task, undefined, {
+            projectPath: project.path,
+            sandboxMetadata: task.sandboxMetadata,
+          });
+          await sandbox.stopAndRemove();
+        } else if (task.sandboxMetadata) {
+          try {
+            const sandbox = await createSandbox(task, undefined, {
+              projectPath: project.path,
+              sandboxMetadata: task.sandboxMetadata,
+            });
+            await sandbox.teardownServices();
+          } catch (error) {
+            if (!isSandboxBackendUnavailableError(error)) {
+              throw error;
+            }
+
+            jsonOutput.errors?.push(
+              `Task ${task.id}: sandbox service cleanup could not run because no container backend is available; task metadata was preserved so cleanup can be retried later`
+            );
+            failedTasks.push(task.id);
+            continue;
+          }
+        }
+
         // Delete the task using ProjectManager
         telemetry?.eventDeleteTask();
         project.deleteTask(task);
@@ -188,7 +218,7 @@ const deleteCommand = async (
         if (prune) {
           succeededTasks.push(task.id);
         } else {
-          warningTasks.push(task.id);
+          warningTasks.add(task.id);
           jsonOutput.errors?.push(
             `There was an error pruning task ${task.id.toString()} worktree`
           );
@@ -202,7 +232,7 @@ const deleteCommand = async (
     }
   } finally {
     // Determine overall success
-    const allSucceeded = failedTasks.length === 0 && warningTasks.length === 0;
+    const allSucceeded = failedTasks.length === 0 && warningTasks.size === 0;
     const someSucceeded = succeededTasks.length > 0;
 
     jsonOutput.success = allSucceeded;

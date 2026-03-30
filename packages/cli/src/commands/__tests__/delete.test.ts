@@ -69,6 +69,20 @@ vi.mock('../../utils/display.js', () => ({
   showRoverChat: vi.fn(),
 }));
 
+vi.mock('../../lib/sandbox/index.js', () => ({
+  createSandbox: vi.fn().mockResolvedValue({
+    stopAndRemove: vi.fn().mockResolvedValue(undefined),
+    teardownServices: vi.fn().mockResolvedValue(undefined),
+  }),
+  isSandboxBackendUnavailableError: vi.fn((error: unknown) => {
+    return (
+      error instanceof Error &&
+      error.message ===
+        'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+    );
+  }),
+}));
+
 describe('delete command', () => {
   let originalCwd: string;
 
@@ -177,12 +191,31 @@ describe('delete command', () => {
 
       await deleteCommand(['1.5']);
 
-      // parseInt('1.5') = 1, so this should try to delete task 1
       expect(exitWithErrors).toHaveBeenCalledWith(
-        {
-          errors: ['Task with ID 1 was not found'],
+        expect.objectContaining({
+          errors: expect.arrayContaining([
+            "Invalid task ID '1.5' - must be a number",
+          ]),
           success: false,
-        },
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+    });
+
+    it('should reject malformed numeric task IDs with trailing characters', async () => {
+      const { exitWithErrors } = await import('../../utils/exit.js');
+
+      await deleteCommand(['12abc']);
+
+      expect(exitWithErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errors: expect.arrayContaining([
+            "Invalid task ID '12abc' - must be a number",
+          ]),
+          success: false,
+        }),
         expect.objectContaining({
           telemetry: expect.anything(),
         })
@@ -213,10 +246,12 @@ describe('delete command', () => {
       await deleteCommand(['-1']);
 
       expect(exitWithErrors).toHaveBeenCalledWith(
-        {
-          errors: ['Task with ID -1 was not found'],
+        expect.objectContaining({
+          errors: expect.arrayContaining([
+            "Invalid task ID '-1' - must be a number",
+          ]),
           success: false,
-        },
+        }),
         expect.objectContaining({
           telemetry: expect.anything(),
         })
@@ -302,6 +337,86 @@ describe('delete command', () => {
         })
       );
       expect(existsSync('.rover/tasks/4')).toBe(false);
+    });
+
+    it('cleans up persisted sidecars before deleting a paused task without a container id', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const sandbox = {
+        stopAndRemove: vi.fn().mockResolvedValue(undefined),
+        teardownServices: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createSandbox).mockResolvedValueOnce(sandbox as any);
+
+      const task = createTestTask(21, 'Paused Task');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+        serviceContext: {
+          networkName: 'rover-services-21-1',
+          containerNames: ['rover-svc-21-1-postgres'],
+          taskId: 21,
+          iteration: 1,
+        },
+      });
+
+      await deleteCommand(['21'], { json: true });
+
+      expect(createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 21 }),
+        undefined,
+        {
+          projectPath: testDir,
+          sandboxMetadata: {
+            dockerHost: 'tcp://remote:2375',
+            serviceContext: {
+              networkName: 'rover-services-21-1',
+              containerNames: ['rover-svc-21-1-postgres'],
+              taskId: 21,
+              iteration: 1,
+            },
+          },
+        }
+      );
+      expect(sandbox.teardownServices).toHaveBeenCalledTimes(1);
+      expect(
+        TaskDescriptionManager.exists(join(testDir, '.rover', 'tasks', '21'))
+      ).toBe(false);
+    });
+
+    it('preserves the task when metadata-only cleanup cannot run without a backend', async () => {
+      const { createSandbox } = await import('../../lib/sandbox/index.js');
+      const { exitWithErrors, exitWithWarn } = await import(
+        '../../utils/exit.js'
+      );
+      vi.mocked(createSandbox).mockRejectedValueOnce(
+        new Error(
+          'Neither Docker nor Podman are available. Please install Docker or Podman to run tasks.'
+        )
+      );
+
+      const task = createTestTask(27, 'Paused Task Without Backend');
+      task.markPaused('paused');
+      task.setContainerInfo('', '', {
+        dockerHost: 'tcp://remote:2375',
+      });
+
+      await deleteCommand(['27'], { json: true });
+
+      expect(exitWithWarn).not.toHaveBeenCalled();
+      expect(exitWithErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          errors: expect.arrayContaining([
+            'Task 27: sandbox service cleanup could not run because no container backend is available; task metadata was preserved so cleanup can be retried later',
+          ]),
+        }),
+        expect.objectContaining({
+          telemetry: expect.anything(),
+        })
+      );
+      expect(
+        TaskDescriptionManager.exists(join(testDir, '.rover', 'tasks', '27'))
+      ).toBe(true);
     });
   });
 

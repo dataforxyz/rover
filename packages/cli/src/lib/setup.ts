@@ -4,8 +4,10 @@ import {
   mkdirSync,
   cpSync,
   existsSync,
+  readFileSync,
+  readdirSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   TaskDescriptionManager,
   IterationManager,
@@ -20,40 +22,29 @@ import pupa from 'pupa';
 import type { SandboxPackage } from './sandbox/types.js';
 import { mergeNetworkConfig, generateNetworkScript } from './network-config.js';
 import { initWorkflowStore } from './workflow.js';
+import { getDependencyResolutionCommands } from './dependency-resolution.js';
+import { shellEscape } from '../utils/shell.js';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../utils/path-safety.js';
+import {
+  isLocalRepositoryReference,
+  resolveLocalRepositoryReference,
+} from '../utils/repository-reference.js';
 
-// Language packages
-import { JavaScriptSandboxPackage } from './sandbox/languages/javascript.js';
-import { TypeScriptSandboxPackage } from './sandbox/languages/typescript.js';
-import { PHPSandboxPackage } from './sandbox/languages/php.js';
-import { RustSandboxPackage } from './sandbox/languages/rust.js';
-import { GoSandboxPackage } from './sandbox/languages/go.js';
-import { PythonSandboxPackage } from './sandbox/languages/python.js';
-import { RubySandboxPackage } from './sandbox/languages/ruby.js';
-import { DartSandboxPackage } from './sandbox/languages/dart.js';
-
-// Package manager packages
-import { NpmSandboxPackage } from './sandbox/package-managers/npm.js';
-import { PnpmSandboxPackage } from './sandbox/package-managers/pnpm.js';
-import { YarnSandboxPackage } from './sandbox/package-managers/yarn.js';
-import { ComposerSandboxPackage } from './sandbox/package-managers/composer.js';
-import { CargoSandboxPackage } from './sandbox/package-managers/cargo.js';
-import { GomodSandboxPackage } from './sandbox/package-managers/gomod.js';
-import { PipSandboxPackage } from './sandbox/package-managers/pip.js';
-import { PoetrySandboxPackage } from './sandbox/package-managers/poetry.js';
-import { UvSandboxPackage } from './sandbox/package-managers/uv.js';
-import { RubygemsSandboxPackage } from './sandbox/package-managers/rubygems.js';
-import { PubSandboxPackage } from './sandbox/package-managers/pub.js';
-
-// Task manager packages
-import { JustSandboxPackage } from './sandbox/task-managers/just.js';
-import { MakeSandboxPackage } from './sandbox/task-managers/make.js';
-import { TaskSandboxPackage } from './sandbox/task-managers/task.js';
+import { getRootInitScriptMountPath } from './sandbox/container-common.js';
+import { getPackagesFromConfig } from './sandbox/packages.js';
 
 /**
  * SetupBuilder class - Consolidates Docker setup script generation
  * Replaces the existing docker-setup.sh and docker-setup-gemini.sh files
  */
 export class SetupBuilder {
+  private repositoryMounts: Array<{
+    hostPath: string;
+    containerPath: string;
+  }> = [];
   private agent: string;
   private task: TaskDescriptionManager;
   private taskBasePath: string;
@@ -61,6 +52,15 @@ export class SetupBuilder {
   private isDockerRootless: boolean;
   private projectConfig: ProjectConfigManager;
   private resumeFromCheckpoint: boolean;
+  private workspaceProjects: Array<{
+    name: string;
+    path: string;
+    repository?: string;
+    runtimeRepository?: string;
+    ref?: string;
+    languages?: string[];
+    packageManagers?: string[];
+  }>;
 
   constructor(
     taskDescription: TaskDescriptionManager,
@@ -92,124 +92,226 @@ export class SetupBuilder {
     // Set up paths using TaskDescriptionManager methods
     this.taskBasePath = this.task.getBasePath();
     this.iterationPath = this.task.getIterationPath();
+    this.workspaceProjects = this.resolveWorkspaceProjects();
 
     // Ensures the directories exist
     mkdirSync(this.iterationPath, { recursive: true });
   }
 
-  /**
-   * Get language sandbox packages based on project configuration
-   */
-  private getLanguagePackages(): SandboxPackage[] {
-    const packages: SandboxPackage[] = [];
+  private resolveWorkspaceProjects(): Array<{
+    name: string;
+    path: string;
+    repository?: string;
+    runtimeRepository?: string;
+    ref?: string;
+    languages?: string[];
+    packageManagers?: string[];
+  }> {
+    const persistedProjects = this.getPersistedWorkspaceProjects();
+    if (persistedProjects !== undefined) {
+      return persistedProjects;
+    }
 
-    for (const language of this.projectConfig.allLanguages ?? []) {
-      switch (language) {
-        case 'javascript':
-          packages.push(new JavaScriptSandboxPackage());
-          break;
-        case 'typescript':
-          packages.push(new TypeScriptSandboxPackage());
-          break;
-        case 'php':
-          packages.push(new PHPSandboxPackage());
-          break;
-        case 'rust':
-          packages.push(new RustSandboxPackage());
-          break;
-        case 'go':
-          packages.push(new GoSandboxPackage());
-          break;
-        case 'python':
-          packages.push(new PythonSandboxPackage());
-          break;
-        case 'ruby':
-          packages.push(new RubySandboxPackage());
-          break;
-        case 'dart':
-          packages.push(new DartSandboxPackage());
-          break;
+    return (this.projectConfig.projects ?? []).flatMap((project, index) => {
+      if (
+        typeof project?.name !== 'string' ||
+        typeof project?.path !== 'string' ||
+        !this.isSafeWorkspacePath(project.path)
+      ) {
+        return [];
+      }
+
+      const repositoryMount = this.resolveRepositoryMount(
+        project.repository,
+        index
+      );
+
+      return [
+        {
+          name: project.name,
+          path: project.path,
+          repository: project.repository,
+          runtimeRepository:
+            repositoryMount?.containerPath ?? project.repository,
+          ref: project.ref,
+          languages: project.languages ?? [],
+          packageManagers: project.packageManagers ?? [],
+        },
+      ];
+    });
+  }
+
+  private getPersistedWorkspaceProjects():
+    | Array<{
+        name: string;
+        path: string;
+        repository?: string;
+        runtimeRepository?: string;
+        ref?: string;
+        languages?: string[];
+        packageManagers?: string[];
+      }>
+    | undefined {
+    const parsePersistedWorkspaceProjects = (
+      descriptionPath: string
+    ):
+      | Array<{
+          name: string;
+          path: string;
+          repository?: string;
+          runtimeRepository?: string;
+          ref?: string;
+          languages?: string[];
+          packageManagers?: string[];
+        }>
+      | undefined => {
+      try {
+        const parsed = JSON.parse(readFileSync(descriptionPath, 'utf8')) as {
+          projects?: Array<{
+            name?: unknown;
+            path?: unknown;
+            repository?: unknown;
+            ref?: unknown;
+            languages?: unknown;
+            packageManagers?: unknown;
+          }>;
+        };
+
+        return (Array.isArray(parsed.projects) ? parsed.projects : []).flatMap(
+          (project, index) => {
+            if (
+              typeof project?.name !== 'string' ||
+              typeof project?.path !== 'string' ||
+              !this.isSafeWorkspacePath(project.path)
+            ) {
+              return [];
+            }
+
+            const repository =
+              typeof project.repository === 'string'
+                ? project.repository
+                : undefined;
+            const repositoryMount = this.resolveRepositoryMount(
+              repository,
+              index
+            );
+
+            return [
+              {
+                name: project.name,
+                path: project.path,
+                repository,
+                runtimeRepository: repositoryMount?.containerPath ?? repository,
+                ref: typeof project.ref === 'string' ? project.ref : undefined,
+                languages: Array.isArray(project.languages)
+                  ? project.languages.filter(
+                      (language): language is string =>
+                        typeof language === 'string'
+                    )
+                  : [],
+                packageManagers: Array.isArray(project.packageManagers)
+                  ? project.packageManagers.filter(
+                      (pm): pm is string => typeof pm === 'string'
+                    )
+                  : [],
+              },
+            ];
+          }
+        );
+      } catch {
+        return undefined;
+      }
+    };
+    const legacyDescriptionPath = this.task.worktreePath
+      ? join(this.task.worktreePath, '.rover-workspace.json')
+      : join(this.taskBasePath, '.rover-workspace.json');
+
+    const iterationsPath = join(this.taskBasePath, 'iterations');
+    if (!existsSync(iterationsPath)) {
+      return existsSync(legacyDescriptionPath)
+        ? (parsePersistedWorkspaceProjects(legacyDescriptionPath) ?? [])
+        : undefined;
+    }
+
+    const iterationIds = readdirSync(iterationsPath, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => Number.parseInt(dirent.name, 10))
+      .filter(iteration => !Number.isNaN(iteration))
+      .sort((a, b) => b - a);
+
+    if (iterationIds.length === 0) {
+      return existsSync(legacyDescriptionPath)
+        ? (parsePersistedWorkspaceProjects(legacyDescriptionPath) ?? [])
+        : undefined;
+    }
+
+    let foundPersistedWorkspaceDescription = false;
+
+    for (const iterationId of iterationIds) {
+      const descriptionPath = join(
+        iterationsPath,
+        iterationId.toString(),
+        'workspace-description.json'
+      );
+      if (!existsSync(descriptionPath)) {
+        continue;
+      }
+      foundPersistedWorkspaceDescription = true;
+      const persistedProjects =
+        parsePersistedWorkspaceProjects(descriptionPath);
+      if (persistedProjects !== undefined) {
+        return persistedProjects;
       }
     }
 
-    return packages;
-  }
-
-  /**
-   * Get package manager sandbox packages based on project configuration
-   */
-  private getPackageManagerPackages(): SandboxPackage[] {
-    const packages: SandboxPackage[] = [];
-
-    for (const packageManager of this.projectConfig.allPackageManagers ?? []) {
-      switch (packageManager) {
-        case 'npm':
-          packages.push(new NpmSandboxPackage());
-          break;
-        case 'pnpm':
-          packages.push(new PnpmSandboxPackage());
-          break;
-        case 'yarn':
-          packages.push(new YarnSandboxPackage());
-          break;
-        case 'composer':
-          packages.push(new ComposerSandboxPackage());
-          break;
-        case 'cargo':
-          packages.push(new CargoSandboxPackage());
-          break;
-        case 'gomod':
-          packages.push(new GomodSandboxPackage());
-          break;
-        case 'pip':
-          packages.push(new PipSandboxPackage());
-          break;
-        case 'poetry':
-          packages.push(new PoetrySandboxPackage());
-          break;
-        case 'uv':
-          packages.push(new UvSandboxPackage());
-          break;
-        case 'rubygems':
-          packages.push(new RubygemsSandboxPackage());
-          break;
-        case 'pub':
-          packages.push(new PubSandboxPackage());
-          break;
-      }
+    if (existsSync(legacyDescriptionPath)) {
+      return parsePersistedWorkspaceProjects(legacyDescriptionPath) ?? [];
     }
 
-    return packages;
+    return foundPersistedWorkspaceDescription ? [] : undefined;
   }
 
-  /**
-   * Get task manager sandbox packages based on project configuration
-   */
-  private getTaskManagerPackages(): SandboxPackage[] {
-    const packages: SandboxPackage[] = [];
+  private isSafeWorkspacePath(relativePath: string): boolean {
+    return typeof this.projectConfig.projectRoot === 'string'
+      ? resolvePathWithinRoot(this.projectConfig.projectRoot, relativePath) !==
+          null
+      : isSafeRelativePath(relativePath);
+  }
 
-    for (const taskManager of this.projectConfig.allTaskManagers ?? []) {
-      switch (taskManager) {
-        case 'just':
-          packages.push(new JustSandboxPackage());
-          break;
-        case 'make':
-          packages.push(new MakeSandboxPackage());
-          break;
-        case 'task':
-          packages.push(new TaskSandboxPackage());
-          break;
-      }
+  private resolveRepositoryMount(
+    repository: unknown,
+    index: number
+  ): { hostPath: string; containerPath: string } | undefined {
+    if (
+      typeof repository !== 'string' ||
+      !isLocalRepositoryReference(repository)
+    ) {
+      return undefined;
     }
 
-    return packages;
+    const repositoryResolutionRoot =
+      this.projectConfig.projectRoot ?? this.taskBasePath;
+    const hostPath = resolveLocalRepositoryReference(
+      repository,
+      repositoryResolutionRoot
+    );
+
+    if (!existsSync(hostPath)) {
+      throw new Error(`Local workspace repository not found: ${hostPath}`);
+    }
+
+    const containerPath = `/workspace-repos/${index}`;
+    this.repositoryMounts.push({ hostPath, containerPath });
+    return { hostPath, containerPath };
   }
 
-  /**
-   * Safely single-quote a value for shell interpolation.
-   */
-  private shellEscape(value: string): string {
-    return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+  private getDependencyResolutionCommands(): string[] {
+    return getDependencyResolutionCommands({
+      rootPackageManagers: this.projectConfig.packageManagers ?? [],
+      projects: this.workspaceProjects,
+      workspaceRoot: this.projectConfig.projectRoot,
+      addVenvPathExports: true,
+    });
   }
 
   /**
@@ -264,94 +366,29 @@ sudo chown -R $(id -u):$(id -g) /workspace
 source $HOME/.profile`;
     }
 
+    // SECURITY NOTE: Disabling git's directory ownership check with '*' is safe here
+    // because this only runs inside ephemeral, single-user task containers where the
+    // workspace is bind-mounted with a different UID than the container user.
+    const gitSafeDirectorySetup = `# Allow git operations across mounted workspaces and embedded repositories.
+# This is safe inside ephemeral task containers — the wildcard disables ownership
+# checks that would otherwise block operations on bind-mounted directories.
+git config --global --add safe.directory '*' 2>/dev/null || true
+git config --system --add safe.directory '*' 2>/dev/null || true`;
+
     // --- workspace dependency resolution (runs even with cached images) ---
     // Some package managers (uv, poetry, pip -e) create virtualenvs in /workspace
     // which can't be done during image build (/workspace is read-only).
     // Resolve deps here since /workspace is now read-write.
     let workspaceDeps = '';
-    if (useCachedImage) {
-      const depCmds: string[] = [];
-      const pms = this.projectConfig.allPackageManagers ?? [];
-      if (pms.includes('uv')) {
-        depCmds.push(
-          'if [ -f /workspace/pyproject.toml ]; then',
-          '  echo "📦 Resolving Python dependencies (uv)..."',
-          '  cd /workspace && uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras 2>/dev/null || uv sync 2>/dev/null || true',
-          '  # Add venv to PATH so python/pytest are available without "uv run"',
-          '  if [ -d /workspace/.venv/bin ]; then',
-          '    export PATH="/workspace/.venv/bin:$PATH"',
-          '    echo \'export PATH="/workspace/.venv/bin:$PATH"\' >> $HOME/.profile',
-          '  fi',
-          'fi'
-        );
-      }
-      if (pms.includes('poetry')) {
-        depCmds.push(
-          'if [ -f /workspace/pyproject.toml ]; then',
-          '  echo "📦 Resolving Python dependencies (poetry)..."',
-          '  cd /workspace && poetry install --no-interaction 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('pub')) {
-        depCmds.push(
-          'if [ -f /workspace/pubspec.yaml ]; then',
-          '  echo "📦 Resolving Dart dependencies..."',
-          '  cd /workspace && flutter pub get 2>/dev/null || dart pub get 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('pnpm')) {
-        depCmds.push(
-          'if [ -f /workspace/pnpm-lock.yaml ]; then',
-          '  echo "📦 Resolving Node dependencies (pnpm)..."',
-          '  cd /workspace && pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('npm')) {
-        depCmds.push(
-          'if [ -f /workspace/package-lock.json ]; then',
-          '  echo "📦 Resolving Node dependencies (npm)..."',
-          '  cd /workspace && npm ci 2>/dev/null || npm install 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('yarn')) {
-        depCmds.push(
-          'if [ -f /workspace/yarn.lock ]; then',
-          '  echo "📦 Resolving Node dependencies (yarn)..."',
-          '  cd /workspace && yarn install --frozen-lockfile 2>/dev/null || yarn install 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (pms.includes('gomod')) {
-        depCmds.push(
-          'if [ -f /workspace/go.mod ]; then',
-          '  echo "📦 Resolving Go dependencies..."',
-          '  cd /workspace && go mod download 2>/dev/null || true',
-          'elif [ -f /workspace/src/go.mod ]; then',
-          '  cd /workspace/src && go mod download 2>/dev/null || true',
-          'fi'
-        );
-      }
-      if (depCmds.length > 0) {
-        workspaceDeps = depCmds.join('\n');
-      }
+    const depCmds = this.getDependencyResolutionCommands();
+    if (depCmds.length > 0) {
+      workspaceDeps = depCmds.join('\n');
     }
 
     // --- package installation ---
     let installAllPackages = '';
     if (!useCachedImage) {
-      const languagePackages = this.getLanguagePackages();
-      const packageManagerPackages = this.getPackageManagerPackages();
-      const taskManagerPackages = this.getTaskManagerPackages();
-
-      const allPackages = [
-        ...languagePackages,
-        ...packageManagerPackages,
-        ...taskManagerPackages,
-      ];
+      const allPackages = getPackagesFromConfig(this.projectConfig);
 
       if (allPackages.length > 0) {
         const installScripts: string[] = [];
@@ -453,21 +490,21 @@ fi`;
       if (mcps && mcps.length > 0) {
         configureAllMCPCommands.push('echo "✅ Configuring custom MCPs"');
         for (const mcp of mcps) {
-          let cmd = `rover-agent config mcp ${this.agent} ${this.shellEscape(mcp.name)} --transport ${this.shellEscape(mcp.transport)}`;
+          let cmd = `rover-agent config mcp ${shellEscape(this.agent)} ${shellEscape(mcp.name)} --transport ${shellEscape(mcp.transport)}`;
 
           if (mcp.envs && mcp.envs.length > 0) {
             for (const env of mcp.envs) {
-              cmd += ` --env ${this.shellEscape(env)}`;
+              cmd += ` --env ${shellEscape(env)}`;
             }
           }
 
           if (mcp.headers && mcp.headers.length > 0) {
             for (const header of mcp.headers) {
-              cmd += ` --header ${this.shellEscape(header)}`;
+              cmd += ` --header ${shellEscape(header)}`;
             }
           }
 
-          cmd += ` ${this.shellEscape(mcp.commandOrUrl)}`;
+          cmd += ` ${shellEscape(mcp.commandOrUrl)}`;
 
           configureAllMCPCommands.push(cmd);
         }
@@ -513,35 +550,68 @@ echo -e "\\n📦 Done installing MCP servers"`;
     let initScriptExecution = '';
     const allInitScripts = this.projectConfig.allInitScripts;
     const executableInitScripts = allInitScripts.flatMap((entry, index) =>
-      useCachedImage && !entry.path ? [] : [{ entry, index }]
+      useCachedImage && !entry.path
+        ? []
+        : !entry.path || this.isSafeWorkspacePath(entry.path)
+          ? [{ entry, index }]
+          : []
     );
     if (executableInitScripts.length > 0) {
       const scriptBlocks: string[] = [];
       for (const { entry, index } of executableInitScripts) {
-        const mountPath =
-          allInitScripts.length === 1 && !entry.path
-            ? '/init-script.sh'
-            : `/init-script-${index}.sh`;
-        const escapedWorkspacePath = entry.path
-          ? this.shellEscape(`/workspace/${entry.path}`)
-          : '';
         const label = entry.path ? ` (${entry.path})` : '';
-        let block = `echo "🔧 Running initialization script${label}"
-chmod +x ${mountPath}`;
         if (entry.path) {
-          block += `\ncd ${escapedWorkspacePath}`;
-        }
-        block += `\n/bin/sh ${mountPath}
+          scriptBlocks.push(`echo "🔧 Running initialization script${label}"
+workspace_project_script_${index}=${shellEscape(`/workspace/${entry.path}/${entry.script}`)}
+workspace_root_script_${index}=${shellEscape(`/workspace/${entry.script}`)}
+if [ -f "$workspace_project_script_${index}" ]; then
+  workspace_script_${index}="$workspace_project_script_${index}"
+  workspace_dir_${index}=${shellEscape(`/workspace/${entry.path}`)}
+elif [ -f "$workspace_root_script_${index}" ]; then
+  workspace_script_${index}="$workspace_root_script_${index}"
+  workspace_dir_${index}='/workspace'
+else
+  echo "❌ Initialization script${label} not found at $workspace_project_script_${index} or $workspace_root_script_${index}"
+  safe_exit 1
+fi
+chmod +x "$workspace_script_${index}"
+cd "$workspace_dir_${index}"
+bash "$workspace_script_${index}"
 if [ $? -eq 0 ]; then
   echo "✅ Initialization script${label} completed successfully"
 else
   echo "❌ Initialization script${label} failed"
   safe_exit 1
-fi`;
-        if (entry.path) {
-          block += '\ncd /workspace';
+fi
+cd /workspace`);
+          continue;
         }
-        scriptBlocks.push(block);
+
+        const escapedMountedScript = shellEscape(
+          getRootInitScriptMountPath(allInitScripts, index)
+        );
+        const escapedWorkspaceScript = shellEscape(
+          `/workspace/${entry.script}`
+        );
+        scriptBlocks.push(`echo "🔧 Running initialization script${label}"
+mounted_script_${index}=${escapedMountedScript}
+workspace_script_${index}=${escapedWorkspaceScript}
+if [ -f "$mounted_script_${index}" ]; then
+  root_script_${index}="$mounted_script_${index}"
+elif [ -f "$workspace_script_${index}" ]; then
+  root_script_${index}="$workspace_script_${index}"
+else
+  echo "❌ Initialization script${label} not found at $mounted_script_${index} or $workspace_script_${index}"
+  safe_exit 1
+fi
+chmod +x "$root_script_${index}"
+bash "$root_script_${index}"
+if [ $? -eq 0 ]; then
+  echo "✅ Initialization script${label} completed successfully"
+else
+  echo "❌ Initialization script${label} failed"
+  safe_exit 1
+fi`);
       }
       initScriptExecution = `
 echo -e "\\n======================================="
@@ -553,11 +623,13 @@ ${scriptBlocks.join('\n')}
 
     // --- external project repositories ---
     let projectRepositoriesSection = '';
-    const projectsWithRepositories = (this.projectConfig.projects || []).filter(
+    const projectsWithRepositories = this.workspaceProjects.filter(
       project => project.repository
     );
 
     if (projectsWithRepositories.length > 0) {
+      const taskBranch = this.task.branchName || `task/${this.task.id}`;
+      const escapedTaskBranch = shellEscape(taskBranch);
       const repositoryStateFunctions = `
 compute_repo_untracked_hash() {
   local repo_path="$1"
@@ -638,11 +710,13 @@ NODE
 
       const syncBlocks = projectsWithRepositories.map(project => {
         const targetPath = `/workspace/${project.path}`;
-        const escapedName = this.shellEscape(project.name);
-        const escapedPath = this.shellEscape(targetPath);
-        const escapedRepository = this.shellEscape(project.repository!);
-        const escapedRef = project.ref ? this.shellEscape(project.ref) : '';
-        const checkpointLookupScript = this.shellEscape(
+        const escapedName = shellEscape(project.name);
+        const escapedPath = shellEscape(targetPath);
+        const escapedRepository = shellEscape(
+          project.runtimeRepository ?? project.repository!
+        );
+        const escapedRef = project.ref ? shellEscape(project.ref) : '';
+        const checkpointLookupScript = shellEscape(
           `const fs=require('fs'); const checkpoint=JSON.parse(fs.readFileSync('/output/checkpoint.json','utf8')); const entry=(checkpoint.externalRepositories||[]).find(repo => repo.path === ${JSON.stringify(project.path)}); if (!entry) process.exit(2); process.stdout.write([entry.head, entry.trackedDiffHash, entry.untrackedHash].join('\\t'));`
         );
 
@@ -659,15 +733,33 @@ else
 fi`
           : `
 default_remote_ref=$(git -C ${escapedPath} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
-if [ -z "$default_remote_ref" ]; then
-  echo "❌ Could not determine default remote branch for ${escapedName}"
-  safe_exit 1
-fi
-default_branch="\${default_remote_ref#origin/}"
-echo "🔀 Checking out default branch $default_branch for ${escapedName}"
-git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"`;
+if [ -n "$default_remote_ref" ]; then
+  default_branch="\${default_remote_ref#origin/}"
+  echo "🔀 Checking out default branch $default_branch for ${escapedName}"
+  git -C ${escapedPath} checkout -B "$default_branch" "$default_remote_ref"
+else
+  current_branch=$(git -C ${escapedPath} branch --show-current 2>/dev/null || true)
+  if [ -n "$current_branch" ] && git -C ${escapedPath} rev-parse --verify refs/remotes/origin/$current_branch >/dev/null 2>&1; then
+    echo "🔀 Remote HEAD not advertised for ${escapedName}; reusing checked out branch $current_branch"
+    git -C ${escapedPath} checkout -B "$current_branch" "refs/remotes/origin/$current_branch"
+  else
+    echo "🔀 Remote HEAD not advertised for ${escapedName}; keeping current checkout"
+  fi
+fi`;
 
         if (this.resumeFromCheckpoint) {
+          const checkpointStateValidation = `if ! expected_state=$(node -e ${checkpointLookupScript}); then
+  echo "❌ Checkpoint is missing repository state for ${escapedName}; cannot resume safely"
+  safe_exit 1
+fi
+IFS=$'\\t' read -r expected_head expected_tracked_diff_hash expected_untracked_hash <<< "$expected_state"
+current_head=$(git -C ${escapedPath} rev-parse HEAD)
+current_tracked_diff_hash=$(compute_repo_tracked_diff_hash ${escapedPath})
+current_untracked_hash=$(compute_repo_untracked_hash ${escapedPath})
+if [ "$current_head" != "$expected_head" ] || [ "$current_tracked_diff_hash" != "$expected_tracked_diff_hash" ] || [ "$current_untracked_hash" != "$expected_untracked_hash" ]; then
+  echo "❌ Repository ${escapedName} no longer matches the checkpointed revision"
+  safe_exit 1
+fi`;
           return `echo "📥 Verifying repository ${escapedName} for checkpoint resume"
 if [ ! -d ${escapedPath}/.git ]; then
   echo "❌ Repository ${escapedName} is missing at ${escapedPath}; cannot resume from checkpoint safely"
@@ -682,18 +774,7 @@ if [ ! -f /output/checkpoint.json ]; then
   echo "❌ Checkpoint file is missing; cannot resume ${escapedName} safely"
   safe_exit 1
 fi
-if ! expected_state=$(node -e ${checkpointLookupScript}); then
-  echo "❌ Checkpoint is missing repository state for ${escapedName}; cannot resume safely"
-  safe_exit 1
-fi
-IFS=$'\\t' read -r expected_head expected_tracked_diff_hash expected_untracked_hash <<< "$expected_state"
-current_head=$(git -C ${escapedPath} rev-parse HEAD)
-current_tracked_diff_hash=$(compute_repo_tracked_diff_hash ${escapedPath})
-current_untracked_hash=$(compute_repo_untracked_hash ${escapedPath})
-if [ "$current_head" != "$expected_head" ] || [ "$current_tracked_diff_hash" != "$expected_tracked_diff_hash" ] || [ "$current_untracked_hash" != "$expected_untracked_hash" ]; then
-  echo "❌ Repository ${escapedName} no longer matches the checkpointed revision"
-  safe_exit 1
-fi
+${checkpointStateValidation}
 echo "✅ Repository ${escapedName} is ready for checkpoint resume"`;
         }
 
@@ -701,7 +782,10 @@ echo "✅ Repository ${escapedName} is ready for checkpoint resume"`;
 mkdir -p "$(dirname ${escapedPath})"
 if [ ! -d ${escapedPath}/.git ]; then
   rm -rf ${escapedPath}
-  git clone ${escapedRepository} ${escapedPath}
+  if ! git clone ${escapedRepository} ${escapedPath}; then
+    echo "❌ Failed to clone repository ${escapedName}"
+    safe_exit 1
+  fi
 else
   current_origin=$(git -C ${escapedPath} remote get-url origin 2>/dev/null || true)
   if [ "$current_origin" != ${escapedRepository} ]; then
@@ -714,8 +798,20 @@ if ! git -C ${escapedPath} fetch --all --tags --prune; then
   safe_exit 1
 fi
 ${checkoutRef}
+if git -C ${escapedPath} rev-parse --verify refs/remotes/origin/${escapedTaskBranch} >/dev/null 2>&1; then
+  echo "🌿 Checking out task branch ${escapedTaskBranch} for ${escapedName} from origin"
+  git -C ${escapedPath} checkout -B ${escapedTaskBranch} refs/remotes/origin/${escapedTaskBranch}
+elif git -C ${escapedPath} rev-parse --verify refs/heads/${escapedTaskBranch} >/dev/null 2>&1; then
+  echo "🌿 Reusing local task branch ${escapedTaskBranch} for ${escapedName}"
+  git -C ${escapedPath} checkout ${escapedTaskBranch}
+else
+  echo "🌿 Creating task branch ${escapedTaskBranch} for ${escapedName}"
+  git -C ${escapedPath} checkout -B ${escapedTaskBranch} HEAD
+fi
 git -C ${escapedPath} reset --hard HEAD
-git -C ${escapedPath} clean -fd
+# Remove ignored files too so restarted tasks do not inherit stale child-repo
+# build outputs, caches, or generated artifacts from prior runs.
+git -C ${escapedPath} clean -fdx
 echo "✅ Repository ${escapedName} is ready"`;
       });
 
@@ -736,14 +832,18 @@ ${syncBlocks.join('\n')}
       ? ''
       : `# Remove ourselves from sudoers
 echo -e "\\n👤 Removing privileges after completing the setup!"
-sudo rm /etc/sudoers.d/1-agent-setup`;
+sudo rm -f /etc/sudoers.d/1-agent-setup`;
 
     // Generate network filtering configuration (always runs — iptables are runtime state)
     const effectiveNetworkConfig = mergeNetworkConfig(
       this.projectConfig.network,
       this.task.networkConfig
     );
-    const networkConfigSection = generateNetworkScript(effectiveNetworkConfig);
+    const networkConfigSection = generateNetworkScript(effectiveNetworkConfig, {
+      serviceHostnames: (this.projectConfig.services ?? []).map(
+        service => service.name
+      ),
+    });
 
     // Generate template variables for task-related sections
     const validateTaskFileFunction = includeTaskSetup
@@ -804,6 +904,7 @@ echo "======================================="
       recoverPermissions,
       aptGetUpdate,
       homeSetup,
+      gitSafeDirectorySetup,
       installAllPackages,
       workspaceDeps,
       agentInstallSection,
@@ -856,7 +957,7 @@ echo "======================================="
    * Returns the file path, or undefined if no projects are configured.
    */
   generateWorkspaceDescription(): string | undefined {
-    const projects = this.projectConfig.projects;
+    const projects = this.workspaceProjects;
     if (!projects || projects.length === 0) {
       return undefined;
     }
@@ -876,6 +977,10 @@ echo "======================================="
     writeFileSync(filePath, JSON.stringify(description, null, 2), 'utf-8');
 
     return filePath;
+  }
+
+  getRepositoryMounts(): Array<{ hostPath: string; containerPath: string }> {
+    return [...this.repositoryMounts];
   }
 
   /**

@@ -20,6 +20,7 @@ import {
   type HooksConfig,
   type NetworkConfig,
   type SubProject,
+  type ServiceContainer,
 } from 'rover-schemas';
 import { GlobalConfigManager } from './global-config.js';
 
@@ -282,6 +283,9 @@ export class ProjectConfigManager {
   }
   get projects(): SubProject[] | undefined {
     return this.data.projects;
+  }
+  get services(): ServiceContainer[] | undefined {
+    return this.data.sandbox?.services;
   }
 
   /**

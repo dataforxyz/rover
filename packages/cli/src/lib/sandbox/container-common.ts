@@ -8,9 +8,13 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, UserInfo } from 'node:os';
+import {
+  isSafeRelativePath,
+  resolvePathWithinRoot,
+} from '../../utils/path-safety.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -117,30 +121,89 @@ export function warnIfCustomImage(projectConfig?: ProjectConfigManager): void {
 }
 
 /**
- * Resolve the path of an init script from the workspace root first.
- * If the root-relative file is missing, fall back to the sub-project path
- * to preserve compatibility with older configs.
+ * Resolve the path of an init script from the sub-project first when one is
+ * provided. If the project-relative file is missing, fall back to the
+ * workspace root to preserve compatibility with older configs.
  */
 export function resolveInitScriptPath(
   projectRoot: string,
   scriptPath: string,
   projectPath?: string
 ): string {
+  if (!projectPath) {
+    return isAbsolute(scriptPath)
+      ? scriptPath
+      : resolve(projectRoot, scriptPath);
+  }
+
+  // Validate scriptPath to prevent path traversal
+  if (!isSafeRelativePath(scriptPath)) {
+    throw new Error(`Unsafe init script path: ${scriptPath}`);
+  }
+
+  if (
+    projectPath &&
+    isSafeRelativePath(projectPath) &&
+    resolvePathWithinRoot(projectRoot, projectPath) !== null
+  ) {
+    // Validate the combined project + script path stays within root
+    const combinedRelative = join(projectPath, scriptPath);
+    if (isSafeRelativePath(combinedRelative)) {
+      const projectRelative = join(projectRoot, combinedRelative);
+      if (existsSync(projectRelative)) {
+        return projectRelative;
+      }
+    }
+  }
+
   const rootRelative = join(projectRoot, scriptPath);
   if (existsSync(rootRelative)) {
     return rootRelative;
   }
 
-  if (projectPath) {
-    const projectRelative = join(projectRoot, projectPath, scriptPath);
-    if (existsSync(projectRelative)) {
-      return projectRelative;
+  return rootRelative;
+}
+
+export function getRootInitScriptMountPath(
+  allInitScripts: Array<{ path?: string; script: string }>,
+  index: number
+): string {
+  return allInitScripts.length === 1
+    ? '/init-script.sh'
+    : `/init-script-${index}.sh`;
+}
+
+/**
+ * Compute volume mount args for root-only init scripts.
+ * Project-scoped init scripts (those with `entry.path`) are skipped because
+ * they run from the cloned workspace path instead of being host-mounted.
+ */
+export function getInitScriptMounts(
+  projectConfig: ProjectConfigManager,
+  opts?: { warnMissing?: boolean }
+): string[] {
+  const mounts: string[] = [];
+  const allInitScripts = projectConfig.allInitScripts;
+  for (let i = 0; i < allInitScripts.length; i++) {
+    const entry = allInitScripts[i];
+    if (entry.path) {
+      continue;
+    }
+    const initScriptAbsPath = resolveInitScriptPath(
+      projectConfig.projectRoot,
+      entry.script,
+      entry.path
+    );
+    if (existsSync(initScriptAbsPath)) {
+      const mountPath = getRootInitScriptMountPath(allInitScripts, i);
+      mounts.push('-v', `${initScriptAbsPath}:${mountPath}:Z,ro`);
+    } else if (opts?.warnMissing) {
+      console.log(
+        colors.yellow(`⚠ Warning: initScript '${entry.script}' does not exist`)
+      );
     }
   }
-
-  return projectPath
-    ? join(projectRoot, projectPath, scriptPath)
-    : rootRelative;
+  return mounts;
 }
 
 export type CurrentUser = string;
@@ -411,4 +474,30 @@ export function normalizeExtraArgs(
   if (Array.isArray(extraArgs)) return extraArgs;
   // Split string by whitespace, respecting quoted strings
   return extraArgs.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+}
+
+/**
+ * Return the effective extra args used for cache-image builds.
+ * Volume mounts are excluded because cache builds intentionally bake
+ * installed artifacts into the image filesystem rather than external volumes.
+ */
+export function getBuildContainerExtraArgs(
+  extraArgs: string | string[] | undefined
+): string[] {
+  const normalized = normalizeExtraArgs(extraArgs);
+  const filtered: string[] = [];
+
+  for (let i = 0; i < normalized.length; i++) {
+    const arg = normalized[i];
+    if (arg === '-v' || arg === '--volume') {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('--volume=') || arg.startsWith('-v=')) {
+      continue;
+    }
+    filtered.push(arg);
+  }
+
+  return filtered;
 }

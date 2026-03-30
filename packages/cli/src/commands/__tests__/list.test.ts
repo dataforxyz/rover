@@ -428,6 +428,7 @@ describe('list command', () => {
       expect(mockedDetectOrphanedTasks).toHaveBeenCalledTimes(1);
       const detectArgs = mockedDetectOrphanedTasks.mock.calls[0]?.[0];
       expect(detectArgs?.[0]?.task.status).toBe('COMPLETED');
+      expect(detectArgs?.[0]?.forceInspect).toBe(true);
       const detectOptions = mockedDetectOrphanedTasks.mock.calls[0]?.[1];
       expect(detectOptions).toEqual({ suppressWarnings: true });
     });

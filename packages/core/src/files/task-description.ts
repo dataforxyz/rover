@@ -1023,14 +1023,14 @@ export class TaskDescriptionManager {
     return join(this.roverDir(), 'logs', 'task-status-history.jsonl');
   }
 
-  private deriveLifecycleReasonCode(reason?: string, changeKind?: string): string {
+  private deriveLifecycleReasonCode(
+    reason?: string,
+    changeKind?: string
+  ): string {
     const text = String(reason || '').toLowerCase();
     if (changeKind === 'deleted') return 'task_deleted';
     if (!text) return '';
-    if (
-      text.includes('at capacity') ||
-      text.includes('waiting for slot')
-    ) {
+    if (text.includes('at capacity') || text.includes('waiting for slot')) {
       return 'capacity_wait';
     }
     if (text.includes('blocked (resets in') || text.includes(' blocked')) {
@@ -1050,16 +1050,27 @@ export class TaskDescriptionManager {
     if (text.includes('rate limit') || text.includes('too many requests')) {
       return 'rate_limit';
     }
-    if (text.includes('auth') || text.includes('login') || text.includes('sign in')) {
+    if (
+      text.includes('auth') ||
+      text.includes('login') ||
+      text.includes('sign in')
+    ) {
       return 'auth_required';
     }
-    if (text.includes('network') || text.includes('timeout') || text.includes('timed out')) {
+    if (
+      text.includes('network') ||
+      text.includes('timeout') ||
+      text.includes('timed out')
+    ) {
       return 'network_timeout';
     }
     if (text.includes('step failure') || text.includes('step failed')) {
       return 'workflow_step_failed';
     }
-    if (text.includes('container') && (text.includes('exit') || text.includes('crash'))) {
+    if (
+      text.includes('container') &&
+      (text.includes('exit') || text.includes('crash'))
+    ) {
       return 'container_crashed';
     }
     if (text.includes('signal')) {
@@ -1092,17 +1103,11 @@ export class TaskDescriptionManager {
       changeKind ??
       (previousStatus === status ? 'reason_update' : 'transition');
 
-    if (
-      kind === 'transition' &&
-      previousStatus === status
-    ) {
+    if (kind === 'transition' && previousStatus === status) {
       return;
     }
 
-    if (
-      kind === 'reason_update' &&
-      (!reason || reason === previousReason)
-    ) {
+    if (kind === 'reason_update' && (!reason || reason === previousReason)) {
       return;
     }
 

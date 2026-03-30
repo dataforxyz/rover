@@ -1,17 +1,20 @@
-import colors from 'ansi-colors';
 import { rmSync } from 'node:fs';
-import { createSandbox } from '../lib/sandbox/index.js';
-import { TaskNotFoundError } from 'rover-schemas';
+import colors from 'ansi-colors';
 import { launch, ProcessManager } from 'rover-core';
-import { exitWithError, exitWithSuccess } from '../utils/exit.js';
-import type { TaskStopOutput } from '../output-types.js';
-import { getTelemetry } from '../lib/telemetry.js';
+import { TaskNotFoundError } from 'rover-schemas';
 import {
   isJsonMode,
-  setJsonMode,
   requireProjectContext,
+  setJsonMode,
 } from '../lib/context.js';
+import {
+  createSandbox,
+  isSandboxBackendUnavailableError,
+} from '../lib/sandbox/index.js';
+import { getTelemetry } from '../lib/telemetry.js';
+import type { TaskStopOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
+import { exitWithError, exitWithSuccess, exitWithWarn } from '../utils/exit.js';
 
 /**
  * Stop a running task and optionally clean up its resources.
@@ -49,19 +52,20 @@ const stopCommand = async (
   let jsonOutput: TaskStopOutput = {
     success: false,
   };
+  let stopWarning: string | undefined;
 
   const processManager = json
     ? undefined
     : new ProcessManager({ title: 'Stop task' });
   processManager?.start();
 
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  // Convert string taskId to number (strict: reject '123abc' etc.)
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   // Require project context
   let project;
@@ -85,19 +89,46 @@ const stopCommand = async (
     // Stop sandbox container if it exists and is running
     if (task.containerId) {
       const sandbox = await createSandbox(task, processManager, {
+        projectPath: project.path,
         sandboxMetadata: task.sandboxMetadata,
       });
 
       await sandbox.stopAndRemove();
+    } else if (task.sandboxMetadata) {
+      try {
+        const sandbox = await createSandbox(task, processManager, {
+          projectPath: project.path,
+          sandboxMetadata: task.sandboxMetadata,
+        });
+
+        await sandbox.teardownServices();
+      } catch (error) {
+        if (!isSandboxBackendUnavailableError(error)) {
+          throw error;
+        }
+
+        stopWarning =
+          'Skipped sandbox service cleanup because no container backend is available. Task metadata was preserved so cleanup can be retried later.';
+        if (!isJsonMode()) {
+          console.warn(colors.yellow(`Warning: ${stopWarning}`));
+        }
+      }
     }
 
     processManager?.completeLastItem();
 
     // Reset task status to NEW and clear container info
     task.resetToNew();
-    task.setContainerInfo('', '');
+    task.setContainerInfo(
+      '',
+      '',
+      stopWarning ? task.sandboxMetadata : undefined
+    );
 
-    // Clean up Git worktree and branch
+    const shouldRemoveWorkspace =
+      options.removeAll || options.removeGitWorktreeAndBranch;
+
+    // Clean up Git worktree and branch when explicitly requested
     try {
       // Check if we're in a git repository
       await launch('git', ['rev-parse', '--is-inside-work-tree'], {
@@ -105,10 +136,7 @@ const stopCommand = async (
       });
 
       // Remove git workspace if it exists
-      if (
-        task.worktreePath &&
-        (options.removeAll || options.removeGitWorktreeAndBranch)
-      ) {
+      if (task.worktreePath && shouldRemoveWorkspace) {
         try {
           await launch(
             'git',
@@ -132,10 +160,7 @@ const stopCommand = async (
       }
 
       // Remove git branch if it exists
-      if (
-        task.branchName &&
-        (options.removeAll || options.removeGitWorktreeAndBranch)
-      ) {
+      if (task.branchName && shouldRemoveWorkspace) {
         try {
           // Check if branch exists
           await launch(
@@ -160,21 +185,34 @@ const stopCommand = async (
       // Not in a git repository, skip git operations
     }
 
-    // Delete the iterations
-    const iterationPath = task.iterationsPath();
-    rmSync(iterationPath, { recursive: true, force: true });
-
-    // Clear workspace information
-    task.setWorkspace('', '');
+    if (shouldRemoveWorkspace) {
+      task.setWorkspace('', '');
+    }
 
     jsonOutput = {
       ...jsonOutput,
-      success: true,
+      success: stopWarning === undefined,
       taskId: task.id,
       title: task.title,
       status: task.status,
       stoppedAt: new Date().toISOString(),
     };
+    if (stopWarning) {
+      jsonOutput.error = stopWarning;
+      await exitWithWarn('Task stopped with warnings', jsonOutput, {
+        tips: [
+          'Use ' +
+            colors.cyan(`rover stop ${task.id}`) +
+            ' to retry sandbox cleanup',
+          'Use ' +
+            colors.cyan(`rover delete ${task.id}`) +
+            ' to delete and clean up the task',
+        ],
+        telemetry,
+      });
+      return;
+    }
+
     await exitWithSuccess('Task stopped successfully!', jsonOutput, {
       tips: [
         'Use ' + colors.cyan(`rover logs ${task.id}`) + ' to check the logs',

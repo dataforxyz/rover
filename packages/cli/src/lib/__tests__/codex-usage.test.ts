@@ -123,7 +123,9 @@ describe('codex-usage', () => {
     });
 
     it('returns null when tokens missing', () => {
-      mockedReadFileSync.mockReturnValue(JSON.stringify({ auth_mode: 'chatgpt' }));
+      mockedReadFileSync.mockReturnValue(
+        JSON.stringify({ auth_mode: 'chatgpt' })
+      );
       expect(readCodexAuth()).toBeNull();
     });
 
@@ -162,8 +164,12 @@ describe('codex-usage', () => {
 
       // Per-model
       expect(result!.models['GPT-5.3-Codex-Spark']).toBeDefined();
-      expect(result!.models['GPT-5.3-Codex-Spark'].five_hour!.utilization).toBe(5);
-      expect(result!.models['GPT-5.3-Codex-Spark'].seven_day!.utilization).toBe(66);
+      expect(result!.models['GPT-5.3-Codex-Spark'].five_hour!.utilization).toBe(
+        5
+      );
+      expect(result!.models['GPT-5.3-Codex-Spark'].seven_day!.utilization).toBe(
+        66
+      );
     });
 
     it('sends correct auth headers', async () => {
@@ -257,7 +263,9 @@ describe('codex-usage', () => {
   });
 
   describe('analyzeCodexUsage', () => {
-    const makeUsage = (overrides: Partial<CodexUsageResponse> = {}): CodexUsageResponse => ({
+    const makeUsage = (
+      overrides: Partial<CodexUsageResponse> = {}
+    ): CodexUsageResponse => ({
       plan_type: 'pro',
       five_hour: { utilization: 10, resets_at: '2099-01-01T00:00:00Z' },
       seven_day: { utilization: 20, resets_at: '2099-01-01T00:00:00Z' },
@@ -273,7 +281,9 @@ describe('codex-usage', () => {
 
     it('exhausted when global bucket >= 99%', () => {
       const result = analyzeCodexUsage(
-        makeUsage({ seven_day: { utilization: 99, resets_at: '2099-01-01T00:00:00Z' } })
+        makeUsage({
+          seven_day: { utilization: 99, resets_at: '2099-01-01T00:00:00Z' },
+        })
       );
       expect(result.isExhausted).toBe(true);
       expect(result.limitingBucket).toBe('seven_day');
@@ -281,7 +291,9 @@ describe('codex-usage', () => {
 
     it('not exhausted at 95% (below 99% threshold)', () => {
       const result = analyzeCodexUsage(
-        makeUsage({ seven_day: { utilization: 95, resets_at: '2099-01-01T00:00:00Z' } })
+        makeUsage({
+          seven_day: { utilization: 95, resets_at: '2099-01-01T00:00:00Z' },
+        })
       );
       expect(result.isExhausted).toBe(false);
     });

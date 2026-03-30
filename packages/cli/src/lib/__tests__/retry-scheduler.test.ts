@@ -295,7 +295,10 @@ describe('RetryScheduler', () => {
     it('removes only the matching project task when task ids collide', async () => {
       const projectA = makeMockProject('/tmp/project-a');
       const projectB = makeMockProject('/tmp/project-b');
-      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+      mockedResumeTask.mockResolvedValue({
+        status: 'ok',
+        resumedFromCheckpoint: false,
+      });
 
       await scheduler.registerPausedTask('claude', 1, projectA);
       await scheduler.registerPausedTask('claude', 1, projectB);
@@ -330,6 +333,42 @@ describe('RetryScheduler', () => {
 
       expect(scheduler.getRetryCount(colonProject, 1)).toBe(0);
       expect(scheduler.getScheduledTime('claude')).toBeUndefined();
+    });
+
+    it('does not clear retry state for a different provider when unregistering without a project', async () => {
+      const claudeProject = makeMockProject('/tmp/claude-project');
+      const geminiProject = makeMockProject('/tmp/gemini-project');
+      mockedResumeTask.mockResolvedValue({
+        status: 'failed',
+        error: 'still paused',
+      });
+
+      await scheduler.registerPausedTask('claude', 1, claudeProject);
+      await scheduler.registerPausedTask('gemini', 1, geminiProject);
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersToNextTimerAsync();
+
+      expect(scheduler.getRetryCount(claudeProject, 1)).toBe(1);
+      expect(scheduler.getRetryCount(geminiProject, 1)).toBe(1);
+
+      scheduler.unregisterTask('claude', 1);
+
+      expect(scheduler.getScheduledTime('claude')).toBeUndefined();
+      expect(scheduler.getScheduledTime('gemini')).toBeDefined();
+      expect(scheduler.getRetryCount(claudeProject, 1)).toBe(0);
+      expect(scheduler.getRetryCount(geminiProject, 1)).toBe(1);
+    });
+
+    it('tracks the replacement provider after a provider change for the same task key', async () => {
+      const sharedProject = makeMockProject('/tmp/shared-project');
+
+      await scheduler.registerPausedTask('claude', 1, sharedProject);
+      await scheduler.registerPausedTask('gemini', 1, sharedProject);
+
+      scheduler.unregisterTask('gemini', 1);
+
+      expect(scheduler.getScheduledTime('gemini')).toBeUndefined();
+      expect(scheduler.getRetryCount(sharedProject, 1)).toBe(0);
     });
 
     it('clears retry counts without project after timers are exhausted', async () => {
@@ -409,7 +448,10 @@ describe('RetryScheduler', () => {
   describe('timer firing', () => {
     it('calls resumeTask for all registered tasks when timer fires', async () => {
       const mockProject = makeMockProject();
-      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+      mockedResumeTask.mockResolvedValue({
+        status: 'ok',
+        resumedFromCheckpoint: false,
+      });
 
       await scheduler.registerPausedTask('claude', 1, mockProject);
       await scheduler.registerPausedTask('claude', 2, mockProject);
@@ -560,7 +602,10 @@ describe('RetryScheduler', () => {
       mockedResumeTask
         .mockResolvedValueOnce({ status: 'failed', error: 'still paused' })
         .mockResolvedValueOnce({ status: 'failed', error: 'still paused' })
-        .mockResolvedValueOnce({ status: 'ok' });
+        .mockResolvedValueOnce({
+          status: 'ok',
+          resumedFromCheckpoint: false,
+        });
 
       await scheduler.registerPausedTask('claude', 1, mockProject);
 
@@ -603,7 +648,10 @@ describe('RetryScheduler', () => {
           .mockReturnValue(resumedTask),
       };
 
-      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+      mockedResumeTask.mockResolvedValue({
+        status: 'ok',
+        resumedFromCheckpoint: false,
+      });
 
       await scheduler.registerPausedTask('claude', 1, mockProject as any);
       await vi.advanceTimersToNextTimerAsync();
@@ -617,7 +665,10 @@ describe('RetryScheduler', () => {
 
       mockedResumeTask
         .mockResolvedValueOnce({ status: 'failed', error: 'still paused' })
-        .mockResolvedValue({ status: 'ok' });
+        .mockResolvedValue({
+          status: 'ok',
+          resumedFromCheckpoint: false,
+        });
 
       await scheduler.registerPausedTask('claude', 1, mockProject);
       await vi.advanceTimersToNextTimerAsync();
@@ -780,7 +831,10 @@ describe('RetryScheduler', () => {
     it('proceeds with resume when usage is available at fire time', async () => {
       const mockProject = makeMockProject();
       mockedCheckClaudeUsage.mockResolvedValue(null);
-      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+      mockedResumeTask.mockResolvedValue({
+        status: 'ok',
+        resumedFromCheckpoint: false,
+      });
 
       await scheduler.registerPausedTask('claude', 1, mockProject);
 
@@ -800,7 +854,10 @@ describe('RetryScheduler', () => {
     it('proceeds with resume when pre-fire usage check fails', async () => {
       const mockProject = makeMockProject();
       mockedCheckClaudeUsage.mockResolvedValue(null);
-      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+      mockedResumeTask.mockResolvedValue({
+        status: 'ok',
+        resumedFromCheckpoint: false,
+      });
 
       await scheduler.registerPausedTask('claude', 1, mockProject);
 
@@ -814,7 +871,10 @@ describe('RetryScheduler', () => {
 
     it('skips pre-fire usage check for non-Claude providers', async () => {
       const mockProject = makeMockProject();
-      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+      mockedResumeTask.mockResolvedValue({
+        status: 'ok',
+        resumedFromCheckpoint: false,
+      });
 
       await scheduler.registerPausedTask('gemini', 1, mockProject);
 
@@ -834,7 +894,10 @@ describe('RetryScheduler', () => {
       );
       // Initial registration: usage check returns null → blind backoff
       mockedCheckClaudeUsage.mockResolvedValue(null);
-      mockedResumeTask.mockResolvedValue({ status: 'ok' });
+      mockedResumeTask.mockResolvedValue({
+        status: 'ok',
+        resumedFromCheckpoint: false,
+      });
 
       await scheduler.registerPausedTask('claude', 1, mockProject);
 

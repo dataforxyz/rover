@@ -40,6 +40,18 @@ export interface UsageCheckResult {
   limitingBucket: string | null;
 }
 
+function isUsageBucket(
+  bucket: ClaudeUsageResponse[keyof ClaudeUsageResponse]
+): bucket is UsageBucket {
+  return (
+    bucket != null &&
+    typeof bucket === 'object' &&
+    'resets_at' in bucket &&
+    typeof bucket.resets_at === 'string' &&
+    typeof bucket.utilization === 'number'
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Credential reading
 // ---------------------------------------------------------------------------
@@ -214,7 +226,7 @@ export function analyzeUsage(
 
   for (const name of bucketNames) {
     const bucket = usage[name];
-    if (!bucket) continue;
+    if (!isUsageBucket(bucket)) continue;
 
     const util = bucket.utilization;
     if (util > highestUtilization) {

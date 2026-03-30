@@ -10,6 +10,9 @@ export default defineConfig({
       'rover-schemas': fileURLToPath(
         new URL('../schemas/src/index.ts', import.meta.url)
       ),
+      'rover-telemetry': fileURLToPath(
+        new URL('./src/test-support/rover-telemetry.ts', import.meta.url)
+      ),
     },
   },
   test: {

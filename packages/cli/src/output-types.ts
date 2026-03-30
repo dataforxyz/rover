@@ -138,6 +138,8 @@ export interface TaskPushOutput extends CLIJsonOutput {
   committed: boolean;
   commitMessage?: string;
   pushed: boolean;
+  /** Repos that were successfully pushed (useful for diagnosing partial failures). */
+  pushedRepos?: string[];
 }
 
 // ---------------------------------------------------------------------------

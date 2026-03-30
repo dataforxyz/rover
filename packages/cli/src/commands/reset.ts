@@ -35,35 +35,34 @@ const resetCommand = async (
   options: { force?: boolean } = {}
 ) => {
   const telemetry = getTelemetry();
-  // Convert string taskId to number
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
-    await exitWithError(
-      {
-        success: false,
-        error: `Invalid task ID '${taskId}' - must be a number`,
-      },
-      { telemetry }
-    );
-    return;
-  }
-
-  // Require project context
-  let project: ProjectManager;
   try {
-    project = await requireProjectContext();
-  } catch (error) {
-    await exitWithError(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      { telemetry }
-    );
-    return;
-  }
+    if (!/^\d+$/.test(taskId)) {
+      await exitWithError(
+        {
+          success: false,
+          error: `Invalid task ID '${taskId}' - must be a number`,
+        },
+        { telemetry }
+      );
+      return;
+    }
+    const numericTaskId = parseInt(taskId, 10);
 
-  try {
+    // Require project context
+    let project: ProjectManager;
+    try {
+      project = await requireProjectContext();
+    } catch (error) {
+      await exitWithError(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { telemetry }
+      );
+      return;
+    }
+
     // Load task using ProjectManager
     const task = project.getTask(numericTaskId);
     if (!task) {
@@ -202,6 +201,8 @@ const resetCommand = async (
         { telemetry }
       );
     }
+  } finally {
+    await telemetry?.shutdown();
   }
 };
 

@@ -65,7 +65,7 @@ steps:
       - Just output the template. Skip any text before and after
       - Use globs when a change affects multiple files
 
-      Then, write your structured analysis to `context.md` following this template. This is mandatory.
+      Return your structured analysis in the `context_markdown` output following this template.
 
       <template>
       # Context
@@ -80,7 +80,7 @@ steps:
 
       ## Extra OS packages
 
-      Identify missing OS packages to accomplish this task and install them using the tools provided by the `package-manager` MCP. Return a list of new installed packages or "No additional packages required".
+      Identify whether any OS packages are missing for this task. Do NOT install OS packages during the task. Rover task containers intentionally have limited sudo after setup, so OS package installation belongs in `rover build`, `sandbox.initScript`, or image configuration. Return either "No additional packages required" or a short list of packages that must be added to build/setup-time configuration.
 
       ## Relevant knowledge
 
@@ -96,15 +96,22 @@ steps:
 
       </template>
 
-      IMPORTANT: After writing context.md, you MUST extract the task complexity value and return it.
+      IMPORTANT: You MUST also return the `complexity` scalar output.
     outputs:
       - name: complexity
         description: 'Task complexity: either "simple" or "complex"'
         type: string
-      - name: context_file
-        description: 'Technical context analysis file'
-        type: file
-        filename: context.md
+      - name: context_markdown
+        description: 'Technical context analysis markdown'
+        type: string
+
+  - id: persist_context
+    type: command
+    name: 'Persist Context'
+    command: |
+      cat > /output/context.md <<'__ROVER_EOF_9f3a7c__'
+      {{steps.context.outputs.context_markdown}}
+      __ROVER_EOF_9f3a7c__
 
   - id: plan
     type: agent
@@ -117,7 +124,10 @@ steps:
       Title: {{inputs.title}}
       Description:
       {{inputs.description}}
-      Context: {{steps.context.outputs.context_file}}
+      Context:
+      ```
+      {{steps.context.outputs.context_markdown}}
+      ```
 
       ---
 
@@ -150,7 +160,7 @@ steps:
       - Follow the template strictly
       - Just output the template. Skip any text before and after
 
-      Write your plan to `plan.md` following this template. This is mandatory.
+      Return your plan in the `plan_markdown` output following this template.
 
       <template>
       # Implementation Plan
@@ -176,10 +186,17 @@ steps:
       - Prerequisite libraries, configs, or tasks (skip if none)
       </template>
     outputs:
-      - name: plan_file
-        description: 'Implementation plan file'
-        type: file
-        filename: plan.md
+      - name: plan_markdown
+        description: 'Implementation plan markdown'
+        type: string
+
+  - id: persist_plan
+    type: command
+    name: 'Persist Plan'
+    command: |
+      cat > /output/plan.md <<'__ROVER_EOF_9f3a7c__'
+      {{steps.plan.outputs.plan_markdown}}
+      __ROVER_EOF_9f3a7c__
 
   - id: implement
     type: agent
@@ -197,12 +214,12 @@ steps:
 
       Context: 
       ```
-      {{steps.context.outputs.context_file}}
+      {{steps.context.outputs.context_markdown}}
       ```
 
       Plan: 
       ```
-      {{steps.plan.outputs.plan_file}}
+      {{steps.plan.outputs.plan_markdown}}
       ```
       ---
 
@@ -228,7 +245,7 @@ steps:
       - Follow the template strictly
       - Just output the template. Skip any text before and after
 
-      Write `changes.md` following this template. This is mandatory.
+      Return the markdown in the `changes_markdown` output following this template.
 
       <template>
       # Implementation Changes
@@ -261,10 +278,17 @@ steps:
       - Dependencies added/changed
       </template>
     outputs:
-      - name: changes_file
-        description: 'Implementation changes file'
-        type: file
-        filename: changes.md
+      - name: changes_markdown
+        description: 'Implementation changes markdown'
+        type: string
+
+  - id: persist_changes
+    type: command
+    name: 'Persist Changes'
+    command: |
+      cat > /output/changes.md <<'__ROVER_EOF_9f3a7c__'
+      {{steps.implement.outputs.changes_markdown}}
+      __ROVER_EOF_9f3a7c__
 
   - id: review
     type: agent
@@ -282,12 +306,12 @@ steps:
 
       Plan: 
       ```
-      {{steps.plan.outputs.plan_file}}
+      {{steps.plan.outputs.plan_markdown}}
       ```
 
       Changes: 
       ```
-      {{steps.implement.outputs.changes_file}}
+      {{steps.implement.outputs.changes_markdown}}
       ```
       ---
 
@@ -307,9 +331,9 @@ steps:
 
       ### Phase 3: Output
 
-      - If the implementation is satisfactory: output {"skipped": "false", "issues_found": "false"} and do NOT create any file.
+      - If the implementation is satisfactory: output {"skipped": "false", "issues_found": "false", "review_markdown": ""}.
       - Do not fabricate content; if information is unavailable or irrelevant, skip it
-      - If issues are found: output {"skipped": "false", "issues_found": "true"} and create `review.md` with the following template:
+      - If issues are found: output {"skipped": "false", "issues_found": "true"} and return the review body in `review_markdown` using the following template:
 
       <template>
       # Code Review
@@ -348,10 +372,9 @@ steps:
       - name: issues_found
         description: 'Whether issues were found (true/false)'
         type: string
-      - name: review_file
-        description: 'Code review file with issues (only created if issues found)'
-        type: file
-        filename: review.md
+      - name: review_markdown
+        description: 'Code review markdown with issues (empty when no issues are found)'
+        type: string
 
   - id: apply_review
     type: agent
@@ -368,12 +391,12 @@ steps:
 
       Context: 
       ```
-      {{steps.context.outputs.context_file}}
+      {{steps.context.outputs.context_markdown}}
       ```
 
       Review:
       ```
-      {{steps.review.outputs.review_file}}
+      {{steps.review.outputs.review_markdown}}
       ```
 
       ---
@@ -395,7 +418,7 @@ steps:
 
       ### Phase 3: Output
 
-      Write `review_fixes.md` following this template only if you fixed any issue. This is mandatory.
+      Return the markdown in the `review_fixes_markdown` output only if you fixed any issue.
 
       <template>
       ## Review Fixes Applied
@@ -410,10 +433,27 @@ steps:
       - name: fixes_applied
         description: 'Whether fixes were applied (true/false)'
         type: string
-      - name: review_fixes_file
+      - name: review_fixes_markdown
         description: 'Updated changes file with review fixes appended'
-        type: file
-        filename: review_fixes.md
+        type: string
+
+  - id: persist_review
+    type: command
+    name: 'Persist Review'
+    if: steps.review.outputs.issues_found == true
+    command: |
+      cat > /output/review.md <<'__ROVER_EOF_9f3a7c__'
+      {{steps.review.outputs.review_markdown}}
+      __ROVER_EOF_9f3a7c__
+
+  - id: persist_review_fixes
+    type: command
+    name: 'Persist Review Fixes'
+    if: steps.apply_review.outputs.fixes_applied == true
+    command: |
+      cat > /output/review_fixes.md <<'__ROVER_EOF_9f3a7c__'
+      {{steps.apply_review.outputs.review_fixes_markdown}}
+      __ROVER_EOF_9f3a7c__
 
   - id: summary
     type: agent
@@ -430,12 +470,12 @@ steps:
 
       Context: 
       ```
-      {{steps.context.outputs.context_file}}
+      {{steps.context.outputs.context_markdown}}
       ```
 
       Changes: 
       ```
-      {{steps.implement.outputs.changes_file}}
+      {{steps.implement.outputs.changes_markdown}}
       ```
       ---
 
@@ -454,7 +494,7 @@ steps:
 
       ### Phase 3: Output
 
-      Write to `summary.md` following this template. This is mandatory.
+      Return the markdown in the `summary_markdown` output following this template.
 
       <template>
       # Implementation Summary
@@ -476,7 +516,14 @@ steps:
       - Remaining tasks, considerations, or `None`
       </template>
     outputs:
-      - name: summary_file
-        description: 'Implementation summary file'
-        type: file
-        filename: summary.md
+      - name: summary_markdown
+        description: 'Implementation summary markdown'
+        type: string
+
+  - id: persist_summary
+    type: command
+    name: 'Persist Summary'
+    command: |
+      cat > /output/summary.md <<'__ROVER_EOF_9f3a7c__'
+      {{steps.summary.outputs.summary_markdown}}
+      __ROVER_EOF_9f3a7c__

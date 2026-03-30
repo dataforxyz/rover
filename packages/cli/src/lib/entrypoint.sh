@@ -46,6 +46,7 @@ export PATH=/root/local/.bin:$PATH
 
 {aptGetUpdate}
 {homeSetup}
+{gitSafeDirectorySetup}
 
 # Function to shred secrets before exit
 shred_secrets() {
@@ -166,12 +167,13 @@ done
 
 echo "✅ Package manager MCP is ready"
 {taskDataSection}
-{installAllPackages}
-{workspaceDeps}
 {agentInstallSection}
 {credentialInstallSection}
-{mcpConfigSection}
 {projectRepositoriesSection}
+{installAllPackages}
+{mcpConfigSection}
+{initScriptExecution}
+{workspaceDeps}
 {exportTaskVariables}
 
 # Ensure agent-installed toolchains are never committed
@@ -183,6 +185,5 @@ done
 
 {networkConfigSection}
 {sudoersRemoval}
-{initScriptExecution}
 {workflowExecutionSection}
 "$@"

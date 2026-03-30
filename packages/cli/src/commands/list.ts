@@ -109,6 +109,10 @@ interface TaskWithProject {
   project: ProjectManager | null;
 }
 
+interface OrphanCandidate extends TaskWithProject {
+  forceInspect?: boolean;
+}
+
 /**
  * Helper to safely get iteration status
  */
@@ -226,7 +230,8 @@ const buildTaskRow = (
         : undefined;
     if (operatingMs != null) {
       const opTime = formatDurationMs(operatingMs);
-      durationDisplay = opTime !== wallClock ? `${opTime} (${wallClock})` : opTime;
+      durationDisplay =
+        opTime !== wallClock ? `${opTime} (${wallClock})` : opTime;
     } else {
       durationDisplay = wallClock;
     }
@@ -348,16 +353,26 @@ const listCommand = async (
     }
 
     const refreshedTasksWithProjects: TaskWithProject[] = [];
-    const orphanCandidates: TaskWithProject[] = [];
+    const orphanCandidates: OrphanCandidate[] = [];
     for (const { task, project: projectData } of tasksWithProjects) {
+      const wasActiveBeforeRefresh =
+        task.status === 'IN_PROGRESS' || task.status === 'ITERATING';
       try {
         if (task.status !== 'PAUSED' && task.status !== 'FAILED') {
           task.updateStatusFromIteration();
         }
-        orphanCandidates.push({ task, project: projectData });
+        orphanCandidates.push({
+          task,
+          project: projectData,
+          forceInspect: wasActiveBeforeRefresh,
+        });
         refreshedTasksWithProjects.push({ task, project: projectData });
       } catch (err) {
-        orphanCandidates.push({ task, project: projectData });
+        orphanCandidates.push({
+          task,
+          project: projectData,
+          forceInspect: wasActiveBeforeRefresh,
+        });
         refreshedTasksWithProjects.push({ task, project: projectData });
         if (!isJsonMode()) {
           console.log(
@@ -738,7 +753,10 @@ const listCommand = async (
     console.error(colors.red('Error getting task status:'), error);
     // Recursive watch refreshes share one scheduler across refresh cycles.
     // Only destroy it when the outer list command is unwinding.
-    if (!options.watching && typeof options._retryScheduler?.destroy === 'function') {
+    if (
+      !options.watching &&
+      typeof options._retryScheduler?.destroy === 'function'
+    ) {
       options._retryScheduler?.destroy();
     }
   } finally {

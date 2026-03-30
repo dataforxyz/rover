@@ -14,6 +14,10 @@ function hasContainerId(task: TaskDescriptionManager): boolean {
   return Boolean(task.containerId);
 }
 
+function clearTaskContainerIdentity(task: TaskDescriptionManager): void {
+  task.setContainerInfo('', '', task.sandboxMetadata);
+}
+
 /** Maximum time (ms) to consider a restart "in flight" before treating it as stale.
  *  NOTE: This is intentionally shorter than LOCK_STALENESS_TIMEOUT_MS (30 min)
  *  in resume-lock.ts. If a startup exceeds this timeout, the orphan detector
@@ -57,6 +61,7 @@ export async function detectOrphanedTasks(
   tasks: Array<{
     task: TaskDescriptionManager;
     project: ProjectManager | null;
+    forceInspect?: boolean;
   }>,
   options: { suppressWarnings?: boolean } = {}
 ): Promise<void> {
@@ -69,8 +74,8 @@ export async function detectOrphanedTasks(
   // Tasks we can reconcile either by inspecting a known container or by
   // timing out a restart/resume that never recorded replacement metadata.
   const candidates = tasks.filter(
-    ({ task, project }) =>
-      (task.isInProgress() || task.isIterating()) &&
+    ({ task, project, forceInspect }) =>
+      (task.isInProgress() || task.isIterating() || forceInspect === true) &&
       project != null &&
       !isResumeLockHeld(task) &&
       !isRestartStartupInFlight(task) &&
@@ -100,6 +105,7 @@ export async function detectOrphanedTasks(
         // because the sandbox type is determined at runtime and may vary per task.
         const sandbox = await createSandbox(task, undefined, {
           projectPath: project?.path ?? '',
+          sandboxMetadata: task.sandboxMetadata,
         });
 
         // Re-check lock after sandbox creation — another process may have
@@ -109,7 +115,7 @@ export async function detectOrphanedTasks(
           return;
         }
 
-        const state = await sandbox.inspect();
+        const state = await sandbox.inspect({ teardownServices: false });
 
         // Re-check lock after inspect — another process may have acquired
         // the resume lock and started a new container during the inspect call.
@@ -118,12 +124,27 @@ export async function detectOrphanedTasks(
         }
 
         if (!state) {
+          if (!task.isInProgress() && !task.isIterating()) {
+            return;
+          }
+
           // Final lock re-check after inspect returned null — another
           // process may have acquired the lock and started a replacement
-          // container between inspect() returning and this check.
+          // container after inspect() returned.
           if (isResumeLockHeld(task)) {
             return;
           }
+          try {
+            await sandbox.teardownServices();
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            warn(
+              colors.yellow(
+                `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+              )
+            );
+          }
+          clearTaskContainerIdentity(task);
           task.markFailed(CONTAINER_EXITED_ERROR);
           warn(
             colors.yellow(
@@ -143,13 +164,42 @@ export async function detectOrphanedTasks(
           return;
         }
 
+        if (!task.isInProgress() && !task.isIterating()) {
+          try {
+            await sandbox.teardownServices();
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            warn(
+              colors.yellow(
+                `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+              )
+            );
+          }
+          clearTaskContainerIdentity(task);
+          return;
+        }
+
         // Container exited — check exit code to distinguish clean exit from crash.
         // Exit code 0 means the workflow completed normally; the iteration status
         // file should already reflect this, so just refresh from disk.
         if (state.exitCode === AGENT_EXIT_CODE.SUCCESS) {
           task.updateStatusFromIteration();
+          clearTaskContainerIdentity(task);
           // If status is already terminal after refresh, nothing more to do.
-          if (task.isCompleted() || task.isFailed() || task.isPaused()) {
+          if (task.isPaused()) {
+            return;
+          }
+          try {
+            await sandbox.teardownServices();
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            warn(
+              colors.yellow(
+                `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+              )
+            );
+          }
+          if (task.isCompleted() || task.isFailed()) {
             return;
           }
           // Exit code 0 is a clean exit — if the status file wasn't updated yet
@@ -163,6 +213,7 @@ export async function detectOrphanedTasks(
         // The iteration status file should already say "paused", so read it.
         if (state.exitCode === AGENT_EXIT_CODE.PAUSED) {
           task.updateStatusFromIteration();
+          clearTaskContainerIdentity(task);
           if (task.isPaused() || task.isFailed()) {
             return;
           }
@@ -177,6 +228,17 @@ export async function detectOrphanedTasks(
         // Try to read the agent's last error from the status file before
         // falling back to a generic message.
         task.updateStatusFromIteration();
+        try {
+          await sandbox.teardownServices();
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          warn(
+            colors.yellow(
+              `⚠ Could not tear down sidecars for task ${task.id}: ${msg}`
+            )
+          );
+        }
+        clearTaskContainerIdentity(task);
         if (!task.isFailed()) {
           task.markFailed(CONTAINER_EXITED_ERROR);
         }

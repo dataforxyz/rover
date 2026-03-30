@@ -1,10 +1,7 @@
 import type { ProjectManager } from 'rover-core';
 import { resumeTask } from './resume-helper.js';
 import { checkClaudeUsage, invalidateUsageCache } from './claude-usage.js';
-import {
-  checkCodexUsage,
-  invalidateCodexUsageCache,
-} from './codex-usage.js';
+import { checkCodexUsage, invalidateCodexUsageCache } from './codex-usage.js';
 import colors from 'ansi-colors';
 
 /**
@@ -65,6 +62,8 @@ export class RetryScheduler {
   private taskTimers: Map<string, TaskTimerEntry> = new Map();
   /** Tracks how many retry cycles each task has gone through. */
   private retryCounts: Map<string, number> = new Map();
+  /** Remembers which provider owns each retry count entry. */
+  private retryProviders: Map<string, string> = new Map();
   /** When true, suppress informational console.log messages (e.g. JSON mode). */
   private quiet: boolean;
 
@@ -96,6 +95,7 @@ export class RetryScheduler {
   private clearTaskState(taskKey: string): void {
     this.clearTimer(taskKey);
     this.retryCounts.delete(taskKey);
+    this.retryProviders.delete(taskKey);
   }
 
   /**
@@ -124,6 +124,8 @@ export class RetryScheduler {
       // retry budget (different provider = different credit pool).
       this.clearTaskState(key);
     }
+
+    this.retryProviders.set(key, provider);
 
     // Seed retry count from persisted auto-retry state if we haven't tracked
     // this task yet. Manual resumes/restarts maintain a separate restartCount.
@@ -213,8 +215,12 @@ export class RetryScheduler {
     }
     // Clean up orphaned retry counts whose timers were already removed
     for (const key of this.retryCounts.keys()) {
-      if (key.endsWith(`${RetryScheduler.KEY_SEP}${taskId}`)) {
+      if (
+        key.endsWith(`${RetryScheduler.KEY_SEP}${taskId}`) &&
+        this.retryProviders.get(key) === provider
+      ) {
         this.retryCounts.delete(key);
+        this.retryProviders.delete(key);
       }
     }
   }
@@ -262,6 +268,7 @@ export class RetryScheduler {
     }
     this.taskTimers.clear();
     this.retryCounts.clear();
+    this.retryProviders.clear();
   }
 
   /**
@@ -404,11 +411,18 @@ export class RetryScheduler {
     const task = project.getTask(taskId);
     if (!task || (!task.isPaused() && !task.isFailed())) {
       this.retryCounts.delete(taskKey);
+      this.retryProviders.delete(taskKey);
       return;
     }
 
     // Pre-fire usage check: if still exhausted, defer without burning a retry.
-    const deferResult = await this.preFireUsageCheck(provider, task, taskKey, taskId, project);
+    const deferResult = await this.preFireUsageCheck(
+      provider,
+      task,
+      taskKey,
+      taskId,
+      project
+    );
     if (deferResult) return;
 
     this.log(
@@ -428,6 +442,7 @@ export class RetryScheduler {
         const resumedTask = project.getTask(taskId);
         resumedTask?.setAutoRetryCount(0);
         this.retryCounts.delete(taskKey);
+        this.retryProviders.delete(taskKey);
         this.log(colors.green(`  ✓ Task ${taskId} resumed successfully`));
       } else if (result.status === 'already_resuming') {
         // Another process is handling it — don't count as a failure.
@@ -444,6 +459,8 @@ export class RetryScheduler {
             `  ℹ Task ${taskId} is no longer resumable; stopping auto-retry`
           )
         );
+        this.retryCounts.delete(taskKey);
+        this.retryProviders.delete(taskKey);
       } else {
         // Resume returned a non-success status — count this as a failed attempt.
         const attempt = previousCount + 1;

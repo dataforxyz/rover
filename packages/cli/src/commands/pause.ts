@@ -1,18 +1,18 @@
-import colors from 'ansi-colors';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createSandbox } from '../lib/sandbox/index.js';
-import { TaskNotFoundError } from 'rover-schemas';
+import colors from 'ansi-colors';
 import { ProcessManager } from 'rover-core';
-import { exitWithError, exitWithSuccess } from '../utils/exit.js';
-import type { TaskPauseOutput } from '../output-types.js';
-import { getTelemetry } from '../lib/telemetry.js';
+import { TaskNotFoundError } from 'rover-schemas';
 import {
   isJsonMode,
-  setJsonMode,
   requireProjectContext,
+  setJsonMode,
 } from '../lib/context.js';
+import { createSandbox } from '../lib/sandbox/index.js';
+import { getTelemetry } from '../lib/telemetry.js';
+import type { TaskPauseOutput } from '../output-types.js';
 import type { CommandDefinition } from '../types.js';
+import { exitWithError, exitWithSuccess } from '../utils/exit.js';
 
 /**
  * Maximum time (ms) to wait for the agent to finish its current step
@@ -64,12 +64,12 @@ const pauseCommand = async (
     : new ProcessManager({ title: 'Pause task' });
   processManager?.start();
 
-  const numericTaskId = parseInt(taskId, 10);
-  if (isNaN(numericTaskId)) {
+  if (!/^\d+$/.test(taskId)) {
     jsonOutput.error = `Invalid task ID '${taskId}' - must be a number`;
     await exitWithError(jsonOutput, { telemetry });
     return;
   }
+  const numericTaskId = parseInt(taskId, 10);
 
   let project;
   try {
@@ -86,15 +86,15 @@ const pauseCommand = async (
       throw new TaskNotFoundError(numericTaskId);
     }
 
-    // Only running tasks can be paused
-    if (!task.isInProgress() && !task.isIterating()) {
-      jsonOutput.error = `Task ${numericTaskId} is not running (status: ${task.status}). Only IN_PROGRESS or ITERATING tasks can be paused.`;
+    if (task.isPaused()) {
+      jsonOutput.error = `Task ${numericTaskId} is already paused`;
       await exitWithError(jsonOutput, { telemetry });
       return;
     }
 
-    if (task.isPaused()) {
-      jsonOutput.error = `Task ${numericTaskId} is already paused`;
+    // Only running tasks can be paused
+    if (!task.isInProgress() && !task.isIterating()) {
+      jsonOutput.error = `Task ${numericTaskId} is not running (status: ${task.status}). Only IN_PROGRESS or ITERATING tasks can be paused.`;
       await exitWithError(jsonOutput, { telemetry });
       return;
     }
@@ -110,7 +110,9 @@ const pauseCommand = async (
     const pauseRequestFile = join(iterationPath, '.pause-requested');
     const checkpointPath = join(iterationPath, 'checkpoint.json');
 
-    processManager?.addItem('Requesting graceful pause (waiting for current step to finish)');
+    processManager?.addItem(
+      'Requesting graceful pause (waiting for current step to finish)'
+    );
 
     writeFileSync(pauseRequestFile, reason, 'utf-8');
 
@@ -118,14 +120,16 @@ const pauseCommand = async (
     // We detect this by watching for the task status to change or
     // the container to exit.
     let agentExited = false;
+    let sandbox: Awaited<ReturnType<typeof createSandbox>> | undefined;
     if (task.containerId) {
-      const sandbox = await createSandbox(task, undefined, {
+      sandbox = await createSandbox(task, undefined, {
+        projectPath: project.path,
         sandboxMetadata: task.sandboxMetadata,
       });
 
       const deadline = Date.now() + GRACEFUL_WAIT_MS;
       while (Date.now() < deadline) {
-        const state = await sandbox.inspect();
+        const state = await sandbox.inspect({ teardownServices: false });
         if (!state || state.status === 'exited' || state.status === '') {
           agentExited = true;
           break;
@@ -147,7 +151,7 @@ const pauseCommand = async (
         // Give it a moment to write the checkpoint
         const sigtermDeadline = Date.now() + SIGTERM_WAIT_MS;
         while (Date.now() < sigtermDeadline) {
-          const state = await sandbox.inspect();
+          const state = await sandbox.inspect({ teardownServices: false });
           if (!state || state.status === 'exited' || state.status === '') {
             agentExited = true;
             break;
@@ -162,11 +166,22 @@ const pauseCommand = async (
 
     processManager?.completeLastItem();
 
-    const hasCheckpoint = existsSync(checkpointPath);
+    if (!agentExited) {
+      jsonOutput.error = `Task ${numericTaskId} did not exit after pause request and SIGTERM; task is still running`;
+      await exitWithError(jsonOutput, { telemetry });
+      return;
+    }
 
-    // Mark the task as PAUSED and clear container info
+    const hasCheckpoint = existsSync(checkpointPath);
+    const sandboxMetadata =
+      typeof sandbox?.getSandboxMetadata === 'function'
+        ? sandbox.getSandboxMetadata()
+        : task.sandboxMetadata;
+
+    // Mark the task as PAUSED and clear the task container identity while
+    // preserving any sandbox metadata still needed for resume.
     task.markPaused(reason);
-    task.setContainerInfo('', '');
+    task.setContainerInfo('', '', sandboxMetadata);
 
     if (!isJsonMode()) {
       if (hasCheckpoint) {
@@ -175,16 +190,10 @@ const pauseCommand = async (
             '  Checkpoint saved — task can be resumed from where it left off'
           )
         );
-      } else if (agentExited) {
+      } else {
         console.log(
           colors.yellow(
             '  No checkpoint detected — resume will restart the current iteration'
-          )
-        );
-      } else {
-        console.log(
-          colors.red(
-            '  Agent did not exit cleanly — task marked PAUSED but may need manual intervention'
           )
         );
       }
