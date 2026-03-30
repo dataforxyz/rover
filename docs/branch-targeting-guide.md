@@ -195,7 +195,29 @@ These scenarios were tested and confirmed working:
 | Single-repo: `rover task --source-branch feature/X` | Worktree created from feature branch |
 | Single-repo: `rover iterate <id>` (no branch flag) | Inherits source branch, runs in same worktree |
 | Single-repo: `rover diff <id> --base` | Shows base commit = feature branch HEAD |
+| Single-repo: `rover push <id> -m "..."` | Pushes task branch to remote (not source branch) |
+| Single-repo: `rover rebase <id> --base main -f` | Rebases task branch onto main |
+| Single-repo: `rover merge <id>` | Merges task branch into current branch |
 | Multi-repo: `rover task --source-branch feature/X` | Root from feature branch, children from their `ref` |
 | Multi-repo: child repos cloned inside container | Backend/frontend cloned from bare repos |
+| Multi-repo: `rover push <id>` | Root workspace pushed; child repos fail (see known issue) |
+| Multi-repo: `rover rebase <id> --base main -f` | All repos (root + children) rebased onto main |
+| Multi-repo: `rover merge <id>` | Merges root task branch into current branch |
 | Multi-repo: cache hit after build | `Using cached setup image` confirmed |
 | Multi-repo: `/workspace/` repository paths | Resolved to host paths, mounted into container |
+
+## Known issues
+
+### Multi-repo push fails for child repos with local bare repos
+
+When child repos are cloned from local bare repos (via `/workspace/sources/*.git`), their git remote inside the worktree points to `/workspace-repos/N` (the container mount path). After the container exits, this path doesn't exist on the host, so `rover push` fails for child repos.
+
+**Workaround**: Manually set the remote URL in each child repo worktree before pushing:
+
+```bash
+WORKSPACE=$(rover inspect <id> 2>&1 | grep "Git Workspace" | awk '{print $NF}')
+cd "$WORKSPACE/backend"
+git remote set-url origin /path/to/real/backend-remote.git
+```
+
+This only affects local bare repo setups. When child repos point to real remote URLs (GitHub, GitLab, etc.), push works correctly.
