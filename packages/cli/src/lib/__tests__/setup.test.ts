@@ -875,6 +875,57 @@ describe('SetupBuilder multi-repo projects', () => {
     );
   });
 
+  it('maps file URL repositories under /workspace back to the host project root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    const hostRepoRoot = join(root, 'sources');
+    const hostRepo = join(hostRepoRoot, 'frontend.git');
+    mkdirSync(hostRepo, { recursive: true });
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [
+        {
+          name: 'frontend',
+          path: 'frontend',
+          repository: 'file:///workspace/sources/frontend.git',
+        },
+      ],
+    };
+
+    const builder = new SetupBuilder(
+      fakeTask as any,
+      'claude',
+      fakeConfig as any
+    );
+
+    builder.generateEntrypoint(false);
+
+    expect(builder.getRepositoryMounts()).toEqual([
+      {
+        hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+  });
+
   it('validates external repository state during checkpoint resume', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
     testDirs.push(root);

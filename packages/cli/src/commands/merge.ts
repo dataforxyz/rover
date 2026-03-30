@@ -38,6 +38,10 @@ import {
 
 const { prompt } = enquirer;
 
+function hasNamedCurrentBranch(branchName: string): boolean {
+  return branchName.length > 0 && branchName !== 'unknown';
+}
+
 /**
  * AI-powered merge conflict resolver.
  * Delegates to the shared resolveConflicts utility with merge-specific defaults.
@@ -257,6 +261,16 @@ const mergeCommand = async (taskId: string, options: MergeOptions = {}) => {
 
     // Get current branch name
     jsonOutput.currentBranch = git.getCurrentBranch();
+
+    if (!hasNamedCurrentBranch(jsonOutput.currentBranch)) {
+      jsonOutput.error =
+        'Current checkout is detached. Check out a branch before merging.';
+      await exitWithError(jsonOutput, {
+        tips: ['Run `git checkout <branch>` and retry the merge'],
+        telemetry,
+      });
+      return;
+    }
 
     // Check for uncommitted changes in main repo
     if (git.hasUncommittedChanges()) {

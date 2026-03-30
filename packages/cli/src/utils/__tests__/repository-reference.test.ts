@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isLocalRepositoryReference,
+  resolveLocalRepositoryReference,
   resolveRepositoryHostPath,
 } from '../repository-reference.js';
 
@@ -62,5 +63,16 @@ describe('resolveRepositoryHostPath', () => {
     expect(
       resolveRepositoryHostPath('/opt/repos/frontend.git', '/tmp/my-project')
     ).toBe('/opt/repos/frontend.git');
+  });
+});
+
+describe('resolveLocalRepositoryReference', () => {
+  it('maps file URLs under /workspace back to the host project root', () => {
+    expect(
+      resolveLocalRepositoryReference(
+        'file:///workspace/sources/backend.git',
+        '/tmp/my-project'
+      )
+    ).toBe('/tmp/my-project/sources/backend.git');
   });
 });

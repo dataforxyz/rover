@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   launch,
   launchSync,
@@ -18,7 +17,10 @@ import {
   isSafeRelativePath,
   resolvePathWithinRoot,
 } from '../../utils/path-safety.js';
-import { isLocalRepositoryReference } from '../../utils/repository-reference.js';
+import {
+  isLocalRepositoryReference,
+  resolveLocalRepositoryReference,
+} from '../../utils/repository-reference.js';
 
 /**
  * Build a process env with DOCKER_HOST set when the sandbox metadata
@@ -281,12 +283,8 @@ function resolveRepositoryForLookup(
   projectRoot: string,
   repository: string
 ): string {
-  if (repository.startsWith('file://')) {
-    return fileURLToPath(repository);
-  }
-
   if (isLocalRepositoryReference(repository)) {
-    return resolve(projectRoot, repository);
+    return resolveLocalRepositoryReference(repository, projectRoot);
   }
 
   return repository;

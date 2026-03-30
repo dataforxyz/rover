@@ -194,6 +194,26 @@ describe('rebase command', () => {
     );
   });
 
+  it('fails with a clear error when rebasing from a detached checkout without --base', async () => {
+    mockGitInstance.getCurrentBranch.mockReturnValue('unknown');
+
+    await rebaseCommand('1', {
+      json: true,
+      force: true,
+    });
+
+    expect(mockGitInstance.rebaseBranch).not.toHaveBeenCalled();
+    expect(mockExitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        currentBranch: 'unknown',
+        error:
+          'Current checkout is detached. Pass `--base <branch>` or check out a branch before rebasing.',
+      }),
+      expect.objectContaining({ telemetry: expect.anything() })
+    );
+  });
+
   it('accepts paths under the root with Windows separators', () => {
     expect(
       resolvePathWithinRoot(

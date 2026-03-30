@@ -193,4 +193,21 @@ describe('merge command', () => {
       expect.anything()
     );
   });
+
+  it('fails with a clear error when the current checkout is detached', async () => {
+    mockGitInstance.getCurrentBranch.mockReturnValue('unknown');
+
+    await mergeCommandModule.action('1', { json: true, force: true });
+
+    expect(mockGitInstance.hasUnmergedCommits).not.toHaveBeenCalled();
+    expect(mockExitWithError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        currentBranch: 'unknown',
+        error:
+          'Current checkout is detached. Check out a branch before merging.',
+      }),
+      expect.objectContaining({ telemetry: expect.anything() })
+    );
+  });
 });

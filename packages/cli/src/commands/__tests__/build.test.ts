@@ -585,6 +585,46 @@ describe('generateBuildEntrypoint', () => {
     );
   });
 
+  it('rewrites file URL repositories under /workspace during build config preparation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
+    const hostRepoRoot = join(root, 'sources');
+    const hostRepo = join(hostRepoRoot, 'frontend.git');
+    mkdirSync(hostRepo, { recursive: true });
+    testDirs.push(root);
+
+    const { buildProjectConfig, repositoryMounts } = prepareBuildProjectConfig(
+      root,
+      new ProjectConfigManager(
+        {
+          version: '1.2',
+          languages: [],
+          mcps: [],
+          packageManagers: [],
+          taskManagers: [],
+          attribution: true,
+          projects: [
+            {
+              name: 'frontend',
+              path: 'frontend',
+              repository: 'file:///workspace/sources/frontend.git',
+            },
+          ],
+        } as any,
+        root
+      )
+    );
+
+    expect(repositoryMounts).toEqual([
+      {
+        hostPath: hostRepo,
+        containerPath: '/workspace-repos/0',
+      },
+    ]);
+    expect(buildProjectConfig.projects?.[0]?.repository).toBe(
+      '/workspace-repos/0'
+    );
+  });
+
   it('resolves relative local repositories against projectRoot during build config preparation', () => {
     const root = mkdtempSync(join(tmpdir(), 'rover-build-test-'));
     const invocationDir = join(root, 'nested');

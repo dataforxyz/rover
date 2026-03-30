@@ -93,6 +93,10 @@ interface RebaseTarget {
   rebaseOnto?: string;
 }
 
+function hasNamedCurrentBranch(branchName: string): boolean {
+  return branchName.length > 0 && branchName !== 'unknown';
+}
+
 const resolveSubprojectRebaseBase = (
   worktreePath: string,
   baseBranch: string
@@ -247,6 +251,13 @@ export const rebaseCommand = async (
     // Determine target branch: explicit --base flag, or fall back to current checkout
     const currentBranch = options.base || git.getCurrentBranch();
     jsonOutput.currentBranch = currentBranch;
+
+    if (!options.base && !hasNamedCurrentBranch(currentBranch)) {
+      jsonOutput.error =
+        'Current checkout is detached. Pass `--base <branch>` or check out a branch before rebasing.';
+      await exitWithError(jsonOutput, { telemetry });
+      return;
+    }
 
     const workspaceRepositoryLookup =
       projectConfig && task.worktreePath

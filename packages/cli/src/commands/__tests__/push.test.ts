@@ -416,6 +416,56 @@ describe('push command', () => {
     });
   });
 
+  it('pushes workspace repositories from detached HEAD without diffing against an invalid current branch', async () => {
+    mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
+      foundPersistedState: false,
+      hasPersistedParseErrors: false,
+      repositories: [
+        {
+          name: 'frontend',
+          relativePath: 'frontend',
+          worktreePath: '/tmp/task-1/frontend',
+          repository: 'https://example.com/frontend.git',
+        },
+      ],
+    });
+    mockGitInstance.getCurrentBranch.mockImplementation(
+      (options?: { worktreePath?: string }) =>
+        options?.worktreePath === '/tmp/task-1/frontend' ? '' : 'task/1'
+    );
+    mockGitInstance.uncommittedChanges.mockReturnValue([]);
+    mockGitInstance.branchExists.mockImplementation(
+      (_branchName, options?: { worktreePath?: string }) => true
+    );
+    mockGitInstance.remoteBranchExists.mockImplementation(
+      (_branchName, _remoteName, options?: { worktreePath?: string }) =>
+        options?.worktreePath !== '/tmp/task-1/frontend'
+    );
+    mockGitInstance.hasUnmergedCommits.mockImplementation(
+      (
+        _branchName,
+        options?: { targetBranch?: string; worktreePath?: string }
+      ) => options?.worktreePath === '/tmp/task-1'
+    );
+
+    await pushCommandModule.action('1', { json: true });
+
+    expect(mockGitInstance.hasUnmergedCommits).not.toHaveBeenCalledWith(
+      'task/1',
+      expect.objectContaining({
+        targetBranch: 'unknown',
+        worktreePath: '/tmp/task-1/frontend',
+      })
+    );
+    expect(mockGitInstance.checkoutBranch).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+      createIfMissing: true,
+    });
+    expect(mockGitInstance.push).toHaveBeenCalledWith('task/1', {
+      worktreePath: '/tmp/task-1/frontend',
+    });
+  });
+
   it('skips configured workspace repositories that have not been cloned yet', async () => {
     mockGetWorkspaceRepositoriesLookupResult.mockReturnValue({
       foundPersistedState: false,

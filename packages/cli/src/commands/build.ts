@@ -7,7 +7,6 @@ import {
   existsSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
 import {
   ProjectConfigManager,
@@ -46,7 +45,7 @@ import {
 } from '../utils/path-safety.js';
 import {
   isLocalRepositoryReference,
-  resolveRepositoryHostPath,
+  resolveLocalRepositoryReference,
 } from '../utils/repository-reference.js';
 import { shellEscape } from '../utils/shell.js';
 
@@ -85,12 +84,10 @@ export function prepareBuildProjectConfig(
         return [project];
       }
 
-      const hostPath = project.repository.startsWith('file://')
-        ? fileURLToPath(project.repository)
-        : resolveRepositoryHostPath(
-            project.repository,
-            repositoryResolutionRoot
-          );
+      const hostPath = resolveLocalRepositoryReference(
+        project.repository,
+        repositoryResolutionRoot
+      );
 
       if (!existsSync(hostPath)) {
         throw new Error(

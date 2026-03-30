@@ -8,7 +8,6 @@ import {
   readdirSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   TaskDescriptionManager,
   IterationManager,
@@ -31,7 +30,7 @@ import {
 } from '../utils/path-safety.js';
 import {
   isLocalRepositoryReference,
-  resolveRepositoryHostPath,
+  resolveLocalRepositoryReference,
 } from '../utils/repository-reference.js';
 
 import { getRootInitScriptMountPath } from './sandbox/container-common.js';
@@ -292,9 +291,10 @@ export class SetupBuilder {
 
     const repositoryResolutionRoot =
       this.projectConfig.projectRoot ?? this.taskBasePath;
-    const hostPath = repository.startsWith('file://')
-      ? fileURLToPath(repository)
-      : resolveRepositoryHostPath(repository, repositoryResolutionRoot);
+    const hostPath = resolveLocalRepositoryReference(
+      repository,
+      repositoryResolutionRoot
+    );
 
     if (!existsSync(hostPath)) {
       throw new Error(`Local workspace repository not found: ${hostPath}`);

@@ -48,6 +48,14 @@ interface PushTarget {
   hasUnpushedCommits: boolean;
 }
 
+function canDiffAgainstCurrentBranch(currentBranch: string): boolean {
+  return (
+    currentBranch.length > 0 &&
+    currentBranch !== 'HEAD' &&
+    currentBranch !== 'unknown'
+  );
+}
+
 /**
  * Get repository info (provider, host, project path) from a git remote URL.
  * Supports GitHub and GitLab, including self-hosted instances and SSH aliases.
@@ -236,9 +244,10 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
       {
         label: 'root workspace',
         branchName: task.branchName,
-        currentBranch: git.getCurrentBranch({
-          worktreePath: task.worktreePath,
-        }),
+        currentBranch:
+          git.getCurrentBranch({
+            worktreePath: task.worktreePath,
+          }) || 'unknown',
         worktreePath: task.worktreePath,
         remoteUrl: git.remoteUrl({ worktreePath: task.worktreePath }),
         hasLocalChanges: false,
@@ -298,7 +307,7 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
         continue;
       }
 
-      if (target.currentBranch !== target.branchName) {
+      if (canDiffAgainstCurrentBranch(target.currentBranch)) {
         target.hasUnpushedCommits = git.hasUnmergedCommits(target.branchName, {
           targetBranch: target.currentBranch,
           worktreePath: target.worktreePath,

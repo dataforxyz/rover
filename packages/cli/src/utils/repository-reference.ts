@@ -1,4 +1,5 @@
 import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const REMOTE_URI_SCHEME = /^[a-z][a-z\d+.-]*:\/\//i;
 const SCP_LIKE_GIT_REMOTE = /^(?:[^@/:\s]+@)?[^/:\s]+:.+$/;
@@ -39,4 +40,15 @@ export function resolveRepositoryHostPath(
     return projectRoot;
   }
   return resolve(projectRoot, repository);
+}
+
+export function resolveLocalRepositoryReference(
+  repository: string,
+  projectRoot: string
+): string {
+  if (repository.startsWith('file://')) {
+    return resolveRepositoryHostPath(fileURLToPath(repository), projectRoot);
+  }
+
+  return resolveRepositoryHostPath(repository, projectRoot);
 }
