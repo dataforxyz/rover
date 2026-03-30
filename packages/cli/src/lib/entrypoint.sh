@@ -9,8 +9,14 @@
 # Define the agent user home
 # HOME may be unset, empty, or "/" (common in cached images where the original
 # user was removed by docker commit). All three cases need a real home dir.
+# Prefer /home/agent (where tools are installed during image build) over
+# /home/<uid> to ensure PATH setup from .profile is found on cached iterations.
 if [[ -z "$\{HOME\}" || "$\{HOME\}" = "/" ]]; then
-  export HOME=/home/$(id -u)
+  if [[ -d "/home/agent" ]]; then
+    export HOME=/home/agent
+  else
+    export HOME=/home/$(id -u)
+  fi
 fi
 
 # Ensure the runtime HOME exists even when starting from a cached image where

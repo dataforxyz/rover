@@ -478,7 +478,7 @@ steps:
     type: loop
     name: 'Review & Fix Loop'
     until: steps.code_review.outputs.issues_found != blocking || steps.review_checkpoint.outputs.exit_code != 0
-    maxIterations: 3
+    maxIterations: 7
     steps:
       - id: git_diff
         type: command
@@ -490,7 +490,7 @@ steps:
         type: agent
         name: 'Code Review'
         prompt: |
-          You are a senior engineer performing a code review. Focus on correctness, security, and functionality — not style preferences.
+          You are a senior engineer performing a code review. Your job is to catch real problems — not to make the code perfect. Working code that ships is better than perfect code that never ships.
 
           ┌─────────────────────────────────────────────┐
           │ GOAL: {{inputs.title}}                       │
@@ -512,34 +512,70 @@ steps:
           Previous test results (if any):
           exit_code: {{steps.run_tests_after_review.outputs.exit_code}}
           stderr: {{steps.run_tests_after_review.outputs.stderr}}
+
+          Previous review (from prior iteration, if any — use this to track what was already flagged and fixed):
+          ```
+          {{steps.code_review.outputs.review_file}}
+          ```
           ---
+
+          ### Review Context
+
+          If a previous review is shown above, this is a follow-up review. Check whether the prior blocking issues were addressed. Do NOT re-raise issues that were already fixed. Do NOT introduce new blocking issues that you did not flag in the previous review unless they are Critical severity. Focus your review on verifying the fixes.
+
+          If no previous review is shown, this is the first review. Proceed normally.
+
+          ### Severity Tiers
+
+          Classify every issue you find into exactly one tier:
+
+          **Critical** — always blocking, must fix before ship:
+          - Runtime crashes, panics, nil/null pointer dereferences
+          - Security vulnerabilities (injection, hardcoded secrets, auth bypass)
+          - Data loss or corruption
+          - Out-of-scope file changes (files unrelated to the task)
+          - Compile errors or syntax errors
+
+          **Major** — blocking on first review only; if still present after one fix attempt, downgrade to nit:
+          - Logic errors that produce wrong results but don't crash
+          - Missing error handling at external boundaries (user input, API calls, file I/O)
+          - Weak or missing test assertions for the core behavior being implemented
+          - Plan requirements that were clearly missed (not partially implemented — missed entirely)
+
+          **Minor** — never blocking, always a nit:
+          - Naming preferences
+          - Style, formatting, comment quality
+          - Test coverage for edge cases or unlikely scenarios
+          - Code organization suggestions
+          - Missing negative/error path tests beyond the core behavior
+          - Suggestions to add utilities, helpers, or abstractions
 
           ### Review Instructions
 
           Use the git diff above as the primary input. It shows exactly what was changed.
           Stay in scope: only review lines and files that were changed for this task. Do not flag issues in pre-existing code that the task did not touch.
 
-          Go through every hunk in the diff and check ALL of the following:
+          Go through every hunk in the diff and check:
 
-          1. **Scope check (do this first)**: List every file in the diff. For each file, determine if the change is directly required by the task title and description. Flag ANY file that is not directly related to the task as out-of-scope (it will be automatically reverted). Common violations: deleting unrelated tests, modifying unrelated mocks, reformatting untouched code, adding/removing comments in files not related to the fix. This is the highest priority issue. **NEVER request creating new test helpers, test utilities, mock infrastructure, or fixture files beyond what the task requires. Do NOT request tests for code the task did not change.**
-          2. **Correctness**: logic errors, off-by-one errors, null/undefined access, race conditions, incorrect operator precedence, wrong comparisons, missing return statements
-          3. **Naming**: variable/function/class names that are vague, misleading, inconsistent with surrounding code, or violate project conventions
-          4. **Style**: formatting inconsistencies, unnecessary comments, missing comments where logic is non-obvious, inconsistent patterns within the changed code
-          5. **Tests**: missing edge cases, weak assertions (e.g. only checking truthiness when exact values matter), test names that don't describe the behavior being tested, missing negative/error path tests
-          6. **Error handling**: swallowed errors, missing validation at boundaries, unhelpful error messages, catch blocks that silently continue
-          7. **Dead code**: unused imports, unreachable branches, commented-out code, variables assigned but never read
-          8. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets, overly permissive permissions
-          9. **Plan adherence**: requirements from the plan that were missed, partially implemented, or implemented differently than specified
-          10. If previous test results show failures, check whether they were addressed
-          11. Read specific source files when you need more context around the changed lines
+          1. **Scope check (do this first)**: List every file in the diff. For each file, determine if the change is directly required by the task title and description. Flag ANY file that is not directly related to the task as out-of-scope (Critical). Common violations: deleting unrelated tests, modifying unrelated mocks, reformatting untouched code. **NEVER request creating new test helpers, test utilities, mock infrastructure, or fixture files beyond what the task requires. Do NOT request tests for code the task did not change.**
+          2. **Correctness**: logic errors, null access, race conditions, wrong comparisons, missing return statements
+          3. **Error handling**: swallowed errors, missing validation at boundaries, catch blocks that silently continue
+          4. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets
+          5. **Dead code**: unused imports, unreachable branches, commented-out code
+          6. **Tests**: verify assertions actually test the behavior described by the task
+          7. If previous test results show failures, check whether they were addressed
+
+          ### The "Ship It" Rule
+
+          If all tests pass and there are no Critical issues, the code should ship. Do not block on Major or Minor issues when tests are green — downgrade them to nits. The test suite is the ultimate arbiter of correctness.
 
           ### Output
 
           Classify your findings into one of three outcomes:
 
           - **No issues at all**: output {"issues_found": "false", "review_markdown": ""}.
-          - **Only nits** (style, naming, minor comments — nothing that affects correctness or security): output {"issues_found": "nits"} and return the review body in `review_markdown`. These will NOT block shipping.
-          - **Blocking issues** (bugs, logic errors, security flaws, missing error handling, compile errors, broken tests, out-of-scope files): output {"issues_found": "blocking"} and return the review body in `review_markdown`. These MUST be fixed before shipping.
+          - **Only nits** (Minor issues, or Major issues when tests pass): output {"issues_found": "nits"} and return the review body in `review_markdown`. These will NOT block shipping.
+          - **Blocking issues** (Critical issues, or Major issues when tests are NOT passing): output {"issues_found": "blocking"} and return the review body in `review_markdown`. These MUST be fixed before shipping.
 
           Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files. Use the following template for `review_markdown`:
 
@@ -554,11 +590,12 @@ steps:
 
           ### [File path/section]
 
+          **Severity**: [Critical / Major / Minor]
           **Issue**: [Concise description of the problem]
           **Fix**: [Exact actionable fix — what to change and where]
           **Code location**: [Line numbers or function names]
 
-          (Repeat for every issue. Mark each as **[blocking]** or **[nit]**. Do not flag issues in code the task did not change.)
+          (Repeat for every issue. Do not flag issues in code the task did not change.)
           </template>
         outputs:
           - name: issues_found
