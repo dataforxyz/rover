@@ -558,6 +558,7 @@ steps:
           Go through every hunk in the diff and check:
 
           1. **Scope check (do this first)**: List every file in the diff. For each file, determine if the change is directly required by the task title and description. Flag ANY file that is not directly related to the task as out-of-scope (Critical). Common violations: deleting unrelated tests, modifying unrelated mocks, reformatting untouched code. **NEVER request creating new test helpers, test utilities, mock infrastructure, or fixture files beyond what the task requires. Do NOT request tests for code the task did not change.**
+             **Scope detection for `revert_files` output**: For each changed file, ask: "Is this change directly required by the task?" If not — formatting, refactoring, or functional changes unrelated to the task — add the file path to the `revert_files` output. Do NOT add files where the change is a necessary prerequisite (e.g., exporting a function that new tests import). The `revert_files` output triggers an automatic `git checkout` — only list files you are confident should be fully reverted.
           2. **Correctness**: logic errors, null access, race conditions, wrong comparisons, missing return statements
           3. **Error handling**: swallowed errors, missing validation at boundaries, catch blocks that silently continue
           4. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets
@@ -604,6 +605,20 @@ steps:
           - name: review_markdown
             description: 'Code review markdown with issues (empty when no issues are found)'
             type: string
+          - name: revert_files
+            description: 'Space-separated list of file paths to revert as out-of-scope (empty if none)'
+            type: string
+
+      - id: revert_scope_creep
+        type: command
+        name: 'Revert Out-of-Scope Files'
+        if: steps.code_review.outputs.revert_files != ''
+        command: |
+          DEFAULT_BR=$(grep -oP "^DEFAULT_BRANCH=\\K.*" rover-pipeline.env 2>/dev/null || echo main)
+          for file in {{steps.code_review.outputs.revert_files}}; do
+            git checkout "origin/$DEFAULT_BR" -- "$file" 2>/dev/null && echo "Reverted: $file"
+          done
+          git diff --cached --quiet || git commit -m "[auto-revert] Reverted out-of-scope changes"
 
       - id: apply_fixes
         type: agent
@@ -683,7 +698,7 @@ steps:
       - id: run_tests_after_review
         type: command
         name: 'Run Tests After Review'
-        if: steps.apply_fixes.outputs.fixes_applied == true
+        if: steps.apply_fixes.outputs.fixes_applied == true || steps.code_review.outputs.revert_files != ''
         command: '{{steps.context.outputs.test_command}}'
         allow_failure: true
 
