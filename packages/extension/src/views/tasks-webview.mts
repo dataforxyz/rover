@@ -18,9 +18,12 @@ export class TasksWebview extends LitElement {
   @property({ type: Object }) vscode: any = null;
   @state() private tasks: any[] = [];
   @state() private loading = true;
+  @state() private nowMs = Date.now();
+  @state() private lastTasksUpdateMs = 0;
   @state() private initializationStatus: any = null;
   @state() private showingSetupGuide = false;
   @state() private initializationCheckInterval: number | null = null;
+  @state() private clockInterval: number | null = null;
   @state() private agents: string[] = ['...'];
   @state() private workflows: Array<{ id: string; label: string }> = [];
   @state() private defaultWorkflow: string = '';
@@ -34,6 +37,7 @@ export class TasksWebview extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.startClock();
     if (this.vscode) {
       window.addEventListener('message', this.handleMessage.bind(this));
       this.vscode.postMessage({ command: 'checkInitialization' });
@@ -44,6 +48,7 @@ export class TasksWebview extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('message', this.handleMessage.bind(this));
     this.stopInitializationPolling();
+    this.stopClock();
   }
 
   private handleMessage(event: MessageEvent) {
@@ -52,6 +57,7 @@ export class TasksWebview extends LitElement {
       case 'updateTasks':
         this.tasks = message.tasks || [];
         this.loading = false;
+        this.lastTasksUpdateMs = Date.now();
         break;
       case 'updateSettings':
         this.agents = message.settings?.aiAgents;
@@ -195,6 +201,57 @@ export class TasksWebview extends LitElement {
     }
   }
 
+  private startClock() {
+    if (this.clockInterval !== null) {
+      return;
+    }
+
+    this.clockInterval = window.setInterval(() => {
+      this.nowMs = Date.now();
+    }, 1000);
+  }
+
+  private stopClock() {
+    if (this.clockInterval !== null) {
+      window.clearInterval(this.clockInterval);
+      this.clockInterval = null;
+    }
+  }
+
+  private formatAbsolute(ms: number): string {
+    return new Date(ms).toLocaleString();
+  }
+
+  private formatAge(ms: number): string {
+    const diffSeconds = Math.max(0, Math.floor((this.nowMs - ms) / 1000));
+    if (diffSeconds < 60) return `${diffSeconds}s old`;
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    if (diffMinutes < 60) return `${diffMinutes}m old`;
+    const diffHours = Math.floor(diffMinutes / 60);
+    const remainingMinutes = diffMinutes % 60;
+    if (diffHours < 24) return `${diffHours}h ${remainingMinutes}m old`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ${diffHours % 24}h old`;
+  }
+
+  private renderFreshness() {
+    if (this.loading || !this.lastTasksUpdateMs) {
+      return html``;
+    }
+
+    return html`
+      <div class="tasks-toolbar">
+        <div
+          class="freshness-pill"
+          title=${`Task list last refreshed ${this.formatAbsolute(this.lastTasksUpdateMs)}`}
+        >
+          <span class="freshness-label">Data</span>
+          <span class="freshness-value">${this.formatAge(this.lastTasksUpdateMs)}</span>
+        </div>
+      </div>
+    `;
+  }
+
   private renderCreateForm() {
     return html`<create-form
       .vscode=${this.vscode}
@@ -223,6 +280,7 @@ export class TasksWebview extends LitElement {
     }
 
     return html`
+      ${this.renderFreshness()}
       <div class="tasks-container">
         ${
           this.loading
@@ -243,6 +301,7 @@ export class TasksWebview extends LitElement {
                   task => html`
                   <task-card
                     .task=${task}
+                    .nowMs=${this.nowMs}
                     @inspect-task=${this.handleInspectTask}
                     @task-action=${this.handleTaskAction}
                   ></task-card>

@@ -23,6 +23,35 @@ const styles = css`
     min-height: 0;
   }
 
+  .tasks-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+  }
+
+  .freshness-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border);
+    background: var(--vscode-editorWidget-background);
+  }
+
+  .freshness-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .freshness-value {
+    font-size: 11px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-textLink-foreground);
+  }
+
   .empty-state {
     text-align: center;
     padding: 20px;

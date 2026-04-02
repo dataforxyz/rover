@@ -1,8 +1,12 @@
 {
-  "version": "1.4",
-  "languages": ["typescript"],
+  "version": "1.5",
+  "languages": [
+    "typescript"
+  ],
   "mcps": [],
-  "packageManagers": ["pnpm"],
+  "packageManagers": [
+    "pnpm"
+  ],
   "taskManagers": [],
   "attribution": true
 }

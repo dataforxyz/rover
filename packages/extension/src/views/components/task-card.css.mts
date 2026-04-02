@@ -47,6 +47,7 @@ const styles = css`
   .task-metadata {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 12px;
     margin-bottom: 10px;
   }
@@ -119,6 +120,54 @@ const styles = css`
     font-size: 11px;
     color: var(--vscode-descriptionForeground);
     flex: 1;
+  }
+
+  .task-timeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .timeline-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border);
+    background: var(--vscode-editorWidget-background);
+    min-height: 24px;
+  }
+
+  .timeline-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .timeline-age {
+    font-size: 11px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-textLink-foreground);
+  }
+
+  .timeline-absolute {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .timeline-chip.completed .timeline-age {
+    color: var(--vscode-testing-iconPassed);
+  }
+
+  .timeline-chip.failed .timeline-age {
+    color: var(--vscode-testing-iconFailed);
+  }
+
+  .timeline-chip.paused .timeline-age {
+    color: var(--vscode-charts-yellow);
   }
 
   .task-progress {

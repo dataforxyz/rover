@@ -5,6 +5,7 @@ import styles from './task-card.css.mjs';
 @customElement('task-card')
 export class TaskCard extends LitElement {
   @property({ type: Object }) task: any = null;
+  @property({ type: Number }) nowMs = Date.now();
   @state() private showDropdown = false;
 
   static styles = styles;
@@ -68,39 +69,43 @@ export class TaskCard extends LitElement {
     return label;
   }
 
-  private formatTimeInfo(task: any): string {
-    if (task.completedAt) {
-      const completed = new Date(task.completedAt);
-      return `Completed ${this.formatRelativeTime(completed)}`;
-    }
+  private parseDate(value?: string): Date | null {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
 
-    if (task.status === 'PAUSED' && task.pausedAt) {
-      const paused = new Date(task.pausedAt);
+  private formatTimeInfo(task: any): string {
+    const completed = this.parseDate(task.completedAt);
+    if (completed) return `Completed ${this.formatRelativeTime(completed)}`;
+
+    const failed = this.parseDate(task.failedAt);
+    if (failed) return `Failed ${this.formatRelativeTime(failed)}`;
+
+    const paused = this.parseDate(task.pausedAt);
+    if (task.status === 'PAUSED' && paused) {
       return `Paused ${this.formatRelativeTime(paused)}`;
     }
 
+    const started = this.parseDate(task.startedAt);
     if (
-      task.status === 'RUNNING' ||
-      task.status === 'INITIALIZING' ||
-      task.status === 'INSTALLING' ||
-      task.status === 'ITERATING' ||
-      task.status === 'IN_PROGRESS'
+      started &&
+      (
+        task.status === 'RUNNING' ||
+        task.status === 'INITIALIZING' ||
+        task.status === 'INSTALLING' ||
+        task.status === 'ITERATING' ||
+        task.status === 'IN_PROGRESS'
+      )
     ) {
-      const started = new Date(task.startedAt);
       return `Started ${this.formatRelativeTime(started)}`;
-    }
-
-    if (task.status === 'FAILED') {
-      const started = new Date(task.startedAt);
-      return `Failed after ${this.formatDuration(started)}`;
     }
 
     return '';
   }
 
   private formatRelativeTime(date: Date): string {
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
+    const diffMs = this.nowMs - date.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMins / 60);
     const diffDays = Math.floor(diffHours / 24);
@@ -114,8 +119,7 @@ export class TaskCard extends LitElement {
   }
 
   private formatDuration(startDate: Date): string {
-    const now = new Date();
-    const diffMs = now.getTime() - startDate.getTime();
+    const diffMs = this.nowMs - startDate.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMins / 60);
 
@@ -124,6 +128,28 @@ export class TaskCard extends LitElement {
     return remainingMins > 0
       ? `${diffHours}h ${remainingMins}m`
       : `${diffHours}h`;
+  }
+
+  private formatAbsoluteTime(value?: string): string {
+    const date = this.parseDate(value);
+    return date ? date.toLocaleString() : '';
+  }
+
+  private getTimelineEntries(task: any): Array<{ label: string; value: string }> {
+    const entries: Array<{ label: string; value: string }> = [];
+    const pushEntry = (label: string, value?: string) => {
+      const date = this.parseDate(value);
+      if (!date) return;
+      if (entries.some(entry => entry.value === value)) return;
+      entries.push({ label, value: value! });
+    };
+
+    pushEntry('started', task.startedAt);
+    pushEntry('paused', task.pausedAt);
+    pushEntry('failed', task.failedAt);
+    pushEntry('completed', task.completedAt);
+
+    return entries;
   }
 
   private inspectTask() {
@@ -203,6 +229,8 @@ export class TaskCard extends LitElement {
     );
     const isFailed = this.task.status?.toLowerCase() === 'failed';
     const isPaused = this.task.status?.toLowerCase() === 'paused';
+    const startedDate = this.parseDate(this.task.startedAt);
+    const timelineEntries = this.getTimelineEntries(this.task);
 
     return html`
       <div class="task-card">
@@ -229,6 +257,11 @@ export class TaskCard extends LitElement {
               : ''
           }
           ${
+            startedDate && (isRunning || isPaused || isFailed)
+              ? html`<span class="task-progress">runtime ${this.formatDuration(startedDate)}</span>`
+              : ''
+          }
+          ${
             this.task.progress !== undefined && this.task.progress > 0
               ? html`<span class="task-progress">${this.task.progress}%</span>`
               : ''
@@ -239,6 +272,27 @@ export class TaskCard extends LitElement {
               : ''
           }
         </div>
+
+        ${
+          timelineEntries.length > 0
+            ? html`
+              <div class="task-timeline">
+                ${timelineEntries.map(
+                  entry => html`
+                    <div
+                      class="timeline-chip ${entry.label}"
+                      title=${this.formatAbsoluteTime(entry.value)}
+                    >
+                      <span class="timeline-label">${entry.label}</span>
+                      <span class="timeline-age">${this.formatRelativeTime(new Date(entry.value))}</span>
+                      <span class="timeline-absolute">${this.formatAbsoluteTime(entry.value)}</span>
+                    </div>
+                  `
+                )}
+              </div>
+            `
+            : ''
+        }
 
         <!-- Action buttons -->
         <div class="task-actions">
