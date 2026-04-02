@@ -33,7 +33,7 @@ interface PushOptions {
 }
 
 interface RepoInfo {
-  provider: 'github' | 'gitlab';
+  provider: 'github' | 'gitlab' | 'forgejo';
   host: string;
   projectPath: string;
 }
@@ -94,6 +94,14 @@ export const getRepoInfo = (remoteUrl: string): RepoInfo | null => {
     return {
       provider: 'gitlab',
       host: hostLower.includes('.') ? host : 'gitlab.com',
+      projectPath: pathPart,
+    };
+  }
+
+  if (hostLower.includes('forgejo') || hostLower.includes('fgit.')) {
+    return {
+      provider: 'forgejo',
+      host,
       projectPath: pathPart,
     };
   }
@@ -507,6 +515,13 @@ const pushCommand = async (taskId: string, options: PushOptions) => {
           'You can open a new PR on ' +
             colors.cyan(
               `https://${repoInfo.host}/${repoInfo.projectPath}/pull/new/${encodeURIComponent(task.branchName)}`
+            )
+        );
+      } else if (repoInfo.provider === 'forgejo') {
+        tips.push(
+          'You can open a new pull request on ' +
+            colors.cyan(
+              `https://${repoInfo.host}/${repoInfo.projectPath}/compare/rover-landing...${encodeURIComponent(task.branchName)}`
             )
         );
       } else {
