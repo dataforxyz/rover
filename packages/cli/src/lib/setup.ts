@@ -23,6 +23,7 @@ import type { SandboxPackage } from './sandbox/types.js';
 import { mergeNetworkConfig, generateNetworkScript } from './network-config.js';
 import { initWorkflowStore } from './workflow.js';
 import { getDependencyResolutionCommands } from './dependency-resolution.js';
+import { resolveRtkEnabled } from './rtk.js';
 import { shellEscape } from '../utils/shell.js';
 import {
   isSafeRelativePath,
@@ -459,7 +460,7 @@ echo -e "\\n📦 Done installing agent"`;
       process.env.ROVER_CLAUDE_PROXY_URL &&
       process.env.ROVER_CLAUDE_PROXY_KEY
     );
-    const credentialInstallSection = isClaudeProxy && this.agentName === 'claude'
+    const credentialInstallSection = isClaudeProxy && this.agent === 'claude'
       ? `# Proxy mode: Claude credentials provided via ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
 echo -e "\\n📦 Claude proxy mode — skipping credential copy"
 echo "✅ Using proxy at $ANTHROPIC_BASE_URL"`
@@ -487,6 +488,63 @@ if [ $_CRED_RC -ne 0 ]; then
   echo "⚠️  Credential install exited with code $_CRED_RC — agent may lack fresh credentials"
 else
   echo "✅ Credentials copied successfully"
+fi`;
+
+    const rtkEnabled = resolveRtkEnabled(this.projectConfig, this.task);
+    const rtkInstallCommand = `RTK_INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh`;
+    const rtkEnableCommand =
+      this.agent === 'claude'
+        ? 'rtk init -g --hook-only --auto-patch'
+        : this.agent === 'codex'
+          ? 'rtk init -g --codex'
+          : this.agent === 'copilot'
+            ? 'rtk init -g --copilot'
+            : this.agent === 'cursor'
+              ? 'rtk init -g --agent cursor'
+              : this.agent === 'gemini'
+                ? 'rtk init -g --gemini --hook-only --auto-patch'
+                : this.agent === 'opencode'
+                  ? 'rtk init -g --opencode'
+                  : '';
+    const hasRtkEnableCommand = rtkEnableCommand.length > 0;
+    const rtkDisableCommand =
+      this.agent === 'codex'
+        ? 'rtk init -g --codex --uninstall'
+        : this.agent === 'cursor'
+          ? 'rtk init -g --agent cursor --uninstall'
+          : this.agent === 'gemini'
+            ? 'rtk init -g --gemini --uninstall'
+            : 'rtk init -g --uninstall';
+    const rtkConfigSection = `
+echo -e "\\n======================================="
+echo "📦 Reconciling RTK integration"
+echo "======================================="
+if ${rtkEnabled ? 'true' : 'false'}; then
+  if ! command -v rtk >/dev/null 2>&1; then
+    echo "📦 Installing RTK"
+    ${rtkInstallCommand}
+  fi
+
+  if [ $? -ne 0 ]; then
+    echo "❌ Failed to install RTK"
+    safe_exit 1
+  fi
+
+  if ${hasRtkEnableCommand ? 'true' : 'false'}; then
+    ${rtkEnableCommand}
+    if [ $? -ne 0 ]; then
+      echo "❌ Failed to enable RTK for $AGENT"
+      safe_exit 1
+    fi
+  else
+    echo "ℹ️ RTK is enabled, but no agent-specific setup is defined for $AGENT"
+  fi
+else
+  if command -v rtk >/dev/null 2>&1; then
+    ${rtkDisableCommand} || true
+  else
+    echo "⏭️ RTK disabled for this task; binary not present, skipping uninstall"
+  fi
 fi`;
 
     // --- MCP config section ---
@@ -918,6 +976,7 @@ echo "======================================="
       workspaceDeps,
       agentInstallSection,
       credentialInstallSection,
+      rtkConfigSection,
       mcpConfigSection,
       projectRepositoriesSection,
       initScriptExecution,

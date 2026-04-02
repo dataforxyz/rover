@@ -212,6 +212,7 @@ interface TaskOptions {
   context?: string[];
   contextTrustAuthors?: string;
   contextTrustAllAuthors?: boolean;
+  rtk?: string;
 }
 
 /**
@@ -285,6 +286,22 @@ const buildNetworkConfig = (
   };
 };
 
+const parseRtkOverride = (value: string | undefined): boolean | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === 'on') {
+    return true;
+  }
+
+  if (value === 'off') {
+    return false;
+  }
+
+  return undefined;
+};
+
 /**
  * Create a task for a specific agent
  */
@@ -347,6 +364,7 @@ const createTaskForAgent = async (
     workflowName: workflowName,
     agent: selectedAiAgent,
     agentModel: selectedModel,
+    rtkEnabled: parseRtkOverride(options.rtk),
     sourceBranch: sourceBranch,
     networkConfig: networkConfig,
     source: source,
@@ -637,6 +655,7 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
     context,
     contextTrustAuthors,
     contextTrustAllAuthors,
+    rtk,
   } = options;
 
   // Set global JSON mode for tests and backwards compatibility
@@ -723,6 +742,12 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
   if (contextTrustAuthors && contextTrustAllAuthors) {
     jsonOutput.error =
       '--context-trust-authors and --context-trust-all-authors are mutually exclusive';
+    await exitWithError(jsonOutput, { telemetry: getTelemetry() });
+    return;
+  }
+
+  if (rtk !== undefined && parseRtkOverride(rtk) === undefined) {
+    jsonOutput.error = '--rtk must be either "on" or "off"';
     await exitWithError(jsonOutput, { telemetry: getTelemetry() });
     return;
   }
