@@ -46,6 +46,7 @@ export interface CreateTaskData {
   agent?: string; // AI agent to use for execution
   agentModel?: string; // AI model to use (e.g., opus, sonnet, flash)
   sourceBranch?: string; // Source branch task was created from
+  rtkEnabled?: boolean; // RTK integration override for this task
   networkConfig?: NetworkConfig; // Network filtering config (overrides project config)
   source?: TaskSource; // Source of the task (github, manual, etc.)
 }

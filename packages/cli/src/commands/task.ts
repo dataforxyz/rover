@@ -63,13 +63,21 @@ type validationResult = {
 const validations = (selectedAiAgent?: string): validationResult => {
   // Check AI agent credentials based on selected agent
   if (selectedAiAgent === 'claude') {
-    const claudeFile = join(homedir(), '.claude.json');
+    // Skip validation when using Claude proxy mode — no local credentials needed
+    if (
+      !(
+        process.env.ROVER_CLAUDE_PROXY_URL &&
+        process.env.ROVER_CLAUDE_PROXY_KEY
+      )
+    ) {
+      const claudeFile = join(homedir(), '.claude.json');
 
-    if (!existsSync(claudeFile)) {
-      return {
-        error: 'Claude configuration not found',
-        tips: ['Run ' + colors.cyan('claude') + ' first to configure it'],
-      };
+      if (!existsSync(claudeFile)) {
+        return {
+          error: 'Claude configuration not found',
+          tips: ['Run ' + colors.cyan('claude') + ' first to configure it'],
+        };
+      }
     }
   } else if (selectedAiAgent === 'codex') {
     const codexCreds = join(homedir(), '.codex', 'auth.json');

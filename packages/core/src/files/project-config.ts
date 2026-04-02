@@ -266,6 +266,9 @@ export class ProjectConfigManager {
   get initScript(): string | undefined {
     return this.data.sandbox?.initScript;
   }
+  get rtk(): boolean | undefined {
+    return this.data.sandbox?.rtk;
+  }
   get sandboxExtraArgs(): string | string[] | undefined {
     return this.data.sandbox?.extraArgs;
   }

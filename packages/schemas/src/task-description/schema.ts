@@ -89,6 +89,7 @@ export const TaskDescriptionSchema = z.object({
 
   // Agent Image
   agentImage: z.string().optional(),
+  rtkEnabled: z.boolean().optional(),
 
   // Network configuration override for this task
   networkConfig: NetworkConfigSchema.optional(),

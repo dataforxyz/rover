@@ -85,6 +85,7 @@ export class TaskDescriptionManager {
       agent: taskData.agent,
       agentModel: taskData.agentModel,
       sourceBranch: taskData.sourceBranch,
+      rtkEnabled: taskData.rtkEnabled,
       networkConfig: taskData.networkConfig,
       source: taskData.source,
       version: CURRENT_TASK_DESCRIPTION_SCHEMA_VERSION,
@@ -243,6 +244,7 @@ export class TaskDescriptionManager {
     migrated.agentImage = data.agentImage;
 
     // Preserve networkConfig field
+    migrated.rtkEnabled = data.rtkEnabled;
     migrated.networkConfig = data.networkConfig;
 
     // Preserve baseCommit field
@@ -853,6 +855,9 @@ export class TaskDescriptionManager {
   }
   get agentImage(): string | undefined {
     return this.data.agentImage;
+  }
+  get rtkEnabled(): boolean | undefined {
+    return this.data.rtkEnabled;
   }
   get networkConfig(): NetworkConfig | undefined {
     return this.data.networkConfig;

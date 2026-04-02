@@ -528,17 +528,17 @@ export class Runner {
     stringOutputs: WorkflowOutput[],
     outputs: Map<string, string>
   ): Promise<void> {
-    // Try to parse JSON from the response content if it looks like JSON
+    // Try to parse JSON from the response using progressive strategies
     let jsonData: any = null;
 
-    // First, try to parse the entire response as JSON
+    // Strategy 1: Parse the entire response as JSON
     try {
       jsonData = JSON.parse(responseContent);
     } catch (error) {
-      // Not JSON, will need to extract manually
+      // Not pure JSON, try other strategies
     }
 
-    // If the response is invalid, look for JSON block in the response
+    // Strategy 2: Look for ```json code blocks
     if (jsonData == null) {
       const jsonMatch = responseContent.match(/```json\s*([\s\S]*?)\s*```/);
       if (jsonMatch) {
@@ -546,8 +546,49 @@ export class Runner {
           jsonData = JSON.parse(jsonMatch[1]);
         } catch (error) {
           console.log(
-            colors.yellow('⚠️  Found JSON block but failed to parse it')
+            colors.yellow('⚠️  Found ```json block but failed to parse it')
           );
+        }
+      }
+    }
+
+    // Strategy 3: Look for generic ``` code blocks containing JSON objects
+    if (jsonData == null) {
+      const codeBlockMatch = responseContent.match(
+        /```\s*\n?\s*(\{[\s\S]*?\})\s*\n?\s*```/
+      );
+      if (codeBlockMatch) {
+        try {
+          jsonData = JSON.parse(codeBlockMatch[1]);
+        } catch (error) {
+          // Not valid JSON in code block
+        }
+      }
+    }
+
+    // Strategy 4: Find a JSON object in the response that contains at least
+    // one expected output key (agents often write explanation before/after)
+    if (jsonData == null) {
+      const outputNames = stringOutputs.map(o => o.name);
+      const jsonObjects = responseContent.match(
+        /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+      );
+      if (jsonObjects) {
+        // Try from last to first — the final JSON block is most likely the output
+        for (let i = jsonObjects.length - 1; i >= 0; i--) {
+          try {
+            const candidate = JSON.parse(jsonObjects[i]);
+            if (
+              typeof candidate === 'object' &&
+              candidate !== null &&
+              outputNames.some(name => name in candidate)
+            ) {
+              jsonData = candidate;
+              break;
+            }
+          } catch (error) {
+            // Not valid JSON, try next
+          }
         }
       }
     }

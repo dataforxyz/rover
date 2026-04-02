@@ -30,6 +30,10 @@ import pauseCmd from './commands/pause.js';
 import stopCmd from './commands/stop.js';
 import buildCmd from './commands/build.js';
 import mcpCmd from './commands/mcp.js';
+import { addRtkCommands } from './commands/rtk/index.js';
+import rtkDisableCmd from './commands/rtk/disable.js';
+import rtkEnableCmd from './commands/rtk/enable.js';
+import rtkStatusCmd from './commands/rtk/status.js';
 import usageCmd from './commands/usage.js';
 import { addWorkflowCommands } from './commands/workflows/index.js';
 import workflowAddCmd from './commands/workflows/add.js';
@@ -70,6 +74,9 @@ const commands: CommandDefinition[] = [
   stopCmd,
   buildCmd,
   mcpCmd,
+  rtkDisableCmd,
+  rtkEnableCmd,
+  rtkStatusCmd,
   usageCmd,
   workflowAddCmd,
   workflowListCmd,
@@ -347,6 +354,10 @@ export function createProgram(
       '--sandbox-extra-args <args>',
       'Extra arguments to pass to the Docker/Podman container (e.g., "--network mynet")'
     )
+    .addOption(
+      new Option('--rtk <mode>', 'Override RTK for this task only: on or off')
+        .choices(['on', 'off'])
+    )
     .argument(
       '[description]',
       'The task description, or provide it later. Mandatory in non-interactive environments'
@@ -613,5 +624,6 @@ export function createProgram(
     .option('-a, --all', 'Remove all cache images, including current ones')
     .action(cleanupCmd.action);
 
+  addRtkCommands(program);
   return program;
 }

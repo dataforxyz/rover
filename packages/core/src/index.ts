@@ -26,6 +26,8 @@ export {
   requiredClaudeCredentials,
   requiredBedrockCredentials,
   requiredVertexAiCredentials,
+  claudeProxyEnabled,
+  getClaudeProxyConfig,
 } from './credential-utils.js';
 
 export {

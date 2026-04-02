@@ -18,4 +18,14 @@ describe('program', () => {
       taskCommand?.options.some(option => option.long === '--from-gitlab')
     ).toBe(true);
   });
+
+  it('registers the rtk command group', () => {
+    const program = createProgram({ excludeRuntimeHooks: true });
+    const rtkCommand = program.commands.find(command => command.name() === 'rtk');
+
+    expect(rtkCommand).toBeDefined();
+    expect(rtkCommand?.commands.map(command => command.name())).toEqual(
+      expect.arrayContaining(['status', 'enable', 'disable'])
+    );
+  });
 });

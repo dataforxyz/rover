@@ -35,6 +35,7 @@ describe('SetupBuilder multi-repo projects', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     testDirs.length = 0;
+    delete process.env.ROVER_RTK;
   });
 
   it('generates repository sync commands for project list entries', () => {
@@ -93,6 +94,77 @@ describe('SetupBuilder multi-repo projects', () => {
     expect(script).toContain(
       "git -C '/workspace/frontend' checkout -B 'task/1' HEAD"
     );
+  });
+
+  it('enables RTK for Claude by default', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      rtkEnabled: undefined,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      rtk: undefined,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(fakeTask as any, 'claude', fakeConfig as any);
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain('📦 Reconciling RTK integration');
+    expect(script).toContain('rtk init -g --hook-only --auto-patch');
+  });
+
+  it('disables RTK for a task override', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rover-setup-test-'));
+    testDirs.push(root);
+
+    const fakeTask = {
+      id: 1,
+      title: 'test',
+      description: 'test',
+      inputs: {},
+      networkConfig: undefined,
+      rtkEnabled: false,
+      getBasePath: () => root,
+      getIterationPath: () => join(root, 'iterations', '1'),
+    };
+
+    const fakeConfig = {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      mcps: [],
+      initScript: undefined,
+      rtk: true,
+      allInitScripts: [],
+      network: undefined,
+      projectRoot: root,
+      projects: [],
+    };
+
+    const builder = new SetupBuilder(fakeTask as any, 'codex', fakeConfig as any);
+    const entrypointPath = builder.generateEntrypoint(false);
+    const script = readFileSync(entrypointPath, 'utf8');
+
+    expect(script).toContain('rtk init -g --codex --uninstall');
   });
 
   it('installs the agent CLI without unsupported install flags', () => {

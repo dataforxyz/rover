@@ -183,6 +183,8 @@ export const SandboxConfigSchema = z.object({
   agentImage: z.string().optional(),
   /** Initialization script to run in the container */
   initScript: z.string().optional(),
+  /** Enable or disable RTK integration for this project */
+  rtk: z.boolean().optional(),
   /** Extra arguments to pass to the Docker/Podman container */
   extraArgs: z.union([z.string(), z.array(z.string())]).optional(),
   /** Network filtering configuration */

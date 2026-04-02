@@ -454,7 +454,16 @@ echo -e "\\n📦 Done installing agent"`;
     // --- credential install section ---
     // Always copy credentials on every container start (including cached images)
     // so that fresh credentials are available even when the image was cached.
-    const credentialInstallSection = `# Copy credentials (runs on every start, including cached images)
+    // In proxy mode, Claude credentials are not mounted so skip the copy for Claude.
+    const isClaudeProxy = !!(
+      process.env.ROVER_CLAUDE_PROXY_URL &&
+      process.env.ROVER_CLAUDE_PROXY_KEY
+    );
+    const credentialInstallSection = isClaudeProxy && this.agentName === 'claude'
+      ? `# Proxy mode: Claude credentials provided via ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
+echo -e "\\n📦 Claude proxy mode — skipping credential copy"
+echo "✅ Using proxy at $ANTHROPIC_BASE_URL"`
+      : `# Copy credentials (runs on every start, including cached images)
 echo -e "\\n📦 Copying agent credentials"
 # Try with sudo first; fall back to non-sudo if sudo is broken (e.g. setuid
 # bit lost in cached images). Credential files are mounted read-only at /

@@ -9,6 +9,7 @@ import {
   ProjectConfigManager,
   TaskDescriptionManager,
   VERBOSE,
+  claudeProxyEnabled,
 } from 'rover-core';
 import { getAIAgentTool } from '../agents/index.js';
 import { isJsonMode } from '../context.js';
@@ -253,6 +254,14 @@ export class DockerSandbox extends Sandbox {
     const configExtraArgs = normalizeExtraArgs(projectConfig.sandboxExtraArgs);
     const cliExtraArgs = normalizeExtraArgs(this.options?.extraArgs);
     const extraArgs = [...configExtraArgs, ...cliExtraArgs];
+
+    // In proxy mode, ensure containers can reach the host-local proxy
+    if (claudeProxyEnabled()) {
+      dockerArgs.push(
+        '--add-host',
+        'host.docker.internal:host-gateway'
+      );
+    }
 
     dockerArgs.push(
       ...envVariables,

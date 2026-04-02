@@ -4,6 +4,8 @@ import {
   requiredClaudeCredentials,
   requiredBedrockCredentials,
   requiredVertexAiCredentials,
+  claudeProxyEnabled,
+  getClaudeProxyConfig,
 } from 'rover-core';
 import {
   AIAgentTool,
@@ -290,35 +292,40 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     const claudeCreds = join(homedir(), '.claude', '.credentials.json');
     const gcloudConfig = join(homedir(), '.config', 'gcloud');
 
-    if (existsSync(claudeFile)) {
-      dockerMounts.push(`-v`, `${claudeFile}:/.claude.json:Z,ro`);
-    }
+    // In proxy mode, skip mounting Claude config and credentials — the
+    // container authenticates via ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
+    // pointing at the host-local CLIProxyAPI instance.
+    if (!claudeProxyEnabled()) {
+      if (existsSync(claudeFile)) {
+        dockerMounts.push(`-v`, `${claudeFile}:/.claude.json:Z,ro`);
+      }
 
-    if (requiredClaudeCredentials()) {
-      if (existsSync(claudeCreds)) {
-        dockerMounts.push(`-v`, `${claudeCreds}:/.credentials.json:Z,ro`);
-      } else if (platform() === 'darwin') {
-        const claudeCredsData = findKeychainCredentials(
-          'Claude Code-credentials'
-        );
-        const userCredentialsTempPath = mkdtempSync(join(tmpdir(), 'rover-'));
-        const claudeCredsFile = join(
-          userCredentialsTempPath,
-          '.credentials.json'
-        );
-        writeFileSync(claudeCredsFile, claudeCredsData, { mode: 0o600 });
-        // Schedule cleanup of host-side temp credentials after mount
-        process.on('exit', () => {
-          try {
-            unlinkSync(claudeCredsFile);
-            rmdirSync(userCredentialsTempPath);
-          } catch {
-            // Best effort cleanup
-          }
-        });
-        // Do not mount credentials as RO, as they will be
-        // shredded by the setup script when it finishes
-        dockerMounts.push(`-v`, `${claudeCredsFile}:/.credentials.json:Z`);
+      if (requiredClaudeCredentials()) {
+        if (existsSync(claudeCreds)) {
+          dockerMounts.push(`-v`, `${claudeCreds}:/.credentials.json:Z,ro`);
+        } else if (platform() === 'darwin') {
+          const claudeCredsData = findKeychainCredentials(
+            'Claude Code-credentials'
+          );
+          const userCredentialsTempPath = mkdtempSync(join(tmpdir(), 'rover-'));
+          const claudeCredsFile = join(
+            userCredentialsTempPath,
+            '.credentials.json'
+          );
+          writeFileSync(claudeCredsFile, claudeCredsData, { mode: 0o600 });
+          // Schedule cleanup of host-side temp credentials after mount
+          process.on('exit', () => {
+            try {
+              unlinkSync(claudeCredsFile);
+              rmdirSync(userCredentialsTempPath);
+            } catch {
+              // Best effort cleanup
+            }
+          });
+          // Do not mount credentials as RO, as they will be
+          // shredded by the setup script when it finishes
+          dockerMounts.push(`-v`, `${claudeCredsFile}:/.credentials.json:Z`);
+        }
       }
     }
 
@@ -345,11 +352,27 @@ You MUST output a valid JSON string as an output. Just output the JSON string an
     const envVars: string[] = [];
     const addedKeys = new Set<string>();
 
+    // In proxy mode, inject the proxy URL and key for container auth.
+    // The container's Claude Code will use these instead of real OAuth tokens.
+    const proxyConfig = getClaudeProxyConfig();
+    if (proxyConfig) {
+      envVars.push(
+        '-e',
+        `ANTHROPIC_BASE_URL=${proxyConfig.url}`,
+        '-e',
+        `ANTHROPIC_AUTH_TOKEN=${proxyConfig.key}`
+      );
+      addedKeys.add('ANTHROPIC_BASE_URL');
+      addedKeys.add('ANTHROPIC_AUTH_TOKEN');
+    }
+
     // Look for any ANTHROPIC_* and CLAUDE_CODE_* env vars
     for (const key in process.env) {
       if (key.startsWith('ANTHROPIC_') || key.startsWith('CLAUDE_CODE_')) {
-        addedKeys.add(key);
-        envVars.push('-e', key);
+        if (!addedKeys.has(key)) {
+          addedKeys.add(key);
+          envVars.push('-e', key);
+        }
       }
     }
 
