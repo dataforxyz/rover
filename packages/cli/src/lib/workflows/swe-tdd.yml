@@ -11,6 +11,10 @@ inputs:
     description: 'Detailed task description'
     type: string
     required: true
+  - name: build_command
+    description: 'Override the build command (e.g. "pnpm build", "make build"). Use "none" to skip a separate build step.'
+    type: string
+    required: false
   - name: test_command
     description: 'Override the test command (e.g. "npm test", "pytest"). If not provided, it will be auto-detected from the project.'
     type: string
@@ -52,6 +56,7 @@ steps:
 
       Task title: {{inputs.title}}
       Task description: {{inputs.description}}
+      User-provided build command override (if empty or not set, auto-detect from project): {{inputs.build_command}}
       User-provided test command override (if empty or not set, auto-detect from project): {{inputs.test_command}}
 
       Follow these steps to complete it. Do not move to the next phase until you complete the previous one.
@@ -113,7 +118,7 @@ steps:
 
       </template>
 
-      IMPORTANT: After writing context.md, you MUST extract the task complexity value, build command, and test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
+      IMPORTANT: After writing context.md, you MUST extract the task complexity value, build command, and test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: if the user provided a valid override above, return that exactly. Otherwise, return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
     outputs:
       - name: complexity
         description: 'Task complexity: either "simple" or "complex"'
