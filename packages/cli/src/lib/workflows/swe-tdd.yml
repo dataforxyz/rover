@@ -138,6 +138,7 @@ steps:
   - id: persist_context
     type: command
     name: 'Persist Context'
+    allow_failure: true
     command: |
       cat > /output/context.md <<'__ROVER_EOF_9f3a7c__'
       {{steps.context.outputs.context_markdown}}
@@ -229,6 +230,7 @@ steps:
   - id: persist_plan
     type: command
     name: 'Persist Plan'
+    allow_failure: true
     command: |
       cat > /output/plan.md <<'__ROVER_EOF_9f3a7c__'
       {{steps.plan.outputs.plan_markdown}}
@@ -303,6 +305,7 @@ steps:
   - id: persist_test_changes
     type: command
     name: 'Persist Test Changes'
+    allow_failure: true
     command: |
       cat > /output/test_changes.md <<'__ROVER_EOF_9f3a7c__'
       {{steps.write_tests.outputs.test_changes_markdown}}
@@ -389,6 +392,7 @@ steps:
   - id: persist_changes
     type: command
     name: 'Persist Changes'
+    allow_failure: true
     command: |
       cat > /output/changes.md <<'__ROVER_EOF_9f3a7c__'
       {{steps.implement.outputs.changes_markdown}}
@@ -673,6 +677,7 @@ steps:
       - id: persist_review
         type: command
         name: 'Persist Review'
+        allow_failure: true
         if: steps.code_review.outputs.issues_found != false
         command: |
           cat > /output/review.md <<'__ROVER_EOF_9f3a7c__'
@@ -682,6 +687,7 @@ steps:
       - id: persist_review_fixes
         type: command
         name: 'Persist Review Fixes'
+        allow_failure: true
         if: steps.apply_fixes.outputs.fixes_applied == true
         command: |
           cat > /output/review_fixes.md <<'__ROVER_EOF_9f3a7c__'
@@ -838,6 +844,7 @@ steps:
   - id: persist_summary
     type: command
     name: 'Persist Summary'
+    allow_failure: true
     command: |
       cat > /output/summary.md <<'__ROVER_EOF_9f3a7c__'
       {{steps.summary.outputs.summary_markdown}}
