@@ -319,7 +319,7 @@ const createTaskForAgent = async (
   jsonMode: boolean,
   networkConfig?: NetworkConfig,
   source?: {
-    type: 'github' | 'gitlab' | 'manual';
+    type: 'github' | 'gitlab' | 'forgejo' | 'manual';
     id?: string;
     url?: string;
     title?: string;
@@ -495,12 +495,21 @@ const createTaskForAgent = async (
     if (!source) {
       const issueEntry = entries.find(entry => {
         const type = entry.metadata?.type;
-        return type === 'github:issue' || type === 'gitlab:issue';
+        return (
+          type === 'github:issue' ||
+          type === 'gitlab:issue' ||
+          type === 'forgejo:issue'
+        );
       });
       if (issueEntry?.metadata && 'number' in issueEntry.metadata) {
-        const isGitHub = issueEntry.metadata.type === 'github:issue';
+        const sourceType =
+          issueEntry.metadata.type === 'github:issue'
+            ? 'github'
+            : issueEntry.metadata.type === 'gitlab:issue'
+              ? 'gitlab'
+              : 'forgejo';
         task.setSource({
-          type: isGitHub ? 'github' : 'gitlab',
+          type: sourceType,
           id: String(issueEntry.metadata.number),
           title: issueEntry.name,
         });
@@ -858,7 +867,7 @@ const taskCommand = async (initPrompt?: string, options: TaskOptions = {}) => {
   // Task source (populated when --from-github is used)
   let taskSource:
     | {
-        type: 'github' | 'gitlab' | 'manual';
+        type: 'github' | 'gitlab' | 'forgejo' | 'manual';
         id?: string;
         url?: string;
         title?: string;

@@ -750,6 +750,74 @@ export class TaskDescriptionManager {
     return this.basePath;
   }
 
+  private readEntrypointAgent(iteration: number): string | undefined {
+    const entrypointPath = join(
+      this.iterationsPath(),
+      iteration.toString(),
+      'entrypoint.sh'
+    );
+    if (!existsSync(entrypointPath)) {
+      return undefined;
+    }
+
+    try {
+      const content = readFileSync(entrypointPath, 'utf8');
+      const match = content.match(/^AGENT=([^\n\r]+)$/m);
+      return match?.[1]?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private readLatestExecutionAgentInfo(
+    iteration: number
+  ): { agent?: string; model?: string } {
+    const projectDataPath = dirname(dirname(this.basePath));
+    const logPath = join(
+      projectDataPath,
+      'logs',
+      'tasks',
+      this.taskId.toString(),
+      'iterations',
+      iteration.toString(),
+      'rover.jsonl'
+    );
+    if (!existsSync(logPath)) {
+      return {};
+    }
+
+    try {
+      const lines = readFileSync(logPath, 'utf8')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+
+      let agent: string | undefined;
+      let model: string | undefined;
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as {
+            agent?: unknown;
+            model?: unknown;
+          };
+          if (typeof entry.agent === 'string' && entry.agent.trim()) {
+            agent = entry.agent.trim();
+          }
+          if (typeof entry.model === 'string' && entry.model.trim()) {
+            model = entry.model.trim();
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      return { agent, model };
+    } catch {
+      return {};
+    }
+  }
+
   // ============================================================
   // Data Access (Getters)
   // ============================================================
@@ -867,6 +935,30 @@ export class TaskDescriptionManager {
   }
   get source(): TaskDescription['source'] {
     return this.data.source;
+  }
+
+  private getLatestIterationNumber(): number | undefined {
+    const iteration = this.data.iterations;
+    if (!Number.isInteger(iteration) || iteration < 1) {
+      return undefined;
+    }
+    return iteration;
+  }
+
+  getEffectiveAgentInfo(): { agent?: string; model?: string } {
+    const iterationNumber = this.getLatestIterationNumber();
+    const logInfo = iterationNumber
+      ? this.readLatestExecutionAgentInfo(iterationNumber)
+      : {};
+    const entrypointAgent = iterationNumber
+      ? this.readEntrypointAgent(iterationNumber)
+      : undefined;
+    const agent = logInfo.agent || entrypointAgent || this.data.agent;
+    const model =
+      logInfo.model ||
+      (agent && agent === this.data.agent ? this.data.agentModel : undefined);
+
+    return { agent, model };
   }
   get runSegments(): TaskDescription['runSegments'] {
     return this.data.runSegments;

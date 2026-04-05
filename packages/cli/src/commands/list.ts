@@ -189,11 +189,14 @@ const buildTaskRow = (
   }
 
   const iterationStatus = maybeIterationStatus(lastIteration);
+  const effectiveAgentInfo = task.getEffectiveAgentInfo();
+  const effectiveAgent = effectiveAgentInfo.agent;
+  const effectiveModel = effectiveAgentInfo.model;
 
   // Format agent with model (e.g., "claude:sonnet")
-  let agentDisplay = task.agent || '-';
-  if (task.agent && task.agentModel) {
-    agentDisplay = `${task.agent}:${task.agentModel}`;
+  let agentDisplay = effectiveAgent || '-';
+  if (effectiveAgent && effectiveModel) {
+    agentDisplay = `${effectiveAgent}:${effectiveModel}`;
   }
 
   // Resolve human-readable pause reason for paused tasks
@@ -204,7 +207,7 @@ const buildTaskRow = (
 
   // For paused tasks, show retry time instead of step name
   let currentStepDisplay = iterationStatus?.currentStep || '-';
-  const pauseProvider = iterationStatus?.provider || task.agent;
+  const pauseProvider = iterationStatus?.provider || effectiveAgent;
   if (taskStatus === 'PAUSED' && retryScheduler && pauseProvider) {
     // Only show the task-specific retry time; don't fall back to provider-wide
     // time which could show another task's scheduled retry.
@@ -416,7 +419,7 @@ const listCommand = async (
           if (currentStatus === 'PAUSED') {
             const lastIteration = task.getLastIteration();
             const iterStatus = maybeIterationStatus(lastIteration);
-            const provider = iterStatus?.provider || task.agent;
+            const provider = iterStatus?.provider || task.getEffectiveAgentInfo().agent;
             if (provider) {
               await retryScheduler.registerPausedTask(
                 provider,
@@ -428,7 +431,7 @@ const listCommand = async (
             // If task was paused but is no longer, unregister
             const provider =
               maybeIterationStatus(task.getLastIteration())?.provider ||
-              task.agent ||
+              task.getEffectiveAgentInfo().agent ||
               'unknown';
             retryScheduler.unregisterTask(provider, task.id, projectData);
           }
@@ -494,6 +497,7 @@ const listCommand = async (
 
       for (const { task, project: projectData } of tasksWithProjects) {
         let iterationsData: IterationManager[] = [];
+        const effectiveAgentInfo = task.getEffectiveAgentInfo();
         try {
           iterationsData = task.getIterations();
         } catch (err) {
@@ -509,6 +513,8 @@ const listCommand = async (
 
         jsonOutput.push({
           ...task.rawData,
+          agent: effectiveAgentInfo.agent,
+          agentModel: effectiveAgentInfo.model,
           iterationsData,
           projectId: projectData?.id ?? project?.id,
         });

@@ -39,7 +39,9 @@ const mockGitInstance = vi.hoisted(() => ({
   push: vi.fn(),
   remoteUrl: vi.fn(),
   checkoutBranch: vi.fn(),
-  getCurrentBranch: vi.fn((options?: { worktreePath?: string }) =>
+  getCurrentBranch: vi.fn<
+    (options?: { worktreePath?: string }) => string
+  >((options?: { worktreePath?: string }) =>
     options?.worktreePath === '/tmp/task-1/frontend' ? 'main' : 'task/1'
   ),
 }));

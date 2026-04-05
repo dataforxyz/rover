@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TaskDescriptionManager } from '../task-description.js';
@@ -73,6 +79,64 @@ describe('TaskDescriptionManager', () => {
 
       expect(task.agent).toBeUndefined();
       expect(task.sourceBranch).toBeUndefined();
+    });
+
+    it('should prefer runtime agent from entrypoint when task metadata is stale', () => {
+      const taskPath = getTaskPath(3);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 3,
+        title: 'Runtime Agent Test',
+        description: 'Detects effective runtime agent',
+        agent: 'claude',
+        agentModel: 'sonnet',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      const iterationPath = join(taskPath, 'iterations', '1');
+      mkdirSync(iterationPath, { recursive: true });
+      writeFileSync(join(iterationPath, 'entrypoint.sh'), '#!/bin/bash\nAGENT=codex\n');
+
+      expect(task.getEffectiveAgentInfo()).toEqual({
+        agent: 'codex',
+        model: undefined,
+      });
+    });
+
+    it('should prefer execution log agent and model over stale task metadata', () => {
+      const taskPath = getTaskPath(4);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 4,
+        title: 'Runtime Agent Log Test',
+        description: 'Detects effective runtime agent/model from logs',
+        agent: 'claude',
+        agentModel: 'sonnet',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      const iterationPath = join(taskPath, 'iterations', '1');
+      mkdirSync(iterationPath, { recursive: true });
+      writeFileSync(join(iterationPath, 'entrypoint.sh'), '#!/bin/bash\nAGENT=codex\n');
+
+      const logDir = join(testDir, 'logs', 'tasks', '4', 'iterations', '1');
+      mkdirSync(logDir, { recursive: true });
+      writeFileSync(
+        join(logDir, 'rover.jsonl'),
+        [
+          JSON.stringify({ event: 'step_start', agent: 'codex' }),
+          JSON.stringify({
+            event: 'step_complete',
+            agent: 'codex',
+            model: 'gpt-5.4',
+          }),
+        ].join('\n')
+      );
+
+      expect(task.getEffectiveAgentInfo()).toEqual({
+        agent: 'codex',
+        model: 'gpt-5.4',
+      });
     });
   });
 
