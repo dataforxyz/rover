@@ -54,6 +54,27 @@ interface BuildRepositoryMount {
   containerPath: string;
 }
 
+function getBuildEnvArgs(agent: string): string[] {
+  if (agent.split(':')[0] !== 'claude') {
+    return [];
+  }
+
+  const args: string[] = [];
+  for (const key of [
+    'ROVER_CLAUDE_PROXY_URL',
+    'ROVER_CLAUDE_PROXY_KEY',
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
+  ]) {
+    const value = process.env[key];
+    if (value) {
+      args.push('-e', `${key}=${value}`);
+    }
+  }
+
+  return args;
+}
+
 export function prepareBuildProjectConfig(
   projectPath: string,
   projectConfig: ProjectConfigManager
@@ -382,7 +403,7 @@ rm -rf /workspace 2>/dev/null || true
 ln -s "$BUILD_WORKSPACE" /workspace
 
 echo "Installing agent CLI ($AGENT_NAME)..."
-run_as_root_with_env rover-agent install $AGENT_NAME || echo "Agent install failed (non-fatal for build)"
+run_as_root_with_env rover-agent install $AGENT_NAME
 run_as_root chown -R $(id -u):$(id -g) $HOME
 
 # Copy credentials
@@ -424,6 +445,10 @@ chmod -R a+rwX $HOME 2>/dev/null || true
 for _dlcache_dir in /var/cache/apt; do
   [ -d "$_dlcache_dir" ] && chmod -R a+rwX "$_dlcache_dir" 2>/dev/null || true
 done
+
+# Remove the staged writable workspace before committing the cache image.
+# It is only needed during build-time and otherwise bloats the committed layer.
+rm -rf "$BUILD_WORKSPACE" /workspace 2>/dev/null || true
 
 echo ""
 echo "Build complete!"
@@ -545,6 +570,7 @@ const buildCommand = async (
       'create',
       '--name',
       containerName,
+      ...getBuildEnvArgs(agent),
       '-v',
       `${projectPath}:/workspace-src:Z,ro`,
       '-v',

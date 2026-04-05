@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { launch, launchSync, getVersion } from 'rover-core';
 import {
+  CACHE_BUILD_SCHEMA_VERSION,
   checkImageCache,
   computeSetupHash,
   getCacheImageTag,
@@ -36,6 +37,7 @@ vi.mock('rover-core', async () => {
 
 function makeInputs(overrides: Partial<SetupHashInputs> = {}): SetupHashInputs {
   return {
+    buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
     agentImage: 'ghcr.io/endorhq/rover/agent:v1.0.0',
     languages: ['typescript', 'javascript'],
     packageManagers: ['pnpm', 'npm'],
@@ -140,6 +142,12 @@ describe('computeSetupHash', () => {
   it('changes when roverVersion changes', () => {
     const a = computeSetupHash(makeInputs({ roverVersion: '1.0.0' }));
     const b = computeSetupHash(makeInputs({ roverVersion: '2.0.0' }));
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when cache build schema version changes', () => {
+    const a = computeSetupHash(makeInputs({ buildSchemaVersion: '1' }));
+    const b = computeSetupHash(makeInputs({ buildSchemaVersion: '2' }));
     expect(a).not.toBe(b);
   });
 
@@ -485,9 +493,6 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -496,7 +501,7 @@ describe('waitForInitAndCommit', () => {
     );
 
     expect(result).toBe(true);
-    expect(mockedLaunch).toHaveBeenCalledTimes(6);
+    expect(mockedLaunch).toHaveBeenCalledTimes(3);
     expect(mockedLaunch).toHaveBeenNthCalledWith(
       1,
       ContainerBackend.Docker,
@@ -515,21 +520,6 @@ describe('waitForInitAndCommit', () => {
       ['rm', '-f', 'test-container'],
       undefined
     );
-    expect(mockedLaunch).toHaveBeenNthCalledWith(
-      4,
-      ContainerBackend.Docker,
-      [
-        'run',
-        '--name',
-        'test-container-fixup',
-        '--entrypoint',
-        '/bin/bash',
-        'rover-cache:abc123',
-        '-c',
-        'chmod -R a+rwX /home/agent 2>/dev/null || true',
-      ],
-      undefined
-    );
   });
 
   it('includes LABEL change when projectPath is provided', async () => {
@@ -538,9 +528,6 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -570,9 +557,6 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const result = await waitForInitAndCommit(
       ContainerBackend.Docker,
@@ -605,9 +589,6 @@ describe('waitForInitAndCommit', () => {
     } as any);
     mockedLaunch.mockResolvedValueOnce({} as any); // commit
     mockedLaunch.mockResolvedValueOnce({} as any); // rm -f
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup run
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup commit
-    mockedLaunch.mockResolvedValueOnce({} as any); // fixup rm -f
 
     const metadata = { dockerHost: 'tcp://remote:2375' };
     const result = await waitForInitAndCommit(
@@ -621,7 +602,7 @@ describe('waitForInitAndCommit', () => {
 
     expect(result).toBe(true);
     // Every launch call should receive { env: { DOCKER_HOST: ... } }
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= 3; i++) {
       const callOpts = mockedLaunch.mock.calls[i - 1][2] as any;
       expect(callOpts?.env?.DOCKER_HOST).toBe('tcp://remote:2375');
     }

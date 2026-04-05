@@ -45,7 +45,12 @@ function envFromSandboxMetadata(
  */
 const INIT_EXPECTED_EXIT_CODE = 0;
 
+// Bump when the cache build process changes in a way that should invalidate
+// existing rover-cache tags even if project inputs stay the same.
+export const CACHE_BUILD_SCHEMA_VERSION = '2';
+
 export interface SetupHashInputs {
+  buildSchemaVersion: string;
   agentImage: string;
   languages: string[];
   packageManagers: string[];
@@ -85,6 +90,7 @@ export interface SetupHashInputs {
  */
 export function computeSetupHash(inputs: SetupHashInputs): string {
   const normalized: Record<string, unknown> = {
+    buildSchemaVersion: inputs.buildSchemaVersion,
     agentImage: inputs.agentImage,
     languages: [...inputs.languages].sort(),
     packageManagers: [...inputs.packageManagers].sort(),
@@ -184,47 +190,6 @@ export async function waitForInitAndCommit(
       await launch(backend, commitArgs, opts);
       await launch(backend, ['rm', '-f', containerName], opts);
 
-      // Post-commit fixup: download cache volumes are mounted during build,
-      // so `chmod -R a+rwX $HOME` in the entrypoint only affects the volume
-      // contents (which docker commit ignores), not the underlying directories.
-      // Run a quick fixup container (without volumes) to set correct permissions.
-      const fixupName = `${containerName}-fixup`;
-      try {
-        await launch(
-          backend,
-          [
-            'run',
-            '--name',
-            fixupName,
-            '--entrypoint',
-            '/bin/bash',
-            cacheTag,
-            '-c',
-            'chmod -R a+rwX /home/agent 2>/dev/null || true',
-          ],
-          opts
-        );
-        const fixupCommitArgs = ['commit'];
-        if (projectPath) {
-          fixupCommitArgs.push(
-            '--change',
-            `LABEL rover.project.path=${projectPath}`
-          );
-        }
-        if (agent) {
-          fixupCommitArgs.push('--change', `LABEL rover.agent=${agent}`);
-        }
-        fixupCommitArgs.push(fixupName, cacheTag);
-        await launch(backend, fixupCommitArgs, opts);
-        await launch(backend, ['rm', '-f', fixupName], opts);
-      } catch {
-        // Best-effort — if fixup fails, the original image is still usable
-        try {
-          await launch(backend, ['rm', '-f', fixupName], opts);
-        } catch {
-          // ignore cleanup errors
-        }
-      }
 
       return true;
     }
@@ -504,6 +469,7 @@ export function checkImageCache(
 
   const agentImageId = resolveImageId(backend, agentImage);
   const hash = computeSetupHash({
+    buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
     agentImage: agentImageId,
     languages,
     packageManagers,

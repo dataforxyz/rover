@@ -64,9 +64,10 @@ const jsonErrorOutput = (
   taskId?: number,
   task?: TaskDescriptionManager
 ): TaskInspectionOutput => {
+  const effectiveAgentInfo = task?.getEffectiveAgentInfo();
   return {
     success: false,
-    agent: task?.agent,
+    agent: effectiveAgentInfo?.agent,
     baseCommit: task?.baseCommit,
     branchName: task?.branchName || '',
     completedAt: task?.completedAt,
@@ -181,6 +182,10 @@ const inspectCommand = async (
       iterationNumber = task.iterations;
     }
 
+    const effectiveAgentInfo = task.getEffectiveAgentInfo();
+    const effectiveAgent = effectiveAgentInfo.agent;
+    const effectiveModel = effectiveAgentInfo.model;
+
     // Load the iteration config
     const iterationPath = join(
       task.iterationsPath(),
@@ -252,6 +257,7 @@ const inspectCommand = async (
         const git = new Git({ cwd: project.path });
         const stats = await git.diffStats({
           worktreePath: task.worktreePath,
+          branch: task.baseCommit || undefined,
           includeUntracked: true,
         });
         fileChanges = stats.files.map(fileStat => ({
@@ -264,10 +270,10 @@ const inspectCommand = async (
       // Output JSON format
       const jsonOutput: TaskInspectionOutput = {
         success: true,
-        agent: task.agent,
-        agentModel: task.agentModel,
-        agentDisplay: task.agent
-          ? formatAgentWithModel(task.agent as any, task.agentModel)
+        agent: effectiveAgent,
+        agentModel: effectiveModel,
+        agentDisplay: effectiveAgent
+          ? formatAgentWithModel(effectiveAgent as any, effectiveModel)
           : undefined,
         baseCommit: task.baseCommit,
         branchName: task.branchName,
@@ -321,8 +327,8 @@ const inspectCommand = async (
         ID: `${task.id.toString()} (${colors.gray(task.uuid)})`,
         Title: task.title,
         Status: statusColorFunc(formattedStatus),
-        Agent: task.agent
-          ? formatAgentWithModel(task.agent as any, task.agentModel)
+        Agent: effectiveAgent
+          ? formatAgentWithModel(effectiveAgent as any, effectiveModel)
           : '-',
         Workflow: task.workflowName,
         'Created At': new Date(task.createdAt).toLocaleString(),
@@ -335,6 +341,8 @@ const inspectCommand = async (
             ? 'GitHub Issue'
             : task.source.type === 'gitlab'
               ? 'GitLab Issue'
+              : task.source.type === 'forgejo'
+                ? 'Forgejo Issue'
               : 'Source';
         properties[sourceLabel] = colors.cyan(task.source.url);
       }
@@ -424,6 +432,7 @@ const inspectCommand = async (
         const git = new Git({ cwd: project.path });
         const stats = await git.diffStats({
           worktreePath: task.worktreePath,
+          branch: task.baseCommit || undefined,
           includeUntracked: true,
         });
 

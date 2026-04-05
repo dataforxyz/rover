@@ -25,6 +25,7 @@ import {
 import { parseAgentString } from '../utils/agent-parser.js';
 import { isJsonMode, requireProjectContext } from '../lib/context.js';
 import { isResumeLockActive } from '../utils/resume-lock.js';
+import { acquireResumeLock } from '../lib/resume-helper.js';
 import type { IPromptTask } from '../lib/prompts/index.js';
 import { createSandbox } from '../lib/sandbox/index.js';
 import { getTelemetry } from '../lib/telemetry.js';
@@ -300,6 +301,8 @@ const iterateCommand = async (
 
     result.instructions = finalInstructions;
 
+    let releaseStartupLock: (() => void) | null = null;
+
     try {
       // Load AI agent selection - prefer CLI flag, then task's agent, then user settings
       let selectedAiAgent: string;
@@ -387,9 +390,20 @@ const iterateCommand = async (
         return;
       }
 
+      releaseStartupLock = acquireResumeLock(iterationPath);
+      if (!releaseStartupLock) {
+        result.error =
+          'Task is already being resumed or restarted by another process.';
+        await exitWithError(result, { telemetry });
+        return;
+      }
+
+      const startupTimestamp = new Date().toISOString();
+
       // Update task with new iteration info
       task.incrementIteration();
-      task.markIterating();
+      task.markResuming(startupTimestamp, { resetAutoRetryCount: false });
+      task.markIterating(startupTimestamp);
 
       // Create new iteration config with raw instructions (will be updated after expansion)
       const iteration = IterationManager.createIteration(
@@ -565,10 +579,16 @@ const iterateCommand = async (
         ],
         telemetry,
       });
+
+      releaseStartupLock?.();
+      releaseStartupLock = null;
     } catch (error) {
+      releaseStartupLock?.();
+      releaseStartupLock = null;
+
       // If the task was marked ITERATING but sandbox creation failed,
       // reset it to FAILED so it's immediately recoverable without needing `restart`
-      if (task && task.isIterating()) {
+      if (task && (task.isIterating() || task.isInProgress())) {
         task.markFailed(
           error instanceof Error ? error.message : 'Iteration failed to start'
         );

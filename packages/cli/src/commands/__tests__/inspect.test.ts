@@ -251,6 +251,43 @@ describe('inspect command', () => {
       expect(parsed).toHaveProperty('workflowName');
     });
 
+    it('should report fileChanges against the recorded base commit when available', async () => {
+      const { task, worktreePath } = createTestTask(1, 'Task With Branch Diff');
+      const baseCommit = launchSync('git', ['rev-parse', 'HEAD']).stdout
+        ?.toString()
+        .trim();
+      task.setBaseCommit(baseCommit || '');
+
+      writeFileSync(join(testDir, worktreePath, 'feature.txt'), 'hello\n');
+      launchSync('git', ['add', 'feature.txt'], {
+        cwd: join(testDir, worktreePath),
+      });
+      launchSync('git', ['commit', '-m', 'Add feature file'], {
+        cwd: join(testDir, worktreePath),
+      });
+
+      await inspectCommand('1', undefined, { json: true });
+
+      const jsonOutput = capturedOutput.find(line => {
+        try {
+          JSON.parse(line);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+
+      expect(jsonOutput).toBeDefined();
+      const parsed = JSON.parse(jsonOutput!);
+      expect(parsed.fileChanges).toEqual([
+        {
+          path: 'feature.txt',
+          insertions: 1,
+          deletions: 0,
+        },
+      ]);
+    });
+
     it('should output error as single JSON object for invalid task ID', async () => {
       await inspectCommand('invalid', undefined, { json: true });
 

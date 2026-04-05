@@ -165,7 +165,7 @@ describe('generateBuildEntrypoint', () => {
     expect(script).toContain('run_as_root() {');
     expect(script).toContain('run_as_root_with_env() {');
     expect(script).toContain(
-      'run_as_root_with_env rover-agent install $AGENT_NAME || echo "Agent install failed (non-fatal for build)"'
+      'run_as_root_with_env rover-agent install $AGENT_NAME'
     );
     expect(script).not.toContain('$_SUDO -E rover-agent install $AGENT_NAME');
   });
@@ -250,6 +250,22 @@ describe('generateBuildEntrypoint', () => {
     expect(initScriptIndex).toBeGreaterThanOrEqual(0);
     expect(rootDependencyIndex).toBeGreaterThan(initScriptIndex);
     expect(projectDependencyIndex).toBeGreaterThan(initScriptIndex);
+  });
+
+  it('removes the staged build workspace before committing the cache image', () => {
+    const script = generateBuildEntrypoint('claude', {
+      allLanguages: [],
+      allPackageManagers: [],
+      allTaskManagers: [],
+      allInitScripts: [],
+      projects: [],
+      mcps: [],
+    } as any);
+
+    expect(script).toContain('export BUILD_WORKSPACE=/tmp/rover-build-workspace');
+    expect(script).toContain(
+      'rm -rf "$BUILD_WORKSPACE" /workspace 2>/dev/null || true'
+    );
   });
 
   it('runs root init scripts from mounted host paths during cache builds', () => {

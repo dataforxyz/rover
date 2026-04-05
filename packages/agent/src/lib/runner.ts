@@ -528,78 +528,58 @@ export class Runner {
     stringOutputs: WorkflowOutput[],
     outputs: Map<string, string>
   ): Promise<void> {
-    // Try to parse JSON from the response using progressive strategies
-    let jsonData: any = null;
+    let missingRequired = this.populateStringOutputs(
+      responseContent,
+      stringOutputs,
+      outputs
+    );
 
-    // Strategy 1: Parse the entire response as JSON
-    try {
-      jsonData = JSON.parse(responseContent);
-    } catch (error) {
-      // Not pure JSON, try other strategies
-    }
-
-    // Strategy 2: Look for ```json code blocks
-    if (jsonData == null) {
-      const jsonMatch = responseContent.match(/```json\s*([\s\S]*?)\s*```/);
-      if (jsonMatch) {
-        try {
-          jsonData = JSON.parse(jsonMatch[1]);
-        } catch (error) {
-          console.log(
-            colors.yellow('⚠️  Found ```json block but failed to parse it')
-          );
-        }
-      }
-    }
-
-    // Strategy 3: Look for generic ``` code blocks containing JSON objects
-    if (jsonData == null) {
-      const codeBlockMatch = responseContent.match(
-        /```\s*\n?\s*(\{[\s\S]*?\})\s*\n?\s*```/
+    if (missingRequired.length > 0) {
+      const repairedResponse = await this.retryStringOutputExtraction(
+        responseContent,
+        stringOutputs
       );
-      if (codeBlockMatch) {
-        try {
-          jsonData = JSON.parse(codeBlockMatch[1]);
-        } catch (error) {
-          // Not valid JSON in code block
-        }
+      if (repairedResponse) {
+        console.log(
+          colors.yellow(
+            `⚠️  Retrying output extraction for step '${this.step.name}' with stricter JSON enforcement`
+          )
+        );
+        missingRequired = this.populateStringOutputs(
+          repairedResponse,
+          stringOutputs,
+          outputs
+        );
       }
     }
 
-    // Strategy 4: Find a JSON object in the response that contains at least
-    // one expected output key (agents often write explanation before/after)
-    if (jsonData == null) {
-      const outputNames = stringOutputs.map(o => o.name);
-      const jsonObjects = responseContent.match(
-        /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+    if (missingRequired.length > 0) {
+      const names = missingRequired.map(o => o.name).join(', ');
+      throw new Error(
+        `Required output(s) could not be extracted: ${names}. ` +
+          `The agent's response did not include valid values for these fields.`
       );
-      if (jsonObjects) {
-        // Try from last to first — the final JSON block is most likely the output
-        for (let i = jsonObjects.length - 1; i >= 0; i--) {
-          try {
-            const candidate = JSON.parse(jsonObjects[i]);
-            if (
-              typeof candidate === 'object' &&
-              candidate !== null &&
-              outputNames.some(name => name in candidate)
-            ) {
-              jsonData = candidate;
-              break;
-            }
-          } catch (error) {
-            // Not valid JSON, try next
-          }
-        }
-      }
     }
+  }
 
-    // Extract each string output
+  private populateStringOutputs(
+    responseContent: string,
+    stringOutputs: WorkflowOutput[],
+    outputs: Map<string, string>
+  ): WorkflowOutput[] {
+    const jsonData = this.extractJsonData(responseContent, stringOutputs);
+    const singleStringFallback = this.extractSingleStringFallback(
+      responseContent,
+      stringOutputs
+    );
+
     for (const output of stringOutputs) {
       let value: string | undefined;
 
       if (jsonData && typeof jsonData === 'object') {
-        // Extract from parsed JSON
         value = jsonData[output.name];
+      } else if (singleStringFallback !== undefined) {
+        value = singleStringFallback;
       } else {
         console.log(
           colors.yellow(
@@ -619,26 +599,146 @@ export class Runner {
       }
     }
 
-    // Validate required outputs — if any required output has a failure
-    // sentinel value, the step must fail so it won't be checkpointed as
-    // "completed" with broken outputs (which would cause all subsequent
-    // iterations to skip re-extraction and loop forever).
     const FAILURE_SENTINELS = [
       '[Could not extract from response]',
       '[Not found in response]',
     ];
-    const missingRequired = stringOutputs.filter(
+    return stringOutputs.filter(
       o =>
         o.required === true &&
         FAILURE_SENTINELS.includes(outputs.get(o.name) ?? '')
     );
-    if (missingRequired.length > 0) {
-      const names = missingRequired.map(o => o.name).join(', ');
-      throw new Error(
-        `Required output(s) could not be extracted: ${names}. ` +
-          `The agent's response did not include valid values for these fields.`
-      );
+  }
+
+  private extractJsonData(
+    responseContent: string,
+    stringOutputs: WorkflowOutput[]
+  ): Record<string, unknown> | null {
+    let jsonData: Record<string, unknown> | null = null;
+
+    try {
+      jsonData = JSON.parse(responseContent);
+    } catch {
+      // Not pure JSON, try other strategies
     }
+
+    if (jsonData == null) {
+      const jsonMatch = responseContent.match(/```json\s*([\s\S]*?)\s*```/);
+      if (jsonMatch) {
+        try {
+          jsonData = JSON.parse(jsonMatch[1]);
+        } catch {
+          console.log(
+            colors.yellow('⚠️  Found ```json block but failed to parse it')
+          );
+        }
+      }
+    }
+
+    if (jsonData == null) {
+      const codeBlockMatch = responseContent.match(
+        /```\s*\n?\s*(\{[\s\S]*?\})\s*\n?\s*```/
+      );
+      if (codeBlockMatch) {
+        try {
+          jsonData = JSON.parse(codeBlockMatch[1]);
+        } catch {
+          // Not valid JSON in code block
+        }
+      }
+    }
+
+    if (jsonData == null) {
+      const outputNames = stringOutputs.map(o => o.name);
+      const jsonObjects = responseContent.match(
+        /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+      );
+      if (jsonObjects) {
+        for (let i = jsonObjects.length - 1; i >= 0; i--) {
+          try {
+            const candidate = JSON.parse(jsonObjects[i]);
+            if (
+              typeof candidate === 'object' &&
+              candidate !== null &&
+              outputNames.some(name => name in candidate)
+            ) {
+              jsonData = candidate;
+              break;
+            }
+          } catch {
+            // Not valid JSON, try next
+          }
+        }
+      }
+    }
+
+    return jsonData;
+  }
+
+  private extractSingleStringFallback(
+    responseContent: string,
+    stringOutputs: WorkflowOutput[]
+  ): string | undefined {
+    if (stringOutputs.length !== 1) {
+      return undefined;
+    }
+
+    let cleaned = responseContent.trim();
+    const fencedMatch = cleaned.match(
+      /^```(?:[a-zA-Z0-9_-]+)?\s*\n([\s\S]*?)\n```$/
+    );
+    if (fencedMatch) {
+      cleaned = fencedMatch[1].trim();
+    }
+
+    if (!cleaned || cleaned.startsWith('{')) {
+      return undefined;
+    }
+
+    return cleaned;
+  }
+
+  private async retryStringOutputExtraction(
+    responseContent: string,
+    stringOutputs: WorkflowOutput[]
+  ): Promise<string | undefined> {
+    const binary = Runner.getToolBinary(this.tool);
+    const args = this.toolArguments();
+    const schema = stringOutputs
+      .map(
+        output =>
+          `  "${output.name}": "your_${output.name.toLowerCase()}_value_here"`
+      )
+      .join(',\n');
+    const repairPrompt = [
+      'Your previous response did not follow the required output schema.',
+      'Rewrite it as a valid JSON object only. Do not include markdown fences, explanation, or extra text.',
+      'Required JSON schema:',
+      '```json',
+      `{\n${schema}\n}`,
+      '```',
+      'Field descriptions:',
+      ...stringOutputs.map(
+        output => `- ${output.name}: ${output.description}`
+      ),
+      'Previous response to convert:',
+      '```text',
+      responseContent.slice(0, 20000),
+      '```',
+    ].join('\n');
+
+    const result = await launch(binary, args, {
+      input: repairPrompt,
+      timeout: Math.min(this.workflow.getStepTimeout(this.step.id), 60) * 1000,
+      reject: false,
+      buffer: true,
+    });
+
+    if (result.exitCode !== 0) {
+      return undefined;
+    }
+
+    return result.stdout ? result.stdout.toString() : undefined;
   }
 
   /**

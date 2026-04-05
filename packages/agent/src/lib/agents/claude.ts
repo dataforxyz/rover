@@ -35,11 +35,14 @@ export class ClaudeAgent extends BaseAgent {
   }
 
   getRequiredCredentials(): AgentCredentialFile[] {
+    const proxyEnabled = !!(
+      process.env.ROVER_CLAUDE_PROXY_URL && process.env.ROVER_CLAUDE_PROXY_KEY
+    );
     let requiredCredentials: AgentCredentialFile[] = [
       {
         path: '/.claude.json',
         description: 'Claude configuration',
-        required: true,
+        required: !proxyEnabled,
       },
     ];
 

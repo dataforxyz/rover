@@ -36,37 +36,36 @@ export const installCommand = async (
     // Create agent instance
     const agent = createAgent(agentName, options.version);
 
+    // Install the agent CLI first — this should always succeed regardless
+    // of credential state. The CLI binary is needed even when authentication
+    // is handled externally (e.g. via proxy env vars).
+    await agent.install();
+
     console.log(colors.bold('\nValidating Credentials'));
 
     // Validate agent credentials
     const validation = agent.validateCredentials();
 
     if (!validation.valid) {
-      console.log(colors.red('\n✗ Credential validation failed'));
+      console.log(colors.yellow('\n⚠ Some credential files are missing'));
       showList(
-        validation.missing.map(missing => colors.red(`Missing: ${missing}`))
+        validation.missing.map(missing => colors.yellow(`Missing: ${missing}`))
       );
 
       console.log(
         colors.yellow(
-          '\n💡 Please ensure all required credential files are present before running the install command.'
+          '\n💡 Credentials may be provided via environment variables or proxy configuration.'
         )
       );
-
-      output.success = false;
-      output.error = 'Credential validation failed';
     } else {
       console.log(colors.green('✓ All required credential files found'));
-
-      // Install the agent
-      await agent.install();
-
-      // Copy credentials to the user's home directory
-      await agent.copyCredentials(process.env.HOME || '/home/agent');
-
-      console.log(colors.green('\n✓ Installation completed successfully'));
-      output.success = true;
     }
+
+    // Copy credentials to the user's home directory (best-effort)
+    await agent.copyCredentials(process.env.HOME || '/home/agent');
+
+    console.log(colors.green('\n✓ Installation completed successfully'));
+    output.success = true;
   } catch (err) {
     output.success = false;
     output.error = err instanceof Error ? err.message : `${err}`;
@@ -74,5 +73,6 @@ export const installCommand = async (
 
   if (!output.success) {
     console.log(colors.red(`\n✗ ${output.error}`));
+    process.exitCode = 1;
   }
 };
