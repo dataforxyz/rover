@@ -683,6 +683,7 @@ export class Runner {
       return undefined;
     }
 
+    const outputName = stringOutputs[0]?.name;
     let cleaned = responseContent.trim();
     const fencedMatch = cleaned.match(
       /^```(?:[a-zA-Z0-9_-]+)?\s*\n([\s\S]*?)\n```$/
@@ -691,7 +692,25 @@ export class Runner {
       cleaned = fencedMatch[1].trim();
     }
 
-    if (!cleaned || cleaned.startsWith('{')) {
+    if (!cleaned) {
+      return undefined;
+    }
+
+    if (outputName) {
+      const fieldRegex = new RegExp(
+        `"${outputName.replace(/[.*+?^${}()|[\]\\]/g, '\$&')}"\\s*:\\s*"([\\s\\S]*?)"\\s*}$`
+      );
+      const fieldMatch = cleaned.match(fieldRegex);
+      if (fieldMatch) {
+        return fieldMatch[1]
+          .replace(/\\n/g, '\n')
+          .replace(/\\r/g, '\r')
+          .replace(/\\t/g, '\t')
+          .replace(/\\"/g, '"');
+      }
+    }
+
+    if (cleaned.startsWith('{')) {
       return undefined;
     }
 

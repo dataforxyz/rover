@@ -74,6 +74,44 @@ describe('Runner string output extraction', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
+
+  it('extracts a single required string output from a malformed json code block', async () => {
+    workflowStep.outputs = [
+      {
+        name: 'changes_markdown',
+        type: 'string',
+        description: 'Implementation changes markdown',
+        required: true,
+      } as WorkflowOutput,
+    ];
+
+    const runner = new Runner(
+      workflow,
+      'write_tests',
+      new Map(),
+      new Map(),
+      'claude',
+      undefined
+    );
+
+    const outputs = new Map<string, string>();
+    await (runner as any).extractStringOutputs(
+      `\`\`\`json
+{
+  "changes_markdown": "# Implementation Changes\n\n## Overview\n\nAdded nil-client guards.
+
+## Files Modified\n\n### \`src/services/ratelimiter.go\`\n\n- Added guard clauses."
+}
+\`\`\``,
+      workflowStep.outputs,
+      outputs
+    );
+
+    expect(outputs.get('changes_markdown')).toContain('## Overview');
+    expect(outputs.get('changes_markdown')).toContain('src/services/ratelimiter.go');
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it('asks the agent one more time with strict JSON when required outputs are missing', async () => {
     workflowStep.outputs = [
       {
