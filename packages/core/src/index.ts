@@ -134,6 +134,7 @@ export {
   LocalFileProvider,
   GitHubProvider,
   GitLabProvider,
+  ForgejoProvider,
   HTTPSProvider,
   // Manager
   ContextManager,

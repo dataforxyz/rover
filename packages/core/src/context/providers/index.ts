@@ -2,12 +2,14 @@ import { registerContextProvider } from '../registry.js';
 import { LocalFileProvider } from './local-file.js';
 import { GitHubProvider } from './github.js';
 import { GitLabProvider } from './gitlab.js';
+import { ForgejoProvider } from './forgejo.js';
 import { HTTPSProvider } from './https.js';
 
 // Re-export providers for direct access
 export { LocalFileProvider } from './local-file.js';
 export { GitHubProvider } from './github.js';
 export { GitLabProvider } from './gitlab.js';
+export { ForgejoProvider } from './forgejo.js';
 export { HTTPSProvider } from './https.js';
 
 /**
@@ -18,6 +20,7 @@ export function registerBuiltInProviders(): void {
   registerContextProvider('file', LocalFileProvider);
   registerContextProvider('github', GitHubProvider);
   registerContextProvider('gitlab', GitLabProvider);
+  registerContextProvider('forgejo', ForgejoProvider);
   registerContextProvider('https', HTTPSProvider);
   registerContextProvider('http', HTTPSProvider); // http upgrades to https
 }

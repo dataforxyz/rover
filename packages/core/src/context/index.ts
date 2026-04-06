@@ -37,6 +37,7 @@ export {
   LocalFileProvider,
   GitHubProvider,
   GitLabProvider,
+  ForgejoProvider,
   HTTPSProvider,
 } from './providers/index.js';
 

@@ -196,7 +196,7 @@ export interface TaskInspectionOutput {
   agentModel?: string;
   agentDisplay?: string;
   source?: {
-    type: 'github' | 'gitlab' | 'manual';
+    type: 'github' | 'gitlab' | 'forgejo' | 'manual';
     id?: string;
     url?: string;
     title?: string;

@@ -335,6 +335,8 @@ const inspectCommand = async (
             ? 'GitHub Issue'
             : task.source.type === 'gitlab'
               ? 'GitLab Issue'
+              : task.source.type === 'forgejo'
+                ? 'Forgejo Issue'
               : 'Source';
         properties[sourceLabel] = colors.cyan(task.source.url);
       }

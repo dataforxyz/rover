@@ -36,7 +36,8 @@ Web dashboard runs on port 8080 (access via IAP tunnel).
 DEFAULT_BRANCH=rover-landing
 ROVER_MAX_WORKERS=3
 ROVER_MAX_ITERATIONS=6
-INTAKE_MAX_RUNNING=5
+INTAKE_MAX_RUNNING=2
+INTAKE_MAX_COMPLETED=2
 STEP_TEST=./scripts/test.sh {worktree}
 STEP_SHIP=./scripts/ship.sh {worktree}
 ```
