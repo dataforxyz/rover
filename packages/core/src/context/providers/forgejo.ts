@@ -41,6 +41,10 @@ type ForgejoCommentResponse = {
   user: { login?: string; username?: string };
 };
 
+const FORGEJO_FETCH_TIMEOUT_MS = 15000;
+const FORGEJO_FETCH_RETRIES = 3;
+const FORGEJO_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
 export class ForgejoProvider implements ContextProvider {
   readonly scheme = 'forgejo';
   readonly supportedTypes = ['issue'];
@@ -302,22 +306,78 @@ export class ForgejoProvider implements ContextProvider {
 
   private async apiGet<T>(repo: ResolvedForgejoRepo, path: string): Promise<T> {
     const token = this.resolveToken(repo.host);
-    const response = await fetch(`${repo.baseUrl}/api/v1${path}`, {
-      headers: {
-        Accept: 'application/json',
-        ...(token ? { Authorization: `token ${token}` } : {}),
-      },
-    });
+    const url = `${repo.baseUrl}/api/v1${path}`;
+    let lastError: ContextFetchError | null = null;
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new ContextFetchError(
-        this.uri,
-        `Forgejo API request failed (${response.status}) for ${path}: ${body || response.statusText}`
-      );
+    for (let attempt = 1; attempt <= FORGEJO_FETCH_RETRIES; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          headers: {
+            Accept: 'application/json',
+            ...(token ? { Authorization: `token ${token}` } : {}),
+          },
+          signal: AbortSignal.timeout(FORGEJO_FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const body = await response.text();
+          const message =
+            `Forgejo API request failed (${response.status}) for ${path}: ` +
+            `${body || response.statusText}`;
+          if (
+            attempt < FORGEJO_FETCH_RETRIES &&
+            FORGEJO_RETRYABLE_STATUS_CODES.has(response.status)
+          ) {
+            lastError = new ContextFetchError(this.uri, message);
+            await this.sleepBeforeRetry(attempt);
+            continue;
+          }
+          throw new ContextFetchError(this.uri, message);
+        }
+
+        return (await response.json()) as T;
+      } catch (error) {
+        if (error instanceof ContextFetchError) {
+          lastError = error;
+        } else {
+          const reason = this.describeFetchError(error);
+          lastError = new ContextFetchError(
+            this.uri,
+            `Forgejo API request failed for ${path}: ${reason}`
+          );
+        }
+
+        if (attempt >= FORGEJO_FETCH_RETRIES) {
+          throw lastError;
+        }
+        await this.sleepBeforeRetry(attempt);
+      }
     }
 
-    return (await response.json()) as T;
+    throw (
+      lastError ??
+      new ContextFetchError(this.uri, `Forgejo API request failed for ${path}`)
+    );
+  }
+
+  private async sleepBeforeRetry(attempt: number): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, attempt * 500));
+  }
+
+  private describeFetchError(error: unknown): string {
+    if (error instanceof Error) {
+      const cause = error.cause;
+      if (cause instanceof Error && cause.message) {
+        return cause.message;
+      }
+      if (typeof cause === 'string' && cause.trim()) {
+        return cause.trim();
+      }
+      if (error.message) {
+        return error.message;
+      }
+    }
+    return String(error);
   }
 
   private resolveToken(host: string): string {

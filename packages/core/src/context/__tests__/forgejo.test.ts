@@ -104,4 +104,57 @@ describe('ForgejoProvider', () => {
       'https://fgit.datafor.xyz/api/v1/repos/aidata/ika-api/issues/212'
     );
   });
+
+  it('retries transient fetch failures and preserves the issue context', async () => {
+    const mockFetch = vi.mocked(fetch);
+    mockFetch
+      .mockRejectedValueOnce(new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:443') }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            number: 212,
+            title: 'Repository tests',
+            body: 'Expand repository coverage',
+            state: 'open',
+            labels: [],
+            assignees: [],
+            user: { login: 'alice' },
+            created_at: '2026-04-03T00:00:00Z',
+            updated_at: '2026-04-03T00:10:00Z',
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([]), { status: 200 })
+      );
+
+    const provider = new ForgejoProvider(new URL('forgejo:issue/212'), {
+      originalUri: 'forgejo:issue/212',
+      trustAllAuthors: true,
+    });
+
+    const entries = await provider.build();
+
+    expect(entries).toHaveLength(1);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('surfaces the underlying network error after retries are exhausted', async () => {
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockRejectedValue(
+      new TypeError('fetch failed', {
+        cause: new Error('connect ECONNREFUSED 127.0.0.1:443'),
+      })
+    );
+
+    const provider = new ForgejoProvider(new URL('forgejo:issue/212'), {
+      originalUri: 'forgejo:issue/212',
+      trustAllAuthors: true,
+    });
+
+    await expect(provider.build()).rejects.toThrow(
+      'connect ECONNREFUSED 127.0.0.1:443'
+    );
+  });
 });
