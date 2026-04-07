@@ -615,6 +615,7 @@ export class Runner {
     stringOutputs: WorkflowOutput[]
   ): Record<string, unknown> | null {
     let jsonData: Record<string, unknown> | null = null;
+    const outputNames = stringOutputs.map(o => o.name);
 
     try {
       jsonData = JSON.parse(responseContent);
@@ -648,8 +649,14 @@ export class Runner {
       }
     }
 
+    if (
+      jsonData &&
+      !outputNames.some(name => name in jsonData)
+    ) {
+      jsonData = null;
+    }
+
     if (jsonData == null) {
-      const outputNames = stringOutputs.map(o => o.name);
       const jsonObjects = responseContent.match(
         /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
       );
@@ -711,6 +718,21 @@ export class Runner {
     }
 
     if (cleaned.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(cleaned);
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          typeof parsed.result === 'string'
+        ) {
+          const resultText = parsed.result.trim();
+          if (resultText) {
+            return resultText;
+          }
+        }
+      } catch {
+        return undefined;
+      }
       return undefined;
     }
 

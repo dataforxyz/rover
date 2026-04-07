@@ -11,6 +11,10 @@ inputs:
     description: 'Detailed task description'
     type: string
     required: true
+  - name: build_command
+    description: 'Override the build command (e.g. "pnpm build", "make build"). Use "none" to skip a separate build step.'
+    type: string
+    required: false
   - name: test_command
     description: 'Override the test command (e.g. "npm test", "pytest"). If not provided, it will be auto-detected from the project.'
     type: string
@@ -48,13 +52,11 @@ steps:
     type: agent
     name: 'Context Analysis'
     prompt: |
-      You are preparing a technical context for this TDD task implementation.
+      You are preparing a technical context for this TDD task implementation:
 
-      ┌─────────────────────────────────────────────┐
-      │ GOAL: {{inputs.title}}                       │
-      └─────────────────────────────────────────────┘
-
-      Description: {{inputs.description}}
+      Task title: {{inputs.title}}
+      Task description: {{inputs.description}}
+      User-provided build command override (if empty or not set, auto-detect from project): {{inputs.build_command}}
       User-provided test command override (if empty or not set, auto-detect from project): {{inputs.test_command}}
 
       Follow these steps to complete it. Do not move to the next phase until you complete the previous one.
@@ -73,14 +75,11 @@ steps:
       - Find the main file or files affected by these changes. Then, identify other secondary files. Focus mostly on main files and avoid a deep research in the secondary ones
       - Identify existing test files, test frameworks, and test configuration
       - Determine the correct test command for this project by examining package.json, Makefile, pyproject.toml, go.mod, or other build/test configuration files. If a user-provided test command is shown above, use that instead.
-      - If the workspace root has a `Makefile` and the project is configured around `make`, prefer the root command such as `make test` over ad hoc per-project commands.
-      - For multi-project workspaces, prefer a single root orchestration command when available, and treat per-project commands as supporting detail.
-      - If the task description explicitly requires validating multiple root commands in sequence, the test command may be a shell sequence such as `make setup && make test && make test-e2e` or a dedicated root validation target if the repository provides one.
       - Follow the template strictly
       - Just output the template. Skip any text before and after
       - Use globs when a change affects multiple files
 
-      Return your structured analysis in the `context_markdown` output following this template.
+      Then, write your structured analysis to `context.md` following this template. This is mandatory.
 
       <template>
       # Context
@@ -103,7 +102,7 @@ steps:
 
       ## Extra OS packages
 
-      Identify whether any OS packages are missing for this task. Do NOT install OS packages during the task. Rover task containers intentionally have limited sudo after setup, so OS package installation belongs in `rover build`, `sandbox.initScript`, or image configuration. Return either "No additional packages required" or a short list of packages that must be added to build/setup-time configuration.
+      Identify missing OS packages to accomplish this task and install them using the tools provided by the `package-manager` MCP. Return a list of new installed packages or "No additional packages required".
 
       ## Relevant knowledge
 
@@ -119,7 +118,7 @@ steps:
 
       </template>
 
-      IMPORTANT: You MUST return three scalar outputs as well: `complexity`, `build_command`, and `test_command`. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
+      IMPORTANT: After writing context.md, you MUST extract the task complexity value, build command, and test command and return them. For the test command: if the user provided a valid override above, return that exactly. Otherwise, return the command you discovered from the project's configuration files. For the build command: if the user provided a valid override above, return that exactly. Otherwise, return the compile/build command if the project needs one, or "none" if the test command handles it or the language is interpreted.
     outputs:
       - name: complexity
         description: 'Task complexity: either "simple" or "complex"'
@@ -130,35 +129,23 @@ steps:
       - name: test_command
         description: 'The command to run tests for this project'
         type: string
-        required: true
-      - name: context_markdown
-        description: 'Technical context analysis markdown'
-        type: string
-
-  - id: persist_context
-    type: command
-    name: 'Persist Context'
-    allow_failure: true
-    command: |
-      cat > /output/context.md <<'__ROVER_EOF_9f3a7c__'
-      {{steps.context.outputs.context_markdown}}
-      __ROVER_EOF_9f3a7c__
+      - name: context_file
+        description: 'Technical context analysis file'
+        type: file
+        filename: context.md
 
   - id: plan
     type: agent
     name: 'TDD Planning'
     prompt: |
-      You are preparing a TDD implementation plan for this task.
+      You are preparing a TDD implementation plan for this task:
 
-      ┌─────────────────────────────────────────────┐
-      │ GOAL: {{inputs.title}}                       │
-      └─────────────────────────────────────────────┘
+      ---
 
-      Description: {{inputs.description}}
-      Context:
-      ```
-      {{steps.context.outputs.context_markdown}}
-      ```
+      Title: {{inputs.title}}
+      Description:
+      {{inputs.description}}
+      Context: {{steps.context.outputs.context_file}}
 
       ---
 
@@ -193,7 +180,7 @@ steps:
       - Follow the template strictly
       - Just output the template. Skip any text before and after
 
-      Return your plan in the `plan_markdown` output following this template.
+      Write your plan to `plan.md` following this template. This is mandatory.
 
       <template>
       # TDD Implementation Plan
@@ -223,29 +210,16 @@ steps:
       - Prerequisite libraries, configs, or tasks (skip if none)
       </template>
     outputs:
-      - name: plan_markdown
-        description: 'TDD implementation plan markdown'
-        type: string
-
-  - id: persist_plan
-    type: command
-    name: 'Persist Plan'
-    allow_failure: true
-    command: |
-      cat > /output/plan.md <<'__ROVER_EOF_9f3a7c__'
-      {{steps.plan.outputs.plan_markdown}}
-      __ROVER_EOF_9f3a7c__
+      - name: plan_file
+        description: 'TDD Implementation plan file'
+        type: file
+        filename: plan.md
 
   - id: write_tests
     type: agent
     name: 'Write Tests'
     prompt: |
       You are in TDD mode — writing tests BEFORE the implementation.
-
-      ┌─────────────────────────────────────────────┐
-      │ GOAL: {{inputs.title}}                       │
-      │ Only write tests for THIS task's behavior.  │
-      └─────────────────────────────────────────────┘
 
       ---
 
@@ -255,12 +229,12 @@ steps:
 
       Context:
       ```
-      {{steps.context.outputs.context_markdown}}
+      {{steps.context.outputs.context_file}}
       ```
 
       Plan:
       ```
-      {{steps.plan.outputs.plan_markdown}}
+      {{steps.plan.outputs.plan_file}}
       ```
       ---
 
@@ -280,7 +254,7 @@ steps:
 
       ### Phase 3: Output
 
-      Return the markdown in the `test_changes_markdown` output describing what tests you wrote and why.
+      Write `test_changes.md` describing what tests you wrote and why. This is mandatory.
 
       <template>
       # Tests Written
@@ -298,45 +272,39 @@ steps:
       - List of tests that will fail until implementation is complete
       </template>
     outputs:
-      - name: test_changes_markdown
+      - name: test_changes_file
         description: 'Description of tests written'
-        type: string
-
-  - id: persist_test_changes
-    type: command
-    name: 'Persist Test Changes'
-    allow_failure: true
-    command: |
-      cat > /output/test_changes.md <<'__ROVER_EOF_9f3a7c__'
-      {{steps.write_tests.outputs.test_changes_markdown}}
-      __ROVER_EOF_9f3a7c__
+        type: file
+        filename: test_changes.md
 
   - id: implement
     type: agent
     name: 'Implementation'
     prompt: |
-      You are in implementation mode. This is a TDD workflow — tests have already been written.
+      You are in implementation mode.
+      Your task is to implement the code to make the tests pass.
+      This is a TDD workflow — tests have already been written.
 
-      ┌─────────────────────────────────────────────┐
-      │ GOAL: {{inputs.title}}                       │
-      │ You may ONLY modify files needed for this.  │
-      └─────────────────────────────────────────────┘
+      ---
 
-      Description: {{inputs.description}}
+      Task:
+      Title: {{inputs.title}}
+      Description:
+      {{inputs.description}}
 
       Context:
       ```
-      {{steps.context.outputs.context_markdown}}
+      {{steps.context.outputs.context_file}}
       ```
 
       Plan:
       ```
-      {{steps.plan.outputs.plan_markdown}}
+      {{steps.plan.outputs.plan_file}}
       ```
 
       Tests Written:
       ```
-      {{steps.write_tests.outputs.test_changes_markdown}}
+      {{steps.write_tests.outputs.test_changes_file}}
       ```
       ---
 
@@ -353,11 +321,10 @@ steps:
       3. Make the tests pass — this is your primary goal
       4. Make minimal, maintainable changes that fit existing patterns
       5. Do not modify the test files unless absolutely necessary
-      6. **Scope discipline**: Only modify files directly related to the task. Do not refactor, clean up, or "improve" surrounding code. Do not delete or modify tests, mocks, or files unrelated to the task. If you find yourself editing a file that isn't mentioned in the plan, stop and reconsider.
 
       ### Phase 3: Output
 
-      Return the markdown in the `changes_markdown` output following this template.
+      Write `changes.md` following this template. This is mandatory.
 
       <template>
       # Implementation Changes
@@ -385,18 +352,10 @@ steps:
       - Explanation of structure, functions, and integrations
       </template>
     outputs:
-      - name: changes_markdown
-        description: 'Implementation changes markdown'
-        type: string
-
-  - id: persist_changes
-    type: command
-    name: 'Persist Changes'
-    allow_failure: true
-    command: |
-      cat > /output/changes.md <<'__ROVER_EOF_9f3a7c__'
-      {{steps.implement.outputs.changes_markdown}}
-      __ROVER_EOF_9f3a7c__
+      - name: changes_file
+        description: 'Implementation changes file'
+        type: file
+        filename: changes.md
 
   - id: test_fix_loop
     type: loop
@@ -409,39 +368,53 @@ steps:
         name: 'Build'
         if: steps.context.outputs.build_command != none
         command: '{{steps.context.outputs.build_command}}'
-        allow_failure: true
 
       - id: run_tests
         type: command
         name: 'Run Tests'
         command: '{{steps.context.outputs.test_command}}'
-        allow_failure: true
 
       - id: fix_code
         type: agent
         name: 'Fix Build or Test Failures'
         if: steps.run_tests.outputs.exit_code != 0
         prompt: |
-          The build or tests are failing. Fix ONLY failures related to your task.
+          The build or tests are failing. Your job is to fix the implementation so it compiles and all tests pass.
 
-          ┌─────────────────────────────────────────────┐
-          │ GOAL: {{inputs.title}}                       │
-          │ Only fix failures caused by YOUR changes.   │
-          │ Pre-existing failures are NOT your problem.  │
-          └─────────────────────────────────────────────┘
+          ---
 
-          Description: {{inputs.description}}
+          Task:
+          Title: {{inputs.title}}
+          Description:
+          {{inputs.description}}
 
-          Build exit code: {{steps.build.outputs.exit_code}}
+          Build output (stdout):
+          ```
+          {{steps.build.outputs.stdout}}
+          ```
+
           Build errors (stderr):
           ```
           {{steps.build.outputs.stderr}}
           ```
 
-          Test exit code: {{steps.run_tests.outputs.exit_code}}
-          Test errors (stderr):
+          Build exit code: {{steps.build.outputs.exit_code}}
+
+          Test command output (stdout):
+          ```
+          {{steps.run_tests.outputs.stdout}}
+          ```
+
+          Test command errors (stderr):
           ```
           {{steps.run_tests.outputs.stderr}}
+          ```
+
+          Test exit code: {{steps.run_tests.outputs.exit_code}}
+
+          Previous implementation changes:
+          ```
+          {{steps.implement.outputs.changes_file}}
           ```
           ---
 
@@ -452,9 +425,8 @@ steps:
           3. Identify the root cause of each failure
           4. Fix the implementation code (NOT the tests) to make tests pass
           5. Only modify tests if they have genuine bugs (not just because they're failing)
-          6. Make minimal, targeted fixes — only touch files related to the task
-          7. Do not delete, modify, or "clean up" tests, mocks, or code in files unrelated to the task
-          8. After making fixes, verify your changes are consistent with the project patterns
+          6. Make minimal, targeted fixes
+          7. After making fixes, verify your changes are consistent with the project patterns
         outputs:
           - name: fixes_description
             description: 'Description of fixes applied'
@@ -465,9 +437,7 @@ steps:
         name: 'Checkpoint & Circle Detection'
         if: steps.build.outputs.exit_code != 0 || steps.run_tests.outputs.exit_code != 0
         command: |
-          git rm --cached --ignore-unmatch -q review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md .gitignore 2>/dev/null || true
-          git checkout HEAD -- .gitignore 2>/dev/null || true
-          git add -A -- . ':!review.md' ':!review_fixes.md' ':!changes.md' ':!context.md' ':!plan.md' ':!test_changes.md' ':!summary.md'
+          git add -A
           git diff --cached --quiet && exit 0
           git commit -m "[checkpoint] test-fix"
           TREE_HASH=$(git rev-parse HEAD^{tree})
@@ -481,26 +451,21 @@ steps:
   - id: review_loop
     type: loop
     name: 'Review & Fix Loop'
-    until: steps.code_review.outputs.issues_found != blocking || steps.review_checkpoint.outputs.exit_code != 0
-    maxIterations: 7
+    until: steps.code_review.outputs.issues_found != true || steps.review_checkpoint.outputs.exit_code != 0
+    maxIterations: 5
     steps:
       - id: git_diff
         type: command
         name: 'Capture Git Diff'
-        command: 'DEFAULT_BR=$(grep -oP "^DEFAULT_BRANCH=\\K.*" rover-pipeline.env 2>/dev/null || echo main); BASE=$(git merge-base HEAD "$DEFAULT_BR" 2>/dev/null || git merge-base HEAD main 2>/dev/null || echo HEAD~1); git diff $BASE -- . ":(exclude).tools" ":(exclude).cache" ":(exclude)vendor" ":(exclude)node_modules" ":(exclude).gitignore" ":(exclude)review.md" ":(exclude)review_fixes.md" ":(exclude)changes.md" ":(exclude)context.md" ":(exclude)plan.md" ":(exclude)test_changes.md" ":(exclude)summary.md"'
-        allow_failure: true
+        command: 'git diff $(git merge-base HEAD main 2>/dev/null || echo HEAD~1)'
 
       - id: code_review
         type: agent
         name: 'Code Review'
         prompt: |
-          You are a senior engineer performing a code review. Your job is to catch real problems — not to make the code perfect. Working code that ships is better than perfect code that never ships.
+          You are a senior engineer performing a blocking code review. Your job is to find every issue — you are not a rubber-stamper. Your default stance is that issues exist. Approve only when you genuinely cannot find a single thing wrong.
 
-          ┌─────────────────────────────────────────────┐
-          │ GOAL: {{inputs.title}}                       │
-          │ Only review changes related to THIS task.   │
-          │ Do NOT request changes to unrelated code.   │
-          └─────────────────────────────────────────────┘
+          Do not give the benefit of the doubt. If something looks off, flag it.
 
           ---
 
@@ -508,81 +473,45 @@ steps:
           Description:
           {{inputs.description}}
 
+          Plan:
+          ```
+          {{steps.plan.outputs.plan_file}}
+          ```
+
           Git diff (all changes for this task):
           ```diff
           {{steps.git_diff.outputs.stdout}}
           ```
 
           Previous test results (if any):
-          exit_code: {{steps.run_tests_after_review.outputs.exit_code}}
+          stdout: {{steps.run_tests_after_review.outputs.stdout}}
           stderr: {{steps.run_tests_after_review.outputs.stderr}}
-
-          Previous review (from prior iteration, if any — use this to track what was already flagged and fixed):
-          ```
-          {{steps.code_review.outputs.review_file}}
-          ```
+          exit_code: {{steps.run_tests_after_review.outputs.exit_code}}
           ---
-
-          ### Review Context
-
-          If a previous review is shown above, this is a follow-up review. Check whether the prior blocking issues were addressed. Do NOT re-raise issues that were already fixed. Do NOT introduce new blocking issues that you did not flag in the previous review unless they are Critical severity. Focus your review on verifying the fixes.
-
-          If no previous review is shown, this is the first review. Proceed normally.
-
-          ### Severity Tiers
-
-          Classify every issue you find into exactly one tier:
-
-          **Critical** — always blocking, must fix before ship:
-          - Runtime crashes, panics, nil/null pointer dereferences
-          - Security vulnerabilities (injection, hardcoded secrets, auth bypass)
-          - Data loss or corruption
-          - Out-of-scope file changes (files unrelated to the task)
-          - Compile errors or syntax errors
-
-          **Major** — blocking on first review only; if still present after one fix attempt, downgrade to nit:
-          - Logic errors that produce wrong results but don't crash
-          - Missing error handling at external boundaries (user input, API calls, file I/O)
-          - Weak or missing test assertions for the core behavior being implemented
-          - Plan requirements that were clearly missed (not partially implemented — missed entirely)
-
-          **Minor** — never blocking, always a nit:
-          - Naming preferences
-          - Style, formatting, comment quality
-          - Test coverage for edge cases or unlikely scenarios
-          - Code organization suggestions
-          - Missing negative/error path tests beyond the core behavior
-          - Suggestions to add utilities, helpers, or abstractions
 
           ### Review Instructions
 
           Use the git diff above as the primary input. It shows exactly what was changed.
           Stay in scope: only review lines and files that were changed for this task. Do not flag issues in pre-existing code that the task did not touch.
 
-          Go through every hunk in the diff and check:
+          Go through every hunk in the diff and check ALL of the following:
 
-          1. **Scope check (do this first)**: List every file in the diff. For each file, determine if the change is directly required by the task title and description. Flag ANY file that is not directly related to the task as out-of-scope (Critical). Common violations: deleting unrelated tests, modifying unrelated mocks, reformatting untouched code. **NEVER request creating new test helpers, test utilities, mock infrastructure, or fixture files beyond what the task requires. Do NOT request tests for code the task did not change.**
-             **Scope detection for `revert_files` output**: For each changed file, ask: "Is this change directly required by the task?" If not — formatting, refactoring, or functional changes unrelated to the task — add the file path to the `revert_files` output. Do NOT add files where the change is a necessary prerequisite (e.g., exporting a function that new tests import). The `revert_files` output triggers an automatic `git checkout` — only list files you are confident should be fully reverted.
-          2. **Correctness**: logic errors, null access, race conditions, wrong comparisons, missing return statements
-          3. **Error handling**: swallowed errors, missing validation at boundaries, catch blocks that silently continue
-          4. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets
-          5. **Dead code**: unused imports, unreachable branches, commented-out code
-          6. **Tests**: verify assertions actually test the behavior described by the task
-          7. If previous test results show failures, check whether they were addressed
-
-          ### The "Ship It" Rule
-
-          If all tests pass and there are no Critical issues, the code should ship. Do not block on Major or Minor issues when tests are green — downgrade them to nits. The test suite is the ultimate arbiter of correctness.
+          1. **Correctness**: logic errors, off-by-one errors, null/undefined access, race conditions, incorrect operator precedence, wrong comparisons, missing return statements
+          2. **Naming**: variable/function/class names that are vague, misleading, inconsistent with surrounding code, or violate project conventions
+          3. **Style**: formatting inconsistencies, unnecessary comments, missing comments where logic is non-obvious, inconsistent patterns within the changed code
+          4. **Tests**: missing edge cases, weak assertions (e.g. only checking truthiness when exact values matter), test names that don't describe the behavior being tested, missing negative/error path tests
+          5. **Error handling**: swallowed errors, missing validation at boundaries, unhelpful error messages, catch blocks that silently continue
+          6. **Dead code**: unused imports, unreachable branches, commented-out code, variables assigned but never read
+          7. **Security**: injection vulnerabilities, unsanitized input, hardcoded secrets, overly permissive permissions
+          8. **Plan adherence**: requirements from the plan that were missed, partially implemented, or implemented differently than specified
+          9. If previous test results show failures, check whether they were addressed
+          10. Read specific source files when you need more context around the changed lines
 
           ### Output
 
-          Classify your findings into one of three outcomes:
-
-          - **No issues at all**: output {"issues_found": "false", "review_markdown": ""}.
-          - **Only nits** (Minor issues, or Major issues when tests pass): output {"issues_found": "nits"} and return the review body in `review_markdown`. These will NOT block shipping.
-          - **Blocking issues** (Critical issues, or Major issues when tests are NOT passing): output {"issues_found": "blocking"} and return the review body in `review_markdown`. These MUST be fixed before shipping.
-
-          Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files. Use the following template for `review_markdown`:
+          - Do not fabricate content; only report issues you can confirm from the diff or by reading the actual source files
+          - If the implementation is genuinely flawless with zero issues of any kind: output {"issues_found": "false"} and do NOT create any file.
+          - If ANY issues are found — including nits, naming, and style — output {"issues_found": "true"} and create `review.md` with the following template:
 
           <template>
           # Code Review
@@ -595,47 +524,27 @@ steps:
 
           ### [File path/section]
 
-          **Severity**: [Critical / Major / Minor]
           **Issue**: [Concise description of the problem]
           **Fix**: [Exact actionable fix — what to change and where]
           **Code location**: [Line numbers or function names]
 
-          (Repeat for every issue. Do not flag issues in code the task did not change.)
+          (Repeat for every issue found in the changed code. Include everything: bugs, logic errors, compile errors, unused variables, missing imports, naming, style, nits, test gaps, security concerns, plan deviations. Do not flag issues in code the task did not change.)
           </template>
         outputs:
           - name: issues_found
             description: 'Whether issues were found (true/false)'
             type: string
-          - name: review_markdown
-            description: 'Code review markdown with issues (empty when no issues are found)'
-            type: string
-          - name: revert_files
-            description: 'Space-separated list of file paths to revert as out-of-scope (empty if none)'
-            type: string
-
-      - id: revert_scope_creep
-        type: command
-        name: 'Revert Out-of-Scope Files'
-        if: steps.code_review.outputs.revert_files != ''
-        command: |
-          DEFAULT_BR=$(grep -oP "^DEFAULT_BRANCH=\\K.*" rover-pipeline.env 2>/dev/null || echo main)
-          for file in {{steps.code_review.outputs.revert_files}}; do
-            git checkout "origin/$DEFAULT_BR" -- "$file" 2>/dev/null && echo "Reverted: $file"
-          done
-          git diff --cached --quiet || git commit -m "[auto-revert] Reverted out-of-scope changes"
+          - name: review_file
+            description: 'Code review file with issues (only created if issues found)'
+            type: file
+            filename: review.md
 
       - id: apply_fixes
         type: agent
         name: 'Apply Review Fixes'
-        if: steps.code_review.outputs.issues_found == blocking
+        if: steps.code_review.outputs.issues_found == true
         prompt: |
-          You are in apply-review mode. Your fixes will be tested and re-reviewed, so they must be correct. Only fix BLOCKING issues — ignore nits.
-
-          ┌─────────────────────────────────────────────┐
-          │ GOAL: {{inputs.title}}                       │
-          │ Only fix issues flagged in the review.      │
-          │ Do NOT add new files or touch unrelated code.│
-          └─────────────────────────────────────────────┘
+          You are in apply-review mode. Your fixes will be tested and re-reviewed, so they must be correct.
 
           ---
 
@@ -643,98 +552,99 @@ steps:
           Description:
           {{inputs.description}}
 
+          Git diff (current state of all changes):
+          ```diff
+          {{steps.git_diff.outputs.stdout}}
+          ```
+
           Review:
           ```
-          {{steps.code_review.outputs.review_markdown}}
+          {{steps.code_review.outputs.review_file}}
           ```
 
           Test command: {{steps.context.outputs.test_command}}
+
+          Context:
+          ```
+          {{steps.context.outputs.context_file}}
+          ```
 
           ---
 
           ### Instructions
 
-          Fix every issue in the review — bugs, nits, style, naming, everything. But stay in scope: only modify code that was changed for this task. Do not refactor, improve, or touch code outside the scope of the review. Do NOT create new test helpers, test utilities, mock infrastructure, or fixture files unless the review explicitly requires them for code YOUR task changed. If the review asks for something that would require touching many unrelated files, skip that item and note why.
+          Fix every issue in the review — bugs, nits, style, naming, everything. But stay in scope: only modify code that was changed for this task. Do not refactor, improve, or touch code outside the scope of the review.
 
           1. Read all issues in Review
           2. Fix every single one. Do not skip any issue regardless of size
           3. Follow review recommendations exactly — do not invent alternative solutions
           4. Only modify files and lines relevant to the review issues — do not make unrelated changes
-          5. Do NOT revert files or run git checkout — out-of-scope files have already been automatically reverted
-          6. Ensure fixes preserve existing functionality and do not introduce regressions
-          7. Reference Context for consistency
-          8. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
-          9. Do not leave unused variables, missing imports, or dead code — clean up after yourself
-          10. Do not create documentation files (review.md, review_fixes.md, etc.) in the repository root — only write to the output directory
+          5. Ensure fixes preserve existing functionality and do not introduce regressions
+          6. Reference Context for consistency
+          7. **After applying all fixes, run the test command above** to verify your changes compile and tests still pass. If they fail, fix the regressions before finishing.
+          8. Do not leave unused variables, missing imports, or dead code — clean up after yourself
         outputs:
           - name: fixes_applied
             description: 'Whether fixes were applied (true/false)'
             type: string
-          - name: review_fixes_markdown
+          - name: review_fixes_file
             description: 'Updated changes file with review fixes appended'
-            type: string
-
-      - id: persist_review
-        type: command
-        name: 'Persist Review'
-        allow_failure: true
-        if: steps.code_review.outputs.issues_found != false
-        command: |
-          cat > /output/review.md <<'__ROVER_EOF_9f3a7c__'
-          {{steps.code_review.outputs.review_markdown}}
-          __ROVER_EOF_9f3a7c__
-
-      - id: persist_review_fixes
-        type: command
-        name: 'Persist Review Fixes'
-        allow_failure: true
-        if: steps.apply_fixes.outputs.fixes_applied == true
-        command: |
-          cat > /output/review_fixes.md <<'__ROVER_EOF_9f3a7c__'
-          {{steps.apply_fixes.outputs.review_fixes_markdown}}
-          __ROVER_EOF_9f3a7c__
+            type: file
+            filename: review_fixes.md
 
       - id: build_after_review
         type: command
         name: 'Build After Review'
         if: steps.context.outputs.build_command != none
         command: '{{steps.context.outputs.build_command}}'
-        allow_failure: true
 
       - id: run_tests_after_review
         type: command
         name: 'Run Tests After Review'
-        if: steps.apply_fixes.outputs.fixes_applied == true || steps.code_review.outputs.revert_files != ''
+        if: steps.apply_fixes.outputs.fixes_applied == true
         command: '{{steps.context.outputs.test_command}}'
-        allow_failure: true
 
       - id: fix_regressions
         type: agent
         name: 'Fix Review Regressions'
         if: steps.run_tests_after_review.outputs.exit_code != 0
         prompt: |
-          Review fixes broke the build or tests. Fix the regressions while preserving valid review improvements.
-
-          ┌─────────────────────────────────────────────┐
-          │ GOAL: {{inputs.title}}                       │
-          │ Only fix regressions from review changes.   │
-          │ Do NOT add new files or expand scope.        │
-          └─────────────────────────────────────────────┘
+          Review fixes broke the build or tests. Your job is to fix the regressions while preserving the review improvements.
 
           ---
 
+          Task:
           Title: {{inputs.title}}
+          Description:
+          {{inputs.description}}
 
-          Build exit code: {{steps.build_after_review.outputs.exit_code}}
-          Build errors:
+          Build output (stdout):
+          ```
+          {{steps.build_after_review.outputs.stdout}}
+          ```
+
+          Build errors (stderr):
           ```
           {{steps.build_after_review.outputs.stderr}}
           ```
 
-          Test exit code: {{steps.run_tests_after_review.outputs.exit_code}}
-          Test errors:
+          Build exit code: {{steps.build_after_review.outputs.exit_code}}
+
+          Test command output (stdout):
+          ```
+          {{steps.run_tests_after_review.outputs.stdout}}
+          ```
+
+          Test command errors (stderr):
           ```
           {{steps.run_tests_after_review.outputs.stderr}}
+          ```
+
+          Test exit code: {{steps.run_tests_after_review.outputs.exit_code}}
+
+          Review that was applied:
+          ```
+          {{steps.code_review.outputs.review_file}}
           ```
           ---
 
@@ -754,11 +664,9 @@ steps:
       - id: review_checkpoint
         type: command
         name: 'Review Checkpoint & Circle Detection'
-        if: steps.code_review.outputs.issues_found == blocking
+        if: steps.code_review.outputs.issues_found == true
         command: |
-          git rm --cached --ignore-unmatch -q review.md review_fixes.md changes.md context.md plan.md test_changes.md summary.md .gitignore 2>/dev/null || true
-          git checkout HEAD -- .gitignore 2>/dev/null || true
-          git add -A -- . ':!review.md' ':!review_fixes.md' ':!changes.md' ':!context.md' ':!plan.md' ':!test_changes.md' ':!summary.md'
+          git add -A
           git diff --cached --quiet && exit 0
           git commit -m "[checkpoint] review-fix"
           TREE_HASH=$(git rev-parse HEAD^{tree})
@@ -775,10 +683,6 @@ steps:
     prompt: |
       You are in summary mode.
 
-      ┌─────────────────────────────────────────────┐
-      │ GOAL: {{inputs.title}}                       │
-      └─────────────────────────────────────────────┘
-
       ---
 
       Title: {{inputs.title}}
@@ -786,9 +690,14 @@ steps:
       {{inputs.description}}
       Task Complexity: {{steps.context.outputs.complexity}}
 
+      Context:
+      ```
+      {{steps.context.outputs.context_file}}
+      ```
+
       Changes:
       ```
-      {{steps.implement.outputs.changes_markdown}}
+      {{steps.implement.outputs.changes_file}}
       ```
 
       Test-Fix Loop Iterations: {{steps.test_fix_loop.outputs.iterations}}
@@ -797,7 +706,7 @@ steps:
 
       ### Phase 1: Triage task complexity
 
-      Check the task complexity: {{steps.context.outputs.complexity}}
+      Check the context to identify the task complexity: {{steps.context.outputs.complexity}}
 
       - Simple task: skip the "Technical decisions" and "Notes" sections in phase 3.
       - Complex task: complete the full template in phase 3.
@@ -810,7 +719,7 @@ steps:
 
       ### Phase 3: Output
 
-      Return the markdown in the `summary_markdown` output following this template.
+      Write to `summary.md` following this template. This is mandatory.
 
       <template>
       # Implementation Summary
@@ -837,15 +746,7 @@ steps:
       - Remaining tasks, considerations, or `None`
       </template>
     outputs:
-      - name: summary_markdown
-        description: 'Implementation summary markdown'
-        type: string
-
-  - id: persist_summary
-    type: command
-    name: 'Persist Summary'
-    allow_failure: true
-    command: |
-      cat > /output/summary.md <<'__ROVER_EOF_9f3a7c__'
-      {{steps.summary.outputs.summary_markdown}}
-      __ROVER_EOF_9f3a7c__
+      - name: summary_file
+        description: 'Implementation summary file'
+        type: file
+        filename: summary.md

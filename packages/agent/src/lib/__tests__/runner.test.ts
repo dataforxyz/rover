@@ -112,6 +112,37 @@ describe('Runner string output extraction', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
+
+  it('falls back to a single string output when the outer result wrapper has no requested fields', async () => {
+    workflowStep.outputs = [
+      {
+        name: 'test_changes_markdown',
+        type: 'string',
+        description: 'Description of tests written',
+        required: true,
+      } as WorkflowOutput,
+    ];
+
+    const runner = new Runner(
+      workflow,
+      'write_tests',
+      new Map(),
+      new Map(),
+      'claude',
+      undefined
+    );
+
+    const outputs = new Map<string, string>();
+    await (runner as any).extractStringOutputs(
+      '{"type":"result","result":"The background task has already completed successfully. Both make build and make test passed with exit code 0."}',
+      workflowStep.outputs,
+      outputs
+    );
+
+    expect(outputs.get('test_changes_markdown')).toContain('background task has already completed successfully');
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it('asks the agent one more time with strict JSON when required outputs are missing', async () => {
     workflowStep.outputs = [
       {

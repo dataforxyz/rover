@@ -519,3 +519,59 @@ describe('flattenLeafStepIds', () => {
     });
   });
 });
+
+
+describe('ACPRunner output extraction guards', () => {
+  let runner: ACPRunner;
+
+  beforeEach(() => {
+    const workflow = {
+      defaults: { tool: 'claude' },
+      steps: [],
+      getStep: vi.fn(),
+    };
+    runner = new ACPRunner({ workflow: workflow as any, inputs: new Map() });
+  });
+
+  it('returns null when JSON extraction receives undefined content', () => {
+    const result = (runner as any).extractJsonFromContent(undefined);
+    expect(result).toBeNull();
+  });
+
+  it('ignores non-string file content when extracting scalar outputs', () => {
+    const outputs = new Map<string, string>();
+    (outputs as unknown as Map<string, unknown>).set('context_content', undefined);
+
+    const result = (runner as any).extractValueFromFileContent(
+      'complexity',
+      outputs
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it('does not fail when step output parsing receives an undefined agent response', async () => {
+    const step = {
+      id: 'context',
+      name: 'Context',
+      type: 'agent',
+      outputs: [
+        {
+          name: 'complexity',
+          description: 'Task complexity',
+          type: 'string',
+        },
+      ],
+    };
+    const outputs = new Map<string, string>();
+
+    const result = await (runner as any).parseStepOutputs(
+      step,
+      outputs,
+      undefined
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(outputs.get('complexity')).toBe('[Not found in response]');
+  });
+});

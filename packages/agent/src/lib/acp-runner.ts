@@ -883,7 +883,7 @@ export class ACPRunner {
       for (const fileOutput of fileOutputs) {
         const contentKey = `${fileOutput.name}_content`;
         const content = outputs.get(contentKey);
-        if (content) {
+        if (typeof content === 'string' && content.length > 0) {
           // Try to find embedded JSON in the file content
           const extracted = this.extractJsonFromContent(content);
           if (extracted) {
@@ -895,7 +895,11 @@ export class ACPRunner {
     }
 
     // If still no JSON data, try to extract from the raw agent response
-    if (!jsonData && agentResponse) {
+    if (
+      !jsonData &&
+      typeof agentResponse === 'string' &&
+      agentResponse.length > 0
+    ) {
       const extracted = this.extractJsonFromContent(agentResponse);
       if (extracted) {
         jsonData = extracted;
@@ -937,8 +941,12 @@ export class ACPRunner {
    * Try to extract JSON data from content (looks for JSON blocks or raw JSON)
    */
   private extractJsonFromContent(
-    content: string
+    content: string | null | undefined
   ): Record<string, unknown> | null {
+    if (typeof content !== 'string' || content.length === 0) {
+      return null;
+    }
+
     // Try to find a JSON code block
     const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonMatch) {
@@ -985,6 +993,10 @@ export class ACPRunner {
         `##\\s*(?:Task\\s+)?${escapedName}[\\s\\S]*?\\n+\\s*(simple|complex|true|false|\\w+)`,
         'i'
       );
+      if (typeof content !== 'string' || content.length === 0) {
+        continue;
+      }
+
       const headerMatch = content.match(headerPattern);
       if (headerMatch) {
         return headerMatch[1].toLowerCase();
