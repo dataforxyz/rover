@@ -1,0 +1,2 @@
+This file verifies rover pipeline onboarding.
+Created by: python -m rover_pipeline verify
