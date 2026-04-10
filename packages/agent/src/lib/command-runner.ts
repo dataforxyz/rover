@@ -114,7 +114,14 @@ export async function runCommandStep(
     outputs.set('stdout', '');
     outputs.set('stderr', errMsg);
     outputs.set('success', 'false');
-    return { id: step.id, success: false, error: errMsg, duration, outputs };
+    return {
+      id: step.id,
+      success: false,
+      exitCode: 1,
+      error: errMsg,
+      duration,
+      outputs,
+    };
   }
 
   const resolvedArgs = (step.args ?? []).map(arg =>

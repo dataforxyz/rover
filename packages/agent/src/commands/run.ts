@@ -986,7 +986,9 @@ export const runCommand = async (
         }
       }
 
-      const pauseRequestFile = join(options.output, '.pause-requested');
+      const pauseRequestFile = options.output
+        ? join(options.output, '.pause-requested')
+        : undefined;
 
       const runStepImpl = async (
         step: WorkflowStep,
@@ -1002,7 +1004,7 @@ export const runCommand = async (
         // Check for external pause request (written by `rover pause`).
         // This check runs between steps so the current step finishes
         // cleanly before the workflow pauses.
-        if (existsSync(pauseRequestFile)) {
+        if (pauseRequestFile && existsSync(pauseRequestFile)) {
           const reason = (() => {
             try {
               return (

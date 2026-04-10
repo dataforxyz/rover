@@ -577,7 +577,8 @@ export class Runner {
       let value: string | undefined;
 
       if (jsonData && typeof jsonData === 'object') {
-        value = jsonData[output.name];
+        const rawValue = jsonData[output.name];
+        value = rawValue === undefined ? undefined : String(rawValue);
       } else if (singleStringFallback !== undefined) {
         value = singleStringFallback;
       } else {
@@ -619,6 +620,13 @@ export class Runner {
 
     try {
       jsonData = JSON.parse(responseContent);
+      if (
+        typeof jsonData !== 'object' ||
+        jsonData === null ||
+        Array.isArray(jsonData)
+      ) {
+        jsonData = null;
+      }
     } catch {
       // Not pure JSON, try other strategies
     }
@@ -628,6 +636,13 @@ export class Runner {
       if (jsonMatch) {
         try {
           jsonData = JSON.parse(jsonMatch[1]);
+          if (
+            typeof jsonData !== 'object' ||
+            jsonData === null ||
+            Array.isArray(jsonData)
+          ) {
+            jsonData = null;
+          }
         } catch {
           console.log(
             colors.yellow('⚠️  Found ```json block but failed to parse it')
@@ -643,15 +658,23 @@ export class Runner {
       if (codeBlockMatch) {
         try {
           jsonData = JSON.parse(codeBlockMatch[1]);
+          if (
+            typeof jsonData !== 'object' ||
+            jsonData === null ||
+            Array.isArray(jsonData)
+          ) {
+            jsonData = null;
+          }
         } catch {
           // Not valid JSON in code block
         }
       }
     }
 
+    const parsedJsonData = jsonData;
     if (
-      jsonData &&
-      !outputNames.some(name => name in jsonData)
+      parsedJsonData !== null &&
+      !outputNames.some(name => name in parsedJsonData)
     ) {
       jsonData = null;
     }
@@ -759,9 +782,7 @@ export class Runner {
       `{\n${schema}\n}`,
       '```',
       'Field descriptions:',
-      ...stringOutputs.map(
-        output => `- ${output.name}: ${output.description}`
-      ),
+      ...stringOutputs.map(output => `- ${output.name}: ${output.description}`),
       'Previous response to convert:',
       '```text',
       responseContent.slice(0, 20000),
