@@ -36,11 +36,6 @@ export const installCommand = async (
     // Create agent instance
     const agent = createAgent(agentName, options.version);
 
-    // Install the agent CLI first — this should always succeed regardless
-    // of credential state. The CLI binary is needed even when authentication
-    // is handled externally (e.g. via proxy env vars).
-    await agent.install();
-
     console.log(colors.bold('\nValidating Credentials'));
 
     // Validate agent credentials
@@ -57,9 +52,14 @@ export const installCommand = async (
           '\n💡 Credentials may be provided via environment variables or proxy configuration.'
         )
       );
+      throw new Error('Required credential files are missing');
     } else {
       console.log(colors.green('✓ All required credential files found'));
     }
+
+    // Install only after credential validation succeeds so a failed setup does
+    // not mutate the host with a partially configured CLI.
+    await agent.install();
 
     // Copy credentials to the user's home directory (best-effort)
     await agent.copyCredentials(process.env.HOME || '/home/agent');
