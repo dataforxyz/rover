@@ -113,6 +113,24 @@ interface OrphanCandidate extends TaskWithProject {
   forceInspect?: boolean;
 }
 
+const getTaskAgentInfo = (
+  task: TaskDescriptionManager
+): { agent?: string; model?: string } => {
+  if (typeof task.getEffectiveAgentInfo === 'function') {
+    return task.getEffectiveAgentInfo();
+  }
+
+  const legacyTask = task as unknown as {
+    agent?: string;
+    agentModel?: string;
+    model?: string;
+  };
+  return {
+    agent: legacyTask.agent,
+    model: legacyTask.agentModel ?? legacyTask.model,
+  };
+};
+
 /**
  * Helper to safely get iteration status
  */
@@ -189,7 +207,7 @@ const buildTaskRow = (
   }
 
   const iterationStatus = maybeIterationStatus(lastIteration);
-  const effectiveAgentInfo = task.getEffectiveAgentInfo();
+  const effectiveAgentInfo = getTaskAgentInfo(task);
   const effectiveAgent = effectiveAgentInfo.agent;
   const effectiveModel = effectiveAgentInfo.model;
 
@@ -419,7 +437,8 @@ const listCommand = async (
           if (currentStatus === 'PAUSED') {
             const lastIteration = task.getLastIteration();
             const iterStatus = maybeIterationStatus(lastIteration);
-            const provider = iterStatus?.provider || task.getEffectiveAgentInfo().agent;
+            const provider =
+              iterStatus?.provider || getTaskAgentInfo(task).agent;
             if (provider) {
               await retryScheduler.registerPausedTask(
                 provider,
@@ -431,7 +450,7 @@ const listCommand = async (
             // If task was paused but is no longer, unregister
             const provider =
               maybeIterationStatus(task.getLastIteration())?.provider ||
-              task.getEffectiveAgentInfo().agent ||
+              getTaskAgentInfo(task).agent ||
               'unknown';
             retryScheduler.unregisterTask(provider, task.id, projectData);
           }
@@ -497,7 +516,7 @@ const listCommand = async (
 
       for (const { task, project: projectData } of tasksWithProjects) {
         let iterationsData: IterationManager[] = [];
-        const effectiveAgentInfo = task.getEffectiveAgentInfo();
+        const effectiveAgentInfo = getTaskAgentInfo(task);
         try {
           iterationsData = task.getIterations();
         } catch (err) {

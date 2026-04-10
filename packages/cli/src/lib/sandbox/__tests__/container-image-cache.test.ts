@@ -909,6 +909,7 @@ describe('checkImageCache', () => {
 
     // Verify the hash uses the resolved ID, not the tag
     const expectedHash = computeSetupHash({
+      buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
       agentImage: imageId,
       languages: ['typescript'],
       packageManagers: ['pnpm'],
@@ -972,6 +973,7 @@ describe('checkImageCache', () => {
 
     // Hash should be computed with the raw tag as fallback
     const expectedHash = computeSetupHash({
+      buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
       agentImage: 'my-agent:latest',
       languages: ['typescript'],
       packageManagers: ['pnpm'],
@@ -1001,6 +1003,7 @@ describe('checkImageCache', () => {
     );
 
     const expectedHash = computeSetupHash({
+      buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
       agentImage: 'my-agent:latest',
       languages: ['typescript'],
       packageManagers: ['pnpm'],
@@ -1121,6 +1124,7 @@ describe('checkImageCache', () => {
     );
 
     const expectedHash = computeSetupHash({
+      buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
       agentImage: 'sha256:img',
       languages: ['typescript'],
       packageManagers: ['pnpm'],
@@ -1175,6 +1179,7 @@ describe('checkImageCache', () => {
     );
 
     const expectedHash = computeSetupHash({
+      buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
       agentImage: 'sha256:img',
       languages: ['typescript'],
       packageManagers: ['pnpm'],
@@ -1232,6 +1237,7 @@ describe('checkImageCache', () => {
     );
 
     const expectedHash = computeSetupHash({
+      buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
       agentImage: 'sha256:img',
       languages: ['typescript'],
       packageManagers: ['pnpm'],
@@ -1589,6 +1595,7 @@ describe('checkImageCache', () => {
     );
 
     const expectedHash = computeSetupHash({
+      buildSchemaVersion: CACHE_BUILD_SCHEMA_VERSION,
       agentImage: 'sha256:img',
       languages: ['typescript'],
       packageManagers: ['pnpm'],

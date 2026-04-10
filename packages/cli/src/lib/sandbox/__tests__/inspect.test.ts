@@ -22,6 +22,7 @@ const {
 vi.mock('rover-core', () => ({
   generateRandomId: vi.fn(() => 'random-id'),
   launch: mockLaunch,
+  claudeProxyEnabled: vi.fn(() => false),
   ProcessManager: class {},
   ProjectConfigManager: {
     load: vi.fn(() => ({
