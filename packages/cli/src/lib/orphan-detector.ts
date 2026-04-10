@@ -24,7 +24,7 @@ function clearTaskContainerIdentity(task: TaskDescriptionManager): void {
  *  marks the task FAILED so it becomes resumable again. The resume lock may
  *  still be held until its own staleness timeout, but acquireResumeLock()
  *  reclaims stale locks from dead processes, so the gap is harmless. */
-export const STARTUP_TIMEOUT_MS = 5 * 60 * 1000;
+export const STARTUP_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Error message for containers that exited unexpectedly. */
 export const CONTAINER_EXITED_ERROR =

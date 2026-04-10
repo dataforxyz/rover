@@ -110,7 +110,7 @@ describe('detectOrphanedTasks', () => {
 
   it('marks stalled resume startup as FAILED when no replacement container id was recorded', async () => {
     const task = mockTask(31, 'IN_PROGRESS', undefined, {
-      lastRestartAt: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+      lastRestartAt: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
     });
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
@@ -570,10 +570,10 @@ describe('detectOrphanedTasks', () => {
     );
   });
 
-  it('detects orphan when restart startup has timed out (>5 minutes)', async () => {
+  it('detects orphan when restart startup has timed out (>10 minutes)', async () => {
     const task = mockTask(29, 'IN_PROGRESS', 'container-29', {
-      // lastRestartAt was over 5 minutes ago but runningAt was never updated
-      lastRestartAt: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+      // lastRestartAt was over 10 minutes ago but runningAt was never updated
+      lastRestartAt: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
       runningAt: undefined,
     });
     const sandbox = {
@@ -584,14 +584,14 @@ describe('detectOrphanedTasks', () => {
 
     await detectOrphanedTasks([{ task, project: mockProject() }]);
 
-    // After the 5-minute timeout, the task should no longer be considered "in flight"
+    // After the 10-minute timeout, the task should no longer be considered "in flight"
     expect(mockedCreateSandbox).toHaveBeenCalledTimes(1);
     expect(task.markFailed).toHaveBeenCalledWith(
       'Container exited unexpectedly (possible crash or system restart)'
     );
   });
 
-  it('skips orphan detection when restart startup is recent (<5 minutes) without runningAt', async () => {
+  it('skips orphan detection when restart startup is recent (<10 minutes) without runningAt', async () => {
     const task = mockTask(30, 'IN_PROGRESS', 'container-30', {
       // lastRestartAt was 1 minute ago, runningAt never updated
       lastRestartAt: new Date(Date.now() - 60 * 1000).toISOString(),
