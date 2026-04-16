@@ -113,6 +113,22 @@ interface OrphanCandidate extends TaskWithProject {
   forceInspect?: boolean;
 }
 
+const filterRenderableTasks = (
+  tasksWithProjects: TaskWithProject[]
+): TaskWithProject[] => {
+  return tasksWithProjects.filter(({ task, project }) => {
+    if (!project || typeof project.getTask !== 'function') {
+      return true;
+    }
+
+    try {
+      return project.getTask(task.id) !== undefined;
+    } catch {
+      return true;
+    }
+  });
+};
+
 const getTaskAgentInfo = (
   task: TaskDescriptionManager
 ): { agent?: string; model?: string } => {
@@ -426,9 +442,25 @@ const listCommand = async (
       }
     }
 
+    const renderableTasksWithProjects = filterRenderableTasks(refreshedTasksWithProjects);
+
+    if (renderableTasksWithProjects.length === 0) {
+      if (isJsonMode()) {
+        console.log(JSON.stringify([]));
+      } else if (project) {
+        console.log(colors.yellow('📋 No tasks found'));
+      } else {
+        console.log(colors.yellow('📋 No tasks found across all projects'));
+      }
+
+      if (!options.watch) {
+        return;
+      }
+    }
+
     // Use refreshed task state for scheduler updates and onComplete hooks.
     const retryScheduler = options._retryScheduler;
-    for (const { task, project: projectData } of refreshedTasksWithProjects) {
+    for (const { task, project: projectData } of renderableTasksWithProjects) {
       try {
         const currentStatus = task.status;
 
@@ -514,7 +546,7 @@ const listCommand = async (
     if (isJsonMode()) {
       const jsonOutput: ListTasksOutput = [];
 
-      for (const { task, project: projectData } of tasksWithProjects) {
+      for (const { task, project: projectData } of renderableTasksWithProjects) {
         let iterationsData: IterationManager[] = [];
         const effectiveAgentInfo = getTaskAgentInfo(task);
         try {
@@ -544,7 +576,7 @@ const listCommand = async (
     }
 
     // Prepare table data
-    const tableData: TaskRow[] = tasksWithProjects.map(
+    const tableData: TaskRow[] = renderableTasksWithProjects.map(
       ({ task, project: projectData }) =>
         buildTaskRow(task, projectData?.id, retryScheduler, projectData)
     );
@@ -619,7 +651,7 @@ const listCommand = async (
       // Build groups from projects that have tasks (dedupe by project id)
       const seenProjectIds = new Set<string>();
       groups = [];
-      for (const { project: projectData } of tasksWithProjects) {
+      for (const { project: projectData } of renderableTasksWithProjects) {
         if (projectData && !seenProjectIds.has(projectData.id)) {
           seenProjectIds.add(projectData.id);
           groups.push({

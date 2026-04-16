@@ -199,6 +199,29 @@ describe('list command', () => {
       expect(output).not.toContain('test-repo');
     });
 
+    it('skips tasks whose description disappeared before rendering', async () => {
+      const task1 = createTestTask(1, 'First Task');
+
+      const projectManager = {
+        id: 'test-project-id',
+        path: testDir,
+        repositoryName: 'test-repo',
+        languages: [],
+        packageManagers: [],
+        taskManagers: [],
+        listTasks: () => [task1],
+        getTask: (id: number) => (id === 1 ? undefined : task1),
+      };
+
+      mockResolveProjectContext.mockResolvedValue(projectManager);
+
+      await listCommand();
+
+      const output = capturedOutput.join('\n');
+      expect(output).toContain('No tasks found');
+      expect(output).not.toContain('First Task');
+    });
+
     it('should show "No tasks found" when project has no tasks', async () => {
       mockResolveProjectContext.mockResolvedValue({
         id: 'test-project-id',
