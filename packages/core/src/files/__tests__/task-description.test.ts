@@ -138,6 +138,53 @@ describe('TaskDescriptionManager', () => {
         model: 'gpt-5.4',
       });
     });
+
+    it('drops a stale previous-provider model when runtime agent changes', () => {
+      const taskPath = getTaskPath(5);
+      const task = TaskDescriptionManager.create(taskPath, {
+        id: 5,
+        title: 'Runtime Agent Switch Test',
+        description: 'Does not pair a stale model with a new runtime agent',
+        agent: 'codex',
+        agentModel: 'gpt-5.3-codex-spark',
+        inputs: new Map(),
+        workflowName: 'swe',
+      });
+
+      const iterationPath = join(taskPath, 'iterations', '1');
+      mkdirSync(iterationPath, { recursive: true });
+      writeFileSync(
+        join(iterationPath, 'entrypoint.sh'),
+        '#!/bin/bash\nAGENT=codex\n'
+      );
+
+      const logDir = join(testDir, 'logs', 'tasks', '5', 'iterations', '1');
+      mkdirSync(logDir, { recursive: true });
+      writeFileSync(
+        join(logDir, 'rover.jsonl'),
+        [
+          JSON.stringify({
+            event: 'step_complete',
+            agent: 'claude',
+            model: 'claude-haiku-4-5-20251001',
+          }),
+          JSON.stringify({
+            event: 'step_start',
+            agent: 'codex',
+          }),
+          JSON.stringify({
+            event: 'step_fail',
+            agent: 'codex',
+            error: 'Authentication failed',
+          }),
+        ].join('\n')
+      );
+
+      expect(task.getEffectiveAgentInfo()).toEqual({
+        agent: 'codex',
+        model: 'gpt-5.3-codex-spark',
+      });
+    });
   });
 
   describe('agentImage field', () => {

@@ -801,11 +801,34 @@ export class TaskDescriptionManager {
             agent?: unknown;
             model?: unknown;
           };
-          if (typeof entry.agent === 'string' && entry.agent.trim()) {
-            agent = entry.agent.trim();
+          const nextAgent =
+            typeof entry.agent === 'string' && entry.agent.trim()
+              ? entry.agent.trim()
+              : undefined;
+          const nextModel =
+            typeof entry.model === 'string' && entry.model.trim()
+              ? entry.model.trim()
+              : undefined;
+
+          if (nextAgent) {
+            // Keep agent/model paired to the same runtime entry. If the agent
+            // changes on a later event that does not report a model (common on
+            // step_start / step_fail), discard the prior model so a previous
+            // provider's model is not shown for the new agent.
+            if (nextAgent !== agent) {
+              agent = nextAgent;
+              model = nextModel;
+            } else {
+              agent = nextAgent;
+              if (nextModel) {
+                model = nextModel;
+              }
+            }
+            continue;
           }
-          if (typeof entry.model === 'string' && entry.model.trim()) {
-            model = entry.model.trim();
+
+          if (nextModel) {
+            model = nextModel;
           }
         } catch {
           continue;
