@@ -42,6 +42,58 @@ type IterationContext = {
   iterationNumber?: number;
 };
 
+type IterationExpansionLimit = {
+  plan: number;
+  changes: number;
+};
+
+const ITERATION_EXPANSION_LIMITS: Record<string, IterationExpansionLimit> = {
+  'codex:gpt-5.3-codex-spark': {
+    plan: 12000,
+    changes: 8000,
+  },
+};
+
+const trimIterationContextValue = (
+  value: string | undefined,
+  maxChars: number,
+  label: string
+): string | undefined => {
+  if (!value || value.length <= maxChars) {
+    return value;
+  }
+
+  const marker = `\n\n...[trimmed previous ${label}; omitted ${value.length - maxChars} chars]...\n\n`;
+  const available = Math.max(0, maxChars - marker.length);
+  const headChars = Math.ceil(available / 2);
+  const tailChars = Math.floor(available / 2);
+
+  return `${value.slice(0, headChars)}${marker}${value.slice(value.length - tailChars)}`;
+};
+
+export const getExpansionContextForModel = (
+  previousContext: IterationContext,
+  agent: string,
+  model?: string
+): IterationContext => {
+  const key = model ? `${agent}:${model}` : agent;
+  const limits = ITERATION_EXPANSION_LIMITS[key];
+
+  if (!limits) {
+    return previousContext;
+  }
+
+  return {
+    ...previousContext,
+    plan: trimIterationContextValue(previousContext.plan, limits.plan, 'plan'),
+    changes: trimIterationContextValue(
+      previousContext.changes,
+      limits.changes,
+      'changes'
+    ),
+  };
+};
+
 /**
  * Command options
  */
@@ -508,11 +560,16 @@ const iterateCommand = async (
       processManager?.addItem('Expanding new instructions with AI agent');
 
       let expandedTask: IPromptTask | null = null;
+      const expansionContext = getExpansionContextForModel(
+        previousContext,
+        selectedAiAgent,
+        selectedModel
+      );
 
       try {
         expandedTask = await expandIterationInstructions(
           finalInstructions,
-          previousContext,
+          expansionContext,
           aiAgent,
           options.json === true,
           contextContent
